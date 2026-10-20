@@ -90,6 +90,19 @@ test('a rule may not move to an ADR — only an explanation may', async () => {
   assert.ok(findings.some((f) => /row C\.why\.01 .*only an explanation may move to an ADR/.test(f)), findings.join('\n'));
 });
 
+test('a rule may move to the CLI\'s docs under tools/docs/, and its marker there is checked (#635)', async () => {
+  const { check } = await load();
+  const conv = CONV.replace('**[Hard — gate: colab ship]** A human must trigger the trunk merge on a manual repo.\n\n', '');
+  const dir = repo({ conventions: conv, inventoryRows: GOOD.map((r) => r.startsWith('| C.ship.01') ? r.replace('| CONVENTIONS.md |', '| tools/docs/ship.md |') : r) });
+  fs.mkdirSync(path.join(dir, 'tools', 'docs'));
+  fs.writeFileSync(path.join(dir, 'tools', 'docs', 'ship.md'), '# ship\n\n**[Hard — gate: colab ship]** A human must trigger the trunk merge on a manual repo.\n\n**[Hard — gate: colab claim]** An unaccounted marker.\n');
+  const { findings } = check({ root: dir });
+  assert.deepStrictEqual(findings, ['tools/docs/ship.md:5: a Hard marker no inventory row accounts for — add the rule\'s row (class hard)']);
+  // Anywhere else under tools/ is not a home for a rule.
+  const other = repo({ conventions: conv, inventoryRows: GOOD.map((r) => r.startsWith('| C.ship.01') ? r.replace('| CONVENTIONS.md |', '| tools/colab |') : r) });
+  assert.ok(check({ root: other }).findings.some((f) => /row C\.ship\.01 .*must live in .*tools\/docs\//.test(f)));
+});
+
 test('duplicate ids, unknown classes and an unescaped pipe are findings', async () => {
   const { check } = await load();
   const rows = [...GOOD,

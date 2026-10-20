@@ -97,7 +97,8 @@ The rest of `colab ship`'s preconditions (trunk CI green and its cure rule and c
 doors, core-path review), the place-claim and `writes: isolated` refusals, and a few
 `colab adopt` refusals are gated too, and each is marked where it is stated. An older marker,
 `**[Hard — gate: …]**`, names the command that refuses; it passes until its section is
-rewritten. Every rule's id and class is listed in [`docs/rule-inventory.md`](docs/rule-inventory.md);
+rewritten. How a rule is enforced moves with the tool that enforces it: the `colab` CLI's
+mechanics live in [`tools/docs/`](tools/docs/README.md), each under its rule's old heading here. Every rule's id and class is listed in [`docs/rule-inventory.md`](docs/rule-inventory.md);
 `scripts/check-rule-inventory.mjs` keeps the list and this file in step. Why: [ADR 523](docs/adr/523-conventions-hard-default-and-size-budget.md).
 
 ---
@@ -1440,310 +1441,24 @@ insertion into a trunk file, or a file the commit creates, is new content, not a
   base-sync merge — second parent already on the base, tree equal to git's own clean merge. Any
   other movement still needs a new hand-off. The hand-off comment is the last word on its head —
   edited or re-posted, never followed by a plain comment (#586): [`code-wrap`, *Hand off*](skills/code-wrap/SKILL.md#post-the-hand-off-comment--the-last-word-on-its-head-586).
-- **[Hard — gate: colab ship refuses unless trunk CI green]** **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
-  all.** **Ask by commit, not by recency
-  (#92):**
-  The right question: has EVERY run at this branch's current head sha completed, and did
-  one of them succeed? `colab ship` asks it that way. Both halves are load-bearing: a
-  sibling that is merely still in progress has not passed either (#307), so a fast
-  workflow finishing green must never answer for a slow one that has not run yet.
-  Only runs of workflows the repo owns count (#451): a run with `event: dynamic`
-  (Dependabot Updates and GitHub's other dynamic workflows) never executes the sha, so it is
-  dropped before the verdict and named in its detail; if nothing is left, the sha reads `none`.
-  Only runs that **verify the code** count (#503): those triggered by a push or pull request.
-  A run that comes *after* the verdict and acts on it — a `workflow_run` release such as
-  `release-auto.yml`, its scheduled finalize, a dispatch, a deploy — is set aside and named the
-  same way. Its failure belongs to the release lane, so it never turns trunk red for ship and
-  ship never waits for it ([why](docs/adr/539-schema-checks-and-gates-rationale.md)) — except a
-  dispatch of the push- or PR-triggered CI workflow with no push run at the sha (#567: a lost push
-  event). `ship-gate-workflows:` / `ship-ignore-workflows:` override the set by workflow name ([schema](project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
-  A trunk sha whose tree has **no workflow file at all** (#482) — a freshly adopted repo whose
-  adoption branch is what adds CI — can never draw a run, so nothing there can be red: its
-  `none` gets the *Branch CI* treatment for a run that cannot arrive, and the candidate's own
-  run at its remote head decides (green passes; red, in flight or absent still refuses). A
-  trunk that has workflows but no run at its sha is a real gap and still refuses.
-  Each workflow is then judged by its **newest** run at the sha (#461): an earlier attempt of
-  the *same* workflow that a later one superseded is set aside and named in the detail, so
-  skipped `workflow_run` attempts no longer hold the sha red. A newer run decides in both
-  directions — a newer failure vetoes an older success, a newer run still in flight blocks
-  (#307) — except that a `cancelled` run never supersedes, because it ran nothing (#92). Runs of
-  *different* workflows are never reduced: a failing one beside a passing one is still not
-  green, and a workflow whose **only** run was cancelled verified nothing, so it blocks green (#628).
-  `colab trunk-ci` prints that verdict for trunk's head, read-only and from the same function
-  (#463); a skill that needs it calls the verb instead of restating the rule as a `gh run
-  list` filter ([why](docs/adr/539-schema-checks-and-gates-rationale.md)).
-  **Waiting for that verdict is `colab ci-wait`, never a loop (#495).** It backs off
-  (30 s → 60 s → 120 s, then a deadline — the repo's own CI wait bound, measured from its
-  history, `colab ci-profile`, #559), sends conditional requests so an unchanged read is
-  free, and ends with its own exit code on a rate limit or an unreadable state instead of
-  retrying. `colab trunk-ci` itself costs one runs read (plus one check-runs read on green) and
-  caches its verdict per trunk sha for 45 s in the repo's git dir, shared by every session on
-  that checkout. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-  That is the half of the question about what is merged **into**; the branch's own run
-  is the other half — see *Branch CI*, below.
-- **That resolves a FALSE red — a real one has two different doors, one of them
-  human-only (#105), one machine-checkable (#281).** A **genuinely** red trunk (the sha
-  really failed) is a true deadlock when the candidate branch's entire content IS the
-  fix — see *Red-trunk exemption* and *Cure rule* below.
+- **Before merging to trunk, trunk's CI must have run at its head commit and be green there** —
+  invariants 1 and 2 of [the CI contract](#what-ship-reads--the-ci-contract-607); a genuinely red
+  trunk takes only its fix, through the *Red-trunk exemption* or the *Cure rule* below. How the CLI
+  reads that verdict (which runs count, the newest run per workflow, cancelled runs, the bounded
+  wait): [`tools/docs/ci-gate.md`](tools/docs/ci-gate.md#trunk-ci--by-commit-not-by-recency).
 
 ### Branch CI — the candidate's own run, read as a class (#314)
 
-Trunk CI answers *"is the thing I am merging into healthy?"*. It says nothing about the
-thing being merged, and both gate a merge. A local quality gate does not answer for the
-branch's CI either: local and runner disagree for ordinary reasons — a different OS, a
-browser the runner has to boot, a toolchain pin the local machine already satisfies. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-
-**One cause of that disagreement is closed before the push, not read after it (#403).** A
-test that reads its author's machine (the home directory's config, a local daemon, a token
-in the shell) is green locally and red on every runner. So the local gate is green only when
-the test step has passed twice: once as-is, and once **hermetically**, with a fresh empty
-`HOME`, every service-address and credential variable unset, and the network off where the
-platform allows it (`colab gate-hermetic`, `code-wrap` A3). A toolchain manager's home is
-the one thing carried across, pinned to its real path and printed (#447): the toolchain is
-what the tests run on, not state they read. A green normal run with a red
-hermetic run is its own verdict, `live-env`, and it is not green. The only exemption is a
-`live-env: none` declaration on trunk's `project.yml`
-([schema](project.schema.md#live-env--optional)). The branch-CI read below still applies:
-runners differ in more ways than a stripped environment can reproduce.
-
-**A green branch-CI run can *be* that hermetic run (#408).** A run is one when all three hold:
-it is `green` at the branch's current head sha (the class below), its workflow runs the
-same test command the local gate runs, and its runner does not share a developer's machine
-(a hosted runner, or an ephemeral container runner, but never a self-hosted runner that
-runs in someone's login session with their `HOME` and daemons). That run already had no
-developer `HOME` and no local daemon, at the exact commit being merged, so repeating it
-locally adds minutes and no evidence. So the hermetic verdict may be
-recorded as `branch-ci` with that run's sha, and `colab gate-hermetic` runs locally only
-when branch CI cannot arrive (no trigger for the branch), is not `green`, or does not run
-the tests. The same holds after a sync: push and read the new branch run before
-re-running the suite locally. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-
-**Local is a smoke check; branch CI is the one gate (#410).** A repo whose branch CI can
-arrive may say so in `project.yml` (`gate:` with `smoke:` and `authoritative: ci`,
-[schema](project.schema.md#gate--optional)). There, `code-wrap` A3 runs the declared smoke
-check once (lint, types, the tests for what changed — a few minutes, no hermetic second pass)
-and pushes; the verdict is the branch-CI run at the pushed head sha, read as the class below,
-and the hand-off names that run's id. `code-ship` reads the run and never re-runs the suite
-locally. A clean CI runner is the hermetic run by construction, so `colab gate-hermetic`
-stays only where the local gate is still the verdict. While iterating, run the tests for what
-you changed; the full suite runs once, where the verdict comes from. The fallback is today's
-rule, unchanged: no `gate:`, `authoritative: local`, or no workflow firing on a session-branch
-push ⇒ the local full gate plus the hermetic run. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-
-**Read the runs at the branch's current head sha, and report the result as one of four
-classes — not as pass/fail.** The names are shared vocabulary: the implementer records
-one when it pushes, the coordinator re-derives it before merging, and a fleet planner
-reading either sees the same spelling. Spell them exactly so, everywhere:
-
-| class | what the runs at the head sha show | next step |
-|---|---|---|
-| `green` | **every** run `completed`, at least one `success`, none `failure` | nothing owed — this precondition passes |
-| `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded — **the repo's CI wait bound per candidate** (measured from its own CI history, `colab ci-profile`; 15 minutes until it has one, #559), then a defer carrying a re-measure trigger, never an open-ended poll (#370). A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story — so the trunk run at the squash sha is read after the merge, before any evidence is posted, and a red there is filed as `TRUNK RED:` in the same pass (`code-ship` B2a, #374) |
-| `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, dependency fetch. **Exit 2** where the repo separates them | re-run **once**; an identical failure twice is the runner, not the branch — hand it to the ops lane. Never merged past, never sent back to the implementer: there is nothing in the diff to fix |
-| `red:finding` | the suite ran and something in it failed. **Exit 1** where separated | back to an implementer session, **as a class** — a [send-back](#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409), never a coordinator fix. Never merged past, never re-run |
-
-- **[Hard — gate: colab ship refuses stale-base]** **The run must have seen the current base (#395).** A class read at a head that does not
-  contain the base's current tip is **`stale-base`**, whatever its runs say: two branches
-  each green alone can combine red when neither run saw the other, and a textually clean
-  merge re-runs nothing.
-  The next step is mechanical — sync the base in, push, wait on the new run (the same
-  bound), then land; `colab ship` refuses with this verdict, `self-clearing`. A
-  head with no run at all is not stale (the `none` row above governs it). Skipping the
-  re-run because the base's new commits "touch nothing the branch's tests import" is only
-  ever allowed on a measurement, never on a guess — and no generic measurement exists today. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-- **The quantifiers are the trunk rule's, unchanged (#92, #307).** `every … completed`: a
-  fast sibling already green never answers for a slow one still running — that sha is
-  `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
-  straggler beside a real `success` of its own workflow is still `green` (a cancelled-only
-  workflow is not, #628); the ladder must not reintroduce the deadlock #92 fixed.
-- **A claim's first push is `green` from a guard run, not a second suite run (#418).** A
-  branch pushed at trunk's head (a plain-git cut; `colab` pushes a claim ref instead, §5,
-  *Record of a claim*) sits on a sha the same workflow has usually already tested. The CI templates (and this repo's own
-  workflow) open with a `dedupe` job that runs only on a ref's **first** push, checks nothing
-  out, and asks the platform one thing: does *this* workflow already have a completed,
-  `success`, non-pull-request run at *this* sha? Yes ⇒ every other job is skipped, and the run
-  concludes `success` — the branch reads `green`, truthfully, because the same workflow passed
-  at the same sha. Trunk's run still in flight or red, no `gh` on the runner, or any API error
-  ⇒ the suite runs as before (fail-open). Every later push skips the guard at scheduling time,
-  so the session's first real commit always gets the full suite at its own sha. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-- **Trunk reuses a green run of an identical tree (#493).** A ship squash-merges a branch
-  whose green run already contained the current base, so the trunk commit's *tree* is
-  byte-identical to the tree that run passed — only the sha is new, and a sha-keyed skip can
-  never see it. On a non-creating push to trunk the same `dedupe` guard therefore also asks:
-  does *this* workflow have a `success` run, from a `push` on another ref of *this* repo, whose
-  commit has *this* exact tree? It filters the run listing by tree and then confirms the tree
-  through the git object. Yes ⇒ the suite is skipped, the run concludes `success`, and the
-  guard leaves a `tree-already-green` notice naming the run it relied on; `colab ship`'s
-  trunk-CI row and `colab trunk-ci` print that run ("relied on <url>"). **The rule: an
-  identical tree plus a green run of the same workflow is tested.** An identical tree covers
-  every committed byte — workflow files, lockfiles, the descriptor — but not what lives outside
-  the repo: runner images, unpinned toolchain downloads, secrets and variables, steps that
-  branch on `github.ref`. A repo whose suite depends on those declares `tree-reuse: off`
-  (`project.schema.md`) and trunk always runs in full. The guard reads `trunk:` from the
-  descriptor *at that sha* and acts only there — never on a release branch, never on a
-  promotion push to `main` where trunk is `dev`, never on a dispatch. Any doubt — no
-  descriptor, an opt-out, an API error, no exact match — runs the full suite. A green `push`
-  run at *this* sha on another ref (a `ship-batch/*` run trunk fast-forwarded to) is asked for
-  first, by an exact query, so a busy repo's listing window cannot miss it (#552). A cited run
-  is reused only if it skipped no job but the guard: a job gated on the trunk ref is `skipped`
-  on every branch push, and reusing that run would skip it on trunk too (#511); matches are
-  walked newest first and the first that passes is cited, so a skipping one never hides an older
-  full run (#592). A trunk-only job (publish, deploy, release) never sits behind this gate. One reading turns such a run red: a
-  cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
-  trunk is untested at that sha). A citation that cannot be read leaves the run green and says
-  so, because the run's own `success` is the verdict, exactly as for #418. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-- **The docs-only guard has left the templates (#607).** `colab ship` decides docs-only itself
-  ([*Docs-only — no CI wait*](#docs-only--no-ci-wait-606), below), so a template no longer carries
-  the rule in shell. A copy that still runs the #570 guard keeps working: its `success` +
-  `docs-only-skip` notice reads green. A `paths-ignore` for docs is safe now, and the templates show
-  one as an option: a docs-only trunk tip with no run is read at its newest code commit.
-- **An unclassifiable red is `red:finding`.** Where a repo does not separate exit 1 from
-  exit 2, `failure` is all the platform reports: read the failing job's log far enough to
-  say which side of the line it fell on, and if that cannot be told, report `red:finding`. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-- **Telling `red:infra` from `red:finding` is a test, not taste (#354).** The same test
-  reads a red **trunk** run, where it chooses between re-running once and filing a
-  `TRUNK RED:` issue — the choice this section's re-run permission otherwise leaves to
-  judgement at exactly the moment it matters. Where the repo separates exit 1 from exit
-  2, the exit code already answers; where it does not, apply this in order:
-  1. **At least one named failing assertion ⇒ `red:finding`**, whatever else the run
-     shows — a test name with an expected/received pair, an `assert` message, a count
-     like `794 pass / 37 fail`. **Never re-run it**: a green second run hides a real
-     defect, and a flaky one is a defect too.
-  2. **Otherwise it is `red:infra` when the tests demonstrably never ran**, shown by any
-     of: the run's **duration far below this repo's own norm** for that workflow
-     (compare `gh run list --workflow <w> --status success -L 10 --json startedAt,updatedAt`
-     — an order of magnitude short means it died in checkout, install or runner boot);
-     **`gh run view <id> --log-failed` returning nothing at all**; or failure text that
-     names the environment rather than the code — `EADDRINUSE`, `signal: killed`, a lost
-     runner, a job queued for hours and then failed with no log.
-  3. **Neither ⇒ `red:finding`** — the unclassifiable rule above, unchanged.
-
-  Two readings that the text alone gets wrong:
-  - **A timeout is `red:infra` only if the host was loaded.** The same text on an idle host
-    is a real slow-test bug. Check the host (load, swap, I/O pressure) before calling it
-    infra; no host evidence ⇒ `red:finding`. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-  - **Infra-shaped is not the same as harmless.** A port collision (`EADDRINUSE`) from a
-    single random draw with no retry is re-run once to clear the red **and** filed as a
-    defect — the re-run unblocks the base, the cause is still the code's. The two are
-    not exclusive.
-
-  Measured shapes, one repo: a build failed in **26 s** where the normal run is 20+
-  minutes and `--log-failed` returned nothing — re-ran green; a job queued ~2 h and failed
-  with no log while its self-hosted host had swap 100 % full — re-ran green. The contrast
-  in the same repo: 37 failures each naming an assertion, at normal duration — a real
-  regression that a re-run would have buried.
-- **Give the branch a run of its own — but only where trunk runs have their own capacity
-  (#384).** A workflow triggering on trunk push and `pull_request` alone leaves every
-  PR-less session branch at the cannot-arrive `none`: its first real run is the post-merge
-  trunk run, so a red there is a `TRUNK RED:` for everyone instead of a hand-back to one
-  implementer, and the ship pass waits on that run before it can post evidence. Measured
-  across one fleet over two weeks (~830 landings, 14 repos): CI wait was the second-largest
-  source of wait inside ship passes (186 waits, median 7.4 min), and only the repos that had
-  hand-edited their copy to `push: branches: ['**']` got a branch signal before the merge.
-  So the CI templates now trigger on **every** branch push, with a per-ref `concurrency`
-  group that cancels a superseded run on the same branch and **never** a trunk run — every
-  trunk sha keeps a completed run of its own, which is what the trunk half of the gate
-  reads. That is the default **only where trunk has capacity of its own**: GitHub-hosted
-  runners, a runner pool, or a trunk-only runner label chosen in `runs-on` on `github.ref`
-  ([*Self-hosted runners*](#self-hosted-runners--capacity-is-the-agent-count-not-the-machine-355)).
-  On a **single self-hosted agent shared with trunk**, keep trunk-only triggers (and restore
-  `pull_request`, below) until a trunk lane exists — measured there (#355), branch pushes queued a trunk build job 33 min
-  behind other branches' jobs, delaying the one run a merge waits for. The cancel list
-  names the repo's trunk and release branch by name; a trunk missing from it has each run
-  cancelled by the next merge, leaving that squash sha with no completed run of its own for
-  the by-commit trunk read (#92) or the post-merge read (`code-ship` B2a) to find.
-- **One commit, one run: the templates do not trigger on `pull_request` (#512).** With `push` on
-  `'**'` a branch that has an open PR in the same repository already has a run at its head, and
-  a `pull_request` run beside it ran the whole suite a second time — measured on one Laravel
-  adopter, a docs-only PR of 4 commits produced 8 runs, 4 of them duplicates; across nine
-  adopting repos over 15 days, 126 push-plus-PR pairs. The second run also *decided* the
-  verdict: every reader keeps the newest run per workflow at a sha, and the PR run is created
-  seconds after the push run, so it won — while testing the merge ref, not the sha that lands.
-  The templates therefore carry `push` and `workflow_dispatch` only. Three things follow:
-  1. **A copy that went back to trunk-only push (#355) restores `pull_request: branches: [<trunk>]`.**
-     There the PR run is the only branch run (the *none* paragraph above, and #353 below).
-  2. **Trunk runs keep a group of their own.** The group is `ci-<ref>` for a branch, so a newer
-     push cancels the older run, and `ci-<ref>-<run id>` for the trunk and release refs: GitHub
-     cancels an older run still **pending** in a group even when `cancel-in-progress` is
-     `false`, so a third quick merge would drop the second one's run before it started. The trunk
-     list appears three times in a copy — the group, `cancel-in-progress`, and the `dedupe`
-     job's `if:` — and the three must name the same refs.
-  3. **Do not deduplicate any other way.** A shared push/PR group (`head_ref || ref_name`) can
-     leave the merge-ref run as the survivor, lets a promotion PR cancel the trunk's own
-     in-flight run, and leaves a `cancelled` run at the head. An `if:` that skips jobs on a
-     same-repo PR, or `paths-ignore`, leaves a `skipped` or absent run: `colab ship` reads
-     `skipped` as not green and a docs-only squash with no trunk run as `none`.
-  **Fork PRs are opt-in.** A push to a fork never runs a workflow in the base repository, so
-  a repo that takes fork PRs needs `pull_request`. The templates carry it commented out, and
-  every suite job already carries `github.event_name != 'pull_request' ||
-  github.event.pull_request.head.repo.full_name != github.repository`: uncommented, a
-  same-repo PR's run skips every job (its push run tests that head) and a fork PR's run tests
-  (#514). A run that skipped everything concludes `skipped`, and `colab`'s newest-run pick
-  treats `skipped` like `cancelled` — it never stands for a workflow that has a run that ran.
-  Uncomment only once every reader of the repo's CI does the same; until then such a repo keeps
-  the trigger and the duplicate (this handbook's own `ci.yml` does). Private repos with forking disabled are not
-  affected. A Laravel copy's heavy suite used to run only on the PR run; it now runs on the
-  push run (`RUN_TESTS: auto`, decided from the descriptor's `trunk:`).
-- **Say which `none`.** A bare `none` turns a bounded wait into a wait for a run that was
-  never coming. A repo whose workflows trigger only on a trunk push and `pull_request` is
-  the permanent shape: a wrap pushes a backup branch without opening a PR, so branch CI
-  does not exist there before the merge — a normal state, not a missing measurement.
-- **At a red base, that `none` has one way out — and only the patch may take it (#353).**
-  "Proceed, the base's CI is the whole story" is a stop when the base is red, and the
-  *Cure rule* below needs the branch green at its own head — a run a trunk-push-only repo
-  produces for a branch **only through a PR**. A PR's run is against its merge ref, and
-  that merge ref **includes the red base**. So opening one is legitimate for exactly one
-  branch: the one **carrying the fix** — its head contains the red sha (cure condition 1)
-  and repairs it, so its run is fix-on-top-of-red, the verdict wanted. A **bystander** —
-  ready work that merely happens to be queued — waits for green: its PR inherits the red
-  through the merge ref, returns a red run that says nothing about the branch, and
-  spreads the failure signal. Both read the same remedy, so ask first: **is this branch
-  the patch?** — its title or issue says it repairs the red, or its head fixes the
-  failing test. Yes → it goes first, ahead of anything queued. No → it waits, and does
-  not rebase onto the red either: containment proves a cure only for a branch that is
-  one. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-- **A class describes one sha.** Anything that moves the head — a sync merge of the base
-  into the branch — invalidates it; read it again at the new head. A green inherited from
-  an earlier sha is exactly the green-run-on-a-different-commit this section refuses.
-  The one sanctioned substitute for that re-read is a **batch's combined run** — one run at
-  a head that contains every member on top of the base, which grades each member's synced
-  state at once ([*Batch landing*](#batch-landing--one-combined-run-then-a-fast-forward-373),
-  below).
-- **A red class is data, not a failed wrap.** The implementer records it and stops; the
-  table says who acts next. Only `red:finding` names the implementer, and only when the
-  finding is the branch's own.
-- **One re-run per red episode, not per attempt** — and it is the only CI action the
-  coordinator takes. A second identical failure is evidence; spending more re-runs on it
-  just moves the wall further out.
+A branch lands only on its own green CI result, read at its own head commit — invariant 3 of
+[the CI contract](#what-ship-reads--the-ci-contract-607). How the CLI reads that run (the four
+classes, the bounded wait, the one re-run) is the CLI's:
+[`tools/docs/ci-gate.md`](tools/docs/ci-gate.md#branch-ci--the-candidates-own-run-read-as-a-class-314).
 
 ### Docs-only — no CI wait (#606)
 
-**[Hard — gate: colab ship]** **⚖ Ruled by the repo owner, 2026-10-14 ([#606](https://github.com/futurelastic/colab-handbook/issues/606)).**
-Documentation and design artifacts touch no code, so they do not wait for CI. **`colab ship`
-decides this; the CI templates do not.** Why: [ADR 606](docs/adr/606-docs-only-no-ci-wait-rationale.md).
-
-- **Which change.** Ship classifies the branch with `tools/lib/docs-only.js` — the
-  [docs-only rule](#autonomy--the-docs-only-exception-345), design artifacts under `docs/`
-  included — narrowed by `ci-docs-skip` ([schema](project.schema.md#ci-docs-skip--optional)).
-  **Absent means on.** A path listed there is one the suite reads; a change touching it needs CI
-  as usual. `ci-docs-skip: off` turns this path off. **`docs-only-paths`** (#626,
-  [schema](project.schema.md#docs-only-paths--optional)) adds repo paths whose content files —
-  text and the design-artifact types — count here, for a content site whose CI `paths-ignore`s them.
-- **Branch CI is not required.** No run, a run in flight and a `stale-base` run (#395) all pass, as
-  `docs-only: CI not required (<n> files)`. **A run that exists at the pushed head and finished red
-  still refuses** — ship never overrides a red verdict.
-- **Trunk CI on a docs-only tip is read at the newest code commit.** A trunk tip with no finished
-  run that is itself docs-only takes the verdict of its newest first-parent ancestor that is not
-  (50 commits back at most), for every ship and for `colab trunk-ci`. A tip whose run finished red
-  stays red.
-- **A secret check runs before the merge.** Ship scans the lines a docs-only change **adds** for
-  credential shapes (private keys, cloud and API tokens, `password=`-style assignments) and for the
-  terms in `.github/secret-scan-terms` when the target has one (`tools/lib/secret-scan.js`). A hit
-  refuses with the file and line, never the matched text.
-- Every other precondition still applies; the classification and the scan are both measured again
-  after B0 sync. The 🚢 comment records `docs-only: CI not required (<n> files)` and the trunk sha CI
-  was read at. A copy still carrying the #570 guard keeps working: its `docs-only-skip` `success`
-  still reads green.
+A change that touches only documentation does not wait for CI — the one exception to
+invariant 3 of [the CI contract](#what-ship-reads--the-ci-contract-607). Which paths count, and
+how the CLI decides: [`tools/docs/ci-gate.md`](tools/docs/ci-gate.md#docs-only--no-ci-wait-606).
 
 ### Who may touch a branch — the coordinator never edits implementer work (#409)
 
@@ -1777,95 +1492,9 @@ has not moved since, it is not repeated.
 
 ### Batch landing — one combined run, then a fast-forward (#373)
 
-Why, with the measurement: [ADR 539](docs/adr/539-who-may-touch-and-batch-landing-rationale.md).
-
-Every mature system that lands several changes per cycle (merge trains, merge queues,
-rollups, speculative pipelines) **tests the combined state before it becomes trunk**. None
-lands first and tests afterwards. So a repo that declares
-[`ship-batch: <N>`](project.schema.md#ship-batch--optional) (1–8; absent or 1 is serial,
-unchanged) may land through `colab ship --batch <b1,b2[,…]>`:
-
-**A batch of one is a batch** (#562): a lone ready candidate lands through the same path,
-never serially, so a repo running its full matrix only on `ship-batch/**` and trunk still
-tests every setup before trunk moves — whether or not a sibling was ready. Under
-[`integration-profile: gated`](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610)
-the heavy lane must also be green at the batch head; a heavy red re-runs or splits like a light one.
-
-1. **Joining.** A member is `green` at its own head ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314),
-   unchanged — or a `none` that cannot arrive), passes every gate its own serial ship would,
-   and is an ordinary squash into trunk through the `auto-trunk` grant. Anything special
-   ships serially, where its path already is: the docs-only door (judged per branch), a
-   migration, a ci-grant or cure, a core-path review, an adopted branch, a branch editing
-   `.github/workflows/**` (it would change what grades the batch). File-disjoint members
-   are preferred — only as a pre-filter that lowers eviction odds. **Disjointness is never
-   the correctness gate**: semantic conflicts need no shared file. The combined run is.
-2. **[Hard — gate: combined-head build fails on staged conflict markers]** **Building.** Trunk's current head — green exactly as the trunk gate requires — plus
-   one squash commit per member, **each its own commit with its own `Closes #N`**, so
-   per-issue evidence and revert stay one-to-one. A member that conflicts with those
-   already in drops to the next batch — **unless every conflicting path is
-   [`generated`](project.schema.md#generated--optional)** (#387): then the build does what
-   B0 does for one branch, running `.colab/hooks/pre-ship` on the combined head to
-   regenerate them, and the member stays in (the combined run is still the gate). With no
-   hook to regenerate, or a hook that fails, it drops as before — and a hook that exits 0
-   but leaves a `<<<<<<<`/`>>>>>>>` line staged in a path it was handed **has failed**: its
-   exit code is a claim, the index is the proof, and serial B0 reads it the same way (#436).
-   Sharing only generated
-   paths does not count against disjointness in step 1's pre-filter either. The result is
-   pushed to `ship-batch/<base-sha7>` — the base is trunk's tip, or a parent's head (step 11).
-3. **One combined run** there must be `green`. It **replaces** each member's post-sync
-   re-run — not a skip justified by disjointness, but one run instead of N; a workflow whose only run was cancelled blocks `green`, as on trunk (#629).
-4. **Landing.** Trunk fast-forwards to the batch head **only if trunk's tip is still the
-   batch's base** (for a chain, once the parent landed at that sha — step 11), by a plain
-   non-forced push (a moved trunk fails it; the batch is then rebuilt on the new head). Each member's evidence names the combined run. While that run is in
-   flight (or green, within a grace), the batch **holds the trunk lane**: serial ships pause (#581).
-5. **A green batch run stands in for trunk's own run at that same sha** — while trunk's
-   run is still in flight — only when **the same workflows** ran there: the workflow files
-   firing on a trunk push and on a `ship-batch/**` push must be the same set. Otherwise
-   trunk waits for its own run, as always.
-6. **Failure — split, then retry** (#557). A red run lands nothing. `red:infra` → re-run
-   once. With two or more members, `red:finding` (`--split`) or red after that re-run splits
-   it: the same ref is rebuilt on the same base with the **first half** of its members; the
-   rest wait for the next batch, and a red half splits again. A red batch of **one** cannot
-   split: that member ships serially and returns to its implementer as a class.
-7. **Wiring.** If no workflow fires on a `ship-batch/**` push, the combined run can never
-   arrive: `colab ship` says so and declines to serial — it never waits for it. Consumer
-   CI opts in by adding `'ship-batch/**'` to a CI workflow's `push: branches:` — a copy of
-   the current CI templates already fires there, since their `'**'` covers it (#384).
-8. **[Hard — gate: colab ship --batch declines on red trunk]** **A red trunk still stops everything** except the cure/grant doors, and those apply
-   **per member, never to a batch**: a red trunk declines the batch outright.
-9. **Gathering, and the partner wait** (#555). A ship pass builds a batch from **every**
-   candidate ready at that moment — re-read the set right before each `--batch` call, never
-   reuse the list the pass started with. A lone ready candidate lands alone at once — as a
-   batch of one — unless
-   the repo declares [`ship-batch-wait: <duration>`](project.schema.md#ship-batch-wait--optional):
-   then, with the lane otherwise idle (trunk's run finished, no batch in flight), it waits
-   up to that window — counted from when it became ready, so it never restarts — for a
-   partner, and lands alone after, still as a batch of one. The handbook gives no default and no ceiling: absent
-   is no wait. A repo picks the value from its own history.
-10. **Adaptive size** (#557): with [`ship-batch-steps`](project.schema.md#ship-batch-steps--optional),
-   one step up after a green batch, one step down after a red one; no default steps.
-11. **Speculative chain** (#605). `--onto ship-batch/<sha7>` builds the batch on an in-flight
-   batch's head; the chain is kept only while it ends at a batch on trunk's tip, at most 3 deep.
-   `--onto` is refused when the named batch has no combined run in flight or green, is not
-   rooted at trunk's tip, or is already 3 deep. A child lands only once trunk's tip **is** its
-   parent's head; a parent that is red, gone or rebuilt, or a trunk moved any other way,
-   deletes the child (its run cancelled) and declines it. Every batch of a chain rooted at
-   trunk's tip holds the lane, as one batch does. Why, and the edge rulings:
-   [ADR 605](docs/adr/605-speculative-batch-chain-rationale.md).
-
-`colab ship --batch` never waits: each call reads the remote, takes one step, and exits
-`0` landed · `3` paused (wait on the printed run, bounded as any other CI wait, then run
-the same command again) · `4` declined, nothing landed, ship the members one at a time (a
-red of two or more: re-run or `--split`, step 6). Declining is never a silent fall-through to the serial path: that path's sync commit
-still needs its own re-run, and landing it unseen is the thing this section exists to stop.
-
-**Tuning — the repo's own history, read by `colab batch-stats`** (#554). No knob has a
-handbook default, so a repo sets `ship-batch:`, `ship-batch-wait:` and `ship-batch-steps:` from
-what `colab batch-stats [--since <window>] [--json]` reports for it — fill, first-attempt green,
-reds, drops by class (each a `Ship-Batch-Dropped:` trailer on the batch head), **missed
-partners** and queue wait; the metrics are defined in `tools/README.md`. On a `ship-batch` repo
-`alone` (serial plus a batch of one, #580), not `serial`, tunes `ship-batch-wait`. It reads
-git and CI only, so it answers the same on every machine.
+Several branches land together only after CI has passed on their combined result; trunk then
+moves to exactly that tested commit. How the CLI builds, reads and lands a batch:
+[`tools/docs/ci-gate.md`](tools/docs/ci-gate.md#batch-landing--one-combined-run-then-a-fast-forward-373).
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 
@@ -3079,274 +2708,23 @@ Why, with the measurement: [ADR 539](docs/adr/539-migration-rationale.md).
 
 #### A red trunk with no patch — never parked in silence (#390)
 
-The two doors below, and `code-ship`'s red-trunk ordering, cover **landing** a patch for
-a red trunk. Something has to **create** one first. The invariant:
-
-> **A green, finished branch is never parked behind trunk CI while there is neither an
-> open, accepted `TRUNK RED:` issue nor a re-run in flight.**
-
-An issue that diagnoses the red under another title, or still carries `agent-filed`, does not count. Triage's §0 therefore treats "trunk red,
-and no open accepted `TRUNK RED:` issue" as a change that forces a full pass, even when
-none of its fingerprint inputs moved. The full pass adopts such an issue: it retitles it
-and drops `agent-filed` (#430).
-
-Two actors hold it, one per half, and neither does the other's:
-
-- **The re-run — the repo's scheduled driver, where one exists.** Once per red sha,
-  only when the red commit's diff is docs-lane-only
-  ([§2](#autonomy--the-docs-only-exception-345)) and no `TRUNK RED:` issue is open. It is
-  the **only** re-run actor for a red trunk ([§4](#4-branches-and-commits),
-  *Telling `red:infra` from `red:finding`*).
-- **The filing — triage.** When the re-run has been tried for that sha, or cannot apply
-  (the commit touches more than docs, or nothing drives the repo), and no accepted
-  `TRUNK RED:` issue is open, triage files `TRUNK RED: <sha> fails <check>` — or comments
-  the occurrence on an open issue for the same flake class, or adopts an open issue that
-  already diagnoses the sha — at most once per red sha. It is
-  one of triage's authorised writes (`skills/code-triage` §0.2, write 8), and triage
-  never re-runs a job itself.
-
-Why, with the measurements: [ADR 390](docs/adr/390-red-trunk-no-patch-rationale.md).
-
-Why, with the measurement: [ADR 539](docs/adr/539-red-trunk-rationale.md).
+A finished green branch is never left waiting behind a red trunk while nobody owns the red: an
+accepted issue for it, or a re-run in flight, must exist. How triage and the CLI keep that true:
+[`tools/docs/red-trunk.md`](tools/docs/red-trunk.md#a-red-trunk-with-no-patch--never-parked-in-silence-390).
 
 #### Red-trunk exemption — the one-shot door through trunk-CI-green (#105)
 
-Why, with the measurements: [ADR 105](docs/adr/105-red-trunk-exemption-rationale.md).
-
-- **Two roles, as for a migration grant (#504).** The repo says which it accepts:
-
-  | Role | Who decided | Marker | Bound to | Accepted |
-  |---|---|---|---|---|
-  | **[Hard — gate: colab ci-grant refuses]** `human` | a person, `COLAB_HUMAN=1` | `🚨 Red-trunk CI grant` | the branch and the red trunk sha | on every repo — the default |
-  | `ci-reviewer` | the coordinator agent, with a review record | `🩹 Red-trunk CI review grant` | the branch's exact HEAD and the red trunk sha | only under [`ci-grant: reviewer`](project.schema.md#ci-grant--optional) |
-
-  **[Hard — gate: colab ci-grant refuses without COLAB_HUMAN or the reviewer opt-in]** `colab ci-grant <N> --branch <b> --role ci-reviewer --reviewer <id> --verdict
-  pass --cures "<check>; <check>"` mints it **without** `COLAB_HUMAN=1` — the only grant
-  that does — and only where trunk's committed `project.yml` declares the opt-in (a branch
-  cannot opt itself in). Every guard is **measured** at mint, nothing is taken from the
-  flags: the branch's trailing number group carries `#N`; `#N` is open and titled
-  `TRUNK RED:`; trunk is red in the sense `ship` checks; never stacks (the same guard as the
-  human grant); the branch's own CI is green at its **exact** pushed head; and every check
-  the record claims to cure is red on trunk at the red sha. The review record (a fenced
-  `ci-review` block) carries `verdict: pass`, the reviewed `head`, the `red` sha and the
-  `cures`. `ship` re-measures all of it — issue, title, opt-in at the merge target, red sha,
-  branch green at exactly that head, cures still red — and honours an optional
-  `not-before` (a revoke window the host imposes) by reading the grant as *not yet usable*
-  until it passes. **Revoking stays human** (`COLAB_HUMAN=1 colab ci-grant <N> --revoke`
-  cancels every role). The reviewer identity is declared, not attested — the same caveat as
-  the migration reviewer. Why, with the measurements: [ADR 105](docs/adr/105-red-trunk-exemption-rationale.md).
-- **[Hard — gate: colab ship refuses a stale CI grant]** **Bound to one issue, the branch, AND the exact red trunk sha reviewed against** — it
-  expires the instant trunk's head moves, for any reason. A moved branch voids it too, except by the stale-base sync `ship` demands (#615): clean merges of trunk at or before the red sha keep it.
-- **[Hard — gate: colab ship refuses unmeasured evidence]** **Evidence is measured, never asserted** — creating one requires a completed,
-  successful CI run for the branch's own current head sha; `--evidence-run` is
-  recording-only and never substitutes for the measured run.
-- **[Hard — gate: colab ci-grant refuses a stack]** **Never stacks** — refuses against a green trunk, and refuses again if a prior grant
-  already merged something and trunk has been red continuously since.
-- A grant-authorised merge carries a `CI-Grant:` trailer in the squash commit itself, in
-  addition to the tracker comment.
-- **Scoped to exactly one precondition** (trunk-CI-green) — never exempts no-new-
-  migrations, claim corroboration, the trunk-checkout check, the hand-merge conflict
-  preview, or `colab promote`. **Trunk-only** — an integration line's red borrows trunk's
-  advisory verdict when the line has no runs of its own; the exemption does not extend to lines.
-
-Why, with the measurement: [ADR 539](docs/adr/539-red-trunk-rationale.md).
+Onto a red trunk only its fix lands (invariant 1 of
+[the CI contract](#what-ship-reads--the-ci-contract-607)). One door is a recorded grant, bound to
+one branch and the red commit, given by a person or — where a repo opts in with
+[`ci-grant`](project.schema.md#ci-grant--optional) — by a reviewer. The mechanics:
+[`tools/docs/red-trunk.md`](tools/docs/red-trunk.md#red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105).
 
 #### Cure rule — the machine-checkable door through trunk-CI-green (#281)
 
-A second door through the same precondition, tried **before** ci-grant and needing
-**no human step at all** — `colab ship` fires it automatically the moment the raw
-trunk-CI-green check fails HUMAN_GATED, and falls straight through to the ordinary
-ci-grant when any condition below is not met. Fires **iff**:
-
-1. **[Hard — gate: colab ship refuses (cure rule)]** the branch **contains trunk's current red head sha** as an ancestor.
-2. **[Hard — gate: colab ship refuses (cure rule)]** the branch's own CI is green **at its own current head**, measured, never asserted —
-   identical "ask by sha" discipline to ci-grant's evidence guard — **and** (2b, #297)
-   every job that is RED on trunk's runs at the red sha exists in the branch's runs at
-   that head, completed and concluded `success`, matched per workflow. It is scoped to
-   trunk's **red set**, so an advisory job failing only on the branch does not refuse. A job instance from a `workflow_dispatch` run counts here only under the
-   #510 rules below (*Dispatch evidence for a job a branch push skips*).
-3. **[Hard — gate: colab ship refuses (cure rule)]** the **same anti-stacking guard** ci-grant uses holds — no prior grant OR cure already
-   merged while trunk has stayed continuously red since. A repo that auto-cures once and
-   stays red anyway must not auto-cure again on the same continuous red. **One admission
-   — progress (#477):** a further cure passes condition 3 when trunk's red-job set at
-   its current red sha is a **strict subset** of the red-job set at the red sha the
-   prior exemption was measured against (the `over-red` sha its `CI-Grant:` / `CI-Cure:`
-   trailer names), jobs matched per workflow as in 2b. An **unchanged** set refuses, and so does a set with **any new**
-   red job, even if another healed. Either set unmeasurable (runs aged out, a job still in
-   flight) refuses. The candidate must still cure the remaining set under every other
-   condition. The admission belongs to the cure rule only; a human `ci-grant` create
-   keeps the plain guard.
-4. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** touch `.github/workflows/**` — a branch may not
-   self-certify a change to the CI configuration that is grading it. This door
-   stays behind a human ci-grant, **unless** the branch passes the carve-out
-   below. The diff is read without rename detection, so moving a workflow file
-   out of the directory counts as touching it (#297).
-5. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** change the `scripts` block of any `package.json` (#297).
-   Any `package.json` at any depth counts; key order does not,
-   a changed command does; deleting or renaming a manifest counts. There is **no
-   carve-out** for this condition — see below for why the #321 door cannot adjudicate
-   it. **One narrow admission (#475): an add-only change.** When every touched
-   `package.json` exists on both sides, keeps every script it had with an identical
-   command, and only *adds* keys, it passes
-   condition 5 provided every step that ran in each red job on trunk, the failing one
-   included, ran on the branch and concluded `success` (the 4b read, without 4c). Its
-   limit: an added npm **lifecycle** hook (`postinstall`, `prepare`, or
-   `pre<x>`/`post<x>` for a script `<x>`) is never admitted. A
-   removed, renamed or changed script, a new manifest, and an add-only change in one
-   manifest beside any other change in another still refuse.
-6. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** change a Python dependency manifest (#377). What counts,
-   at any depth: `pyproject.toml`, `setup.py`, `setup.cfg`; any `.txt`/`.in` whose name
-   contains `requirements` or that sits under a `requirements/` directory; and any file
-   one of those pulls in (a `-r`/`-c` include, a `[tool.setuptools.dynamic]` `file =`),
-   read from both sides of the diff. Lockfiles are not read by the template and do not
-   count. **No carve-out**, for the same reason as 5. **One narrow admission (#476): a
-   pin-only change.** When every touched manifest exists on both sides and differs only
-   in the version specifier (or `--hash`) of requirements present at the same position
-   on both sides — no requirement added, removed, reordered or renamed, no extras or
-   marker changed, no option line (`-r`/`-c`/`-e`/index) changed — it passes condition 6
-   on the same step proof as 5's admission **plus one test**: no step *after* the last
-   one that ran on trunk may be `skipped` on the branch. A `pyproject.toml` is read only
-   inside its dependency arrays (`[project] dependencies`,
-   `[project.optional-dependencies]`, `[dependency-groups]`, `[build-system] requires`);
-   every other byte must match. `setup.py` (code) and `setup.cfg` are never pin-only.
-
-**[Hard — gate: colab ship refuses (cure rule)]** An unmeasurable diff — a failed read, a manifest that does not parse, a manifest
-that is a symlink — refuses, the same as any other unmeasured signal. Order of
-checks: 1 → 2 → 2b → 3 → diff measurable → 5 → 6 → 4 (with its carve-out).
-
-**The workflow carve-out (#321) — one guarded door through condition 4, not a relaxation
-of it.** A workflow-touching branch may
-still cure when, on top of 1-3 (2b included) and 5, **all** of:
-
-- **[Hard — gate: colab ship refuses (cure rule)]** **4a — job-name superset.** Every job RED on trunk's run at the red sha
-  exists on the branch's own green run, completed and concluded `success`.
-  *"I made the red job disappear"* — deleted, renamed, filtered away — fails here.
-  Since #297 this sub-test is condition 2b and applies to **every** cure; 4b and
-  4c stay the carve-out's alone.
-- **[Hard — gate: colab ship refuses (cure rule)]** **4b — executed-step superset.** For each of those jobs, every step that actually
-  **ran** on trunk (reached a terminal, non-skipped conclusion) is present on the
-  branch's job and concluded `success`. Steps *after* the failing one are `skipped` on
-  trunk and so constrain nothing — only steps that demonstrably ran do. *"I made it exit
-  early"* fails here.
-- **[Hard — gate: colab ship refuses (cure rule)]** **4c — duration floor.** Each of those jobs cost at least the wall time its failure did on trunk.
-
-**[Hard — gate: colab ship refuses (cure rule)]** Anything unmeasurable — no job evidence, an empty red-job set, an unreadable
-step list, a missing duration — **refuses**, exactly as before. The carve-out
-only ever widens the door on evidence, never on the absence of it.
-
-**Dry-run evidence for a main-only workflow (#474).** Some workflows never run on a
-branch at all. The template therefore offers a **dry run**: dispatched on the fix branch
-(`gh workflow run release-auto.yml --ref <branch> -f dry_run=true`; a dispatch on any
-ref other than `main` is dry with or without the input), it checks out the branch and
-runs the same job with every external write off. Each decision runs with `--dry`. No
-promotion, tag, Release, push or dispatch happens. Only steps whose names end in
-`[publish]` are skipped. A sentinel step, *Dry run — nothing is tagged, released or
-published*, runs only in that mode, and it is what marks a job instance as a dry run.
-Such an instance is the job's 2b (and 4a) evidence only when, on top of 2b:
-
-- **[Hard — gate: colab ship refuses (cure rule)]** **D1** — both step lists are measurable: trunk's ran-steps and the dry run's steps.
-- **[Hard — gate: colab ship refuses (cure rule)]** **D2** — every step that **ran** on trunk, the failing one included, concluded
-  `success` in the dry run. This is 4b, applied to dry-run instances on every path.
-- **[Hard — gate: colab ship refuses (cure rule)]** **D3** — every step the dry run did not run to success is a skipped `[publish]` step.
-
-A green ordinary instance of the same job outranks a dry one, so the D-rules apply only
-when a dry run is the sole evidence.
-
-**[Hard — gate: colab ship refuses (cure rule)]** When a cure refuses at 2b only because such a workflow's red job is absent on the
-branch, and every later condition already holds, `colab ship` dispatches the dry
-run **once**. It skips any workflow that already has a run at the branch head. It
-never waits, and it never dispatches from `--dry` or `--dry --json`, which only
-report the command. Re-run ship once the run completes (code-ship B1a's bounded
-wait). Dispatch is gated on a static read of the **branch's** copy: it must have a
-`name:`, a `dry_run` input and the sentinel step. A copy older than #474 has no
-forced dry mode and would really publish if dispatched. The **limit**: a red in a
-`[publish]` step, or in the `npm`/`deploy` jobs (which never run without a tag),
-cannot be cured by a dry run and stays a ci-grant. So does a red job that ran
-**zero** steps (a runner that never picked it up) on the carve-out path, because
-4c has no usable duration for it. Reasoning:
-[`docs/adr/474-cure-rule-dry-run-evidence.md`](docs/adr/474-cure-rule-dry-run-evidence.md).
-
-**Dispatch evidence for a job a branch push skips (#510).** The same gap one level down.
-A **dispatch instance** — a job row from a `workflow_dispatch` run that is not a #474
-dry run — is the job's 2b (and 4a) evidence only when, on top of 2b's own tests, all of:
-
-- **[Hard — gate: colab ship refuses (cure rule)]** **W1 — same workflow.** The dispatch run's workflow **id** equals the red run's.
-  Either id missing refuses.
-- **[Hard — gate: colab ship refuses (cure rule)]** **W2 — same head.** The dispatch run is at the branch's evidence head sha. A row
-  at any other sha is never evidence.
-- **W3 — the event** is `workflow_dispatch`. Ordinary instances are unchanged.
-- **W4 — the job passed and nothing beside it failed.** Completed `success`; no
-  other instance at the head red or pending. So `skipped`, `neutral`, `cancelled`
-  or absent never counts as cured, and a job that ran and **failed** on the push
-  run is not rescued by a green dispatch.
-- **[Hard — gate: colab ship refuses (cure rule)]** **W5 — the failing step ran.** Every step that went red on trunk is present by exact
-  name in the dispatch instance and concluded `success` — a job whose steps were all
-  skipped reports `success`, so job-level success alone cannot see a step whose own
-  `if:` depends on the event. A trunk red with no red step (a timeout, a lost runner)
-  leaves W5 nothing to check, and W4 decides.
-- **W6 — per job, by exact name.** Matrix shards match by their expanded names;
-  one green shard never covers another; nothing matches by prefix.
-
-W1 and W2 apply to a #474 dry run as well whenever its run reports
-`workflow_dispatch`. A green ordinary instance outranks a green dispatch
-instance, which outranks a green dry run: each rule set applies only when that
-instance is the job's sole evidence.
-
-When a cure refuses at 2b only because red jobs are absent or `skipped` on the
-branch in a workflow that (a) declares `workflow_dispatch` in the **branch's**
-copy, (b) is not dry-run capable (that keeps the #474 path), (c) has a completed,
-successful **non-dispatch** run at the head — it is branch CI, not a main-only
-workflow a dispatch could publish from — and (d) has no `workflow_dispatch` run at
-the head yet, and every later condition already holds, `colab ship` dispatches it
-**once** (`gh workflow run <file> --ref <branch>`, no inputs). It never waits and never
-dispatches from `--dry` or `--dry --json`, which report `ciCure.dispatchWanted`.
-Wait with `colab ci-wait --sha <head> --branch <branch>` sized to the job, then
-re-run ship. Reasoning:
-[`docs/adr/510-cure-rule-dispatch-evidence-for-branch-skipped-jobs.md`](docs/adr/510-cure-rule-dispatch-evidence-for-branch-skipped-jobs.md).
-
-- **[Hard — gate: colab ship refuses (cure rule)]** **`package.json`'s `scripts` block is condition 5, not part of this carve-out, and
-  must not be folded into it.** The carve-out's evidence cannot adjudicate a
-  scripts-block weakening in the general case — it happens inside a step whose name and
-  conclusion are unchanged and whose duration delta may sit below any signal, so 4b and
-  4c would both silently pass a change they are structurally unable to see.
-
-The full reasoning — why the executed-step superset is the primary test and a
-bare duration threshold was rejected, what the two accepted false refusals cost,
-and why the `timed_out` relaxation is deliberately left unwritten — is in
-[`docs/adr/321-workflow-carve-out-measures-execution-not-duration.md`](docs/adr/321-workflow-carve-out-measures-execution-not-duration.md).
-- **Where workflows never fire for a branch ref, that round is a PR — for the patch only (#353).** A bystander does not rebase onto the red and does not open a PR: it
-  waits for green (*Branch CI*, above).
-- A cured merge carries a `CI-Cure:` trailer instead of `CI-Grant:` — unlike the
-  grant's trailer it names no issue (the cure rule never reads the tracker at all,
-  so it has none to name), only the branch, the red trunk sha it contained, and the
-  evidence run sha.
-- **The trailer and the `--dry --json` payload name WHICH door was used.** A cure
-  admitted through the carve-out appends ` via workflow-carve-out jobs <a,b>` to its
-  trailer and reports `ciCure.via: "workflow-carve-out"` (with per-job durations)
-  instead of `"ordinary"`. The `--grep=^CI-Cure:` scan is anchored on the prefix, so the
-  suffix never disturbs it. A cure proven by a dry run (#474) appends ` via dry-run jobs
-  <a,b>` the same way and reports `ciCure.dryRun: {jobs}`; on a refusal,
-  `ciCure.dryRunWanted` names the dry run(s) that would supply the missing evidence,
-  each with its workflow, file and exact command. A cure proven by a `workflow_dispatch`
-  run (#510) appends ` via dispatch jobs <a,b>` and reports `ciCure.dispatch: {jobs}`;
-  on a refusal, `ciCure.dispatchWanted` names the dispatch(es) that would supply the
-  evidence, in the same shape. `ciCure.provenJobs` (#297) lists the red jobs 2b proved
-  passing on the branch — a consumer rendering cure eligibility reads it (and
-  `ok`/`reason`) rather than re-deriving a verdict from check-runs. A cure that changed
-  a manifest under #475/#476's admissions appends ` admitted add-only-scripts` and/or
-  `pin-only-requirements` to the trailer, and reports `ciCure.admitted: {scripts?,
-  pins?}` (null otherwise), for the same reason. A cure that passed condition 3 by
-  progress (#477) appends ` after-progress healed <a,b>` and reports `ciCure.progress:
-  {healed, still}` (null otherwise); its own `over-red` sha is what the next cure on the
-  same red compares against.
-- **`colab ci-grant`'s anti-stacking scan now recognises either trailer** —
-  `CI-Grant:` or `CI-Cure:` — as "an exemption already merged against this red".
-- Scoped identically to the grant: trunk-only, and never exempts anything but
-  trunk-CI-green.
-
-Why, with the measurements and the accepted false refusals: [ADR 281](docs/adr/281-cure-rule-rationale.md).
-
-Why, with the measurement: [ADR 539](docs/adr/539-cure-rationale.md).
+The other door needs no grant: a branch that contains the red commit, is green at its own head,
+and provably runs what failed on trunk lands as the fix. The conditions and how the CLI measures
+them: [`tools/docs/red-trunk.md`](tools/docs/red-trunk.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281).
 
 #### Scheduled drivers — provenance and autonomy meet a caller that is not a person
 
@@ -4496,63 +3874,39 @@ trunk moves, updating the CI triggers is part of the move, and the audit checks 
 
 ### What ship reads — the CI contract (#607)
 
-**The CI templates are guidance; the handbook enforces only what `colab ship` reads.** A copy may
-differ from its template in any way: the audit prints that drift as a `▸` suggestion, never a fail
-or warn, and `colab update` never exits 1 on it. The contract the audit does check: a run on
-every push to trunk (above), on a branch push where `gate: authoritative: ci`, on `ship-batch/**`
-where `ship-batch` is above 1, and a `Migration round-trip…` job where `migration-grant: reviewer`.
-Ship counts push and pull-request runs only (or what `ship-gate-workflows` names); scheduled and
-dispatched runs are set aside (`tools/lib/verify-runs.js`). Why: [ADR 607](docs/adr/607-ci-templates-guidance-two-lanes.md).
+**The handbook holds a CI contract, not a CI.** What a repo's CI runs, and on which runners, is
+the repo's business; these four invariants hold whatever it runs (#635):
+
+1. **[Hard C7.contract.01 — refuse: a merge onto a red trunk unless the change is that red's fix]**
+   Never merge onto a red trunk; only its fix lands
+   ([*Red-trunk exemption*](#red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105),
+   [*Cure rule*](#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281)).
+2. **[Hard C7.contract.02 — refuse: a CI result read from any commit other than the one judged]**
+   A CI result counts for the exact commit it ran on — never for a newer or older one, and never
+   as "the latest run".
+3. **[Hard C7.contract.03 — refuse: a landing whose branch head has no finished green result]**
+   A branch lands only on its own green, at its own head
+   ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314)); a documentation-only
+   change is the one exception ([*Docs-only*](#docs-only--no-ci-wait-606)).
+4. **`project.yml` declares what CI a repo has**:
+   [`ship-gate-workflows`](project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)
+   names the workflows whose runs are its CI; absent, the runs that pushes and pull requests
+   trigger are.
+
+How the CLI reads runs, lanes, profiles and runners — the mechanism that enforces these today — is
+documented with the CLI, in [`tools/docs/`](tools/docs/README.md).
 
 ### Two lanes — light on every merge, heavy on official builds and nightly (#607)
 
-- **Light** (`ci-<stack>.yml` → `ci.yml`), on every push: secret scan, build, typecheck/lint, the
-  fast tests — about 5 minutes at p50. It is the lane ship reads.
-- **Heavy** (`ci-<stack>-heavy.yml` → `ci-heavy.yml`), never on a push: the whole suite,
-  integration, browser/e2e, both configurations of a switched epic, load. It runs nightly on
-  trunk's tip, and is skipped when trunk has not moved since the last green nightly. It runs at
-  every official build: `release-tag.yml` publishes only on its green, and `release-auto.yml`
-  finalizes a candidate only on its green run at that exact sha.
-- **A red nightly is a trunk finding, not a merge block.** It opens one `trunk-red` issue per
-  lane, naming the commits since the last green nightly.
-- **The adopter marks heavy tests; an unmarked test is light**: a `test:heavy` script (Node), the
-  pytest marker `heavy`, or the Pest/PHPUnit group `heavy`.
-- **The trade-off:** a defect the light lane misses can sit on trunk for up to a day. A repo that
-  cannot accept that declares another [integration profile](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610).
+A repo may split its CI into a light lane on every push and a heavy lane on official builds and
+nightly; the templates ship that shape. The lanes and how the CLI reads them:
+[`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607).
 
 ### Integration profiles — where the heavy lane runs, and what a green trunk promises (#610)
 
-`integration-profile:` in `project.yml` ([schema](project.schema.md#integration-profile-heavy-workflow--optional))
-picks one shape. Every profile keeps the light lane on session branches; ship, release and promote read it.
-
-| | `gated` | `qualify` | `release-heavy` (default) | `promote` |
-|---|---|---|---|---|
-| A landing (serial or batch) | waits on a **green heavy run at its sha** | light only | light only | light only, into `dev` |
-| Heavy lane | every landing + release gate | trunk on a clock (the heavy cron, every few hours) + nightly + release gate | nightly (required) + release gate | at the `dev → main` promotion |
-| Trunk promise | always heavy-green | heavy-red for at most one clock window | light-green; heavy-red until the next nightly | `dev` always heavy-green |
-| A heavy red | blocks landing; a red wave splits toward the culprit | revert first, landings continue | a trunk finding naming the sha range; blocks the final | blocks the promotion |
-| Meant for | trunk deploys or must always be shippable | tooling with many small landings a day | low-volume repos on a release train | repos already running `dev → main` for an approval gate |
-
-- **Absent ⇒ `release-heavy`**, #607's shape: a repo that never declares changes nothing.
-- **A final release needs the heavy lane green at its exact sha under every profile**, wherever the
-  repo has one; still running (or not yet run) keeps the candidate testing.
-- **`exposure: live` without `deploy: tag` may only declare `gated` or `promote`**: `qualify` and
-  `release-heavy` allow a heavy-red trunk, and there the promotion deploys it. The audit fails it.
-- **`release-heavy` is the higher-risk choice**: a red found late implicates the whole range, its
-  authors usually gone — which is why its nightly is never optional.
-- **`promote` is not for new repos.** For an approval gate prefer a merge queue on trunk, or a
-  `release/x.y` branch cut from trunk.
-- **Test tiers**, the vocabulary every profile uses: `smoke` (the dev machine) · `affected` (branch
-  CI) · `integration` (a wave's cross-feature subset) · `full` (the whole suite) · `heavy` (e2e,
-  multi-configuration, load). An adopter maps its tests with the [marker](#two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607); unmarked is light.
-- **Revert first** (`qualify`, and `gated` when a red reaches trunk): bisect the red window with
-  isolated re-runs of only the failing tests; retry a failure once before calling it red; revert
-  automatically only a culprit an isolated re-run proved, otherwise a human or coordinator decides.
-  The fixer gets a brief: failing tests, log excerpt and run link, culprit with the bisect proof,
-  the original issue, a reproduction command, the flaky-or-real verdict, and the revert to re-land with a regression test.
-- **Batch size:** start at 4–6; tune from the per-branch wave failure rate and the flake rate.
-
-Why each shape, and why only `gated` changes ship: [ADR 610](docs/adr/610-integration-profiles.md).
+[`integration-profile:`](project.schema.md#integration-profile-heavy-workflow--optional)
+declares where the heavy lane runs and what a green trunk promises. The four profiles:
+[`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610).
 
 ### CI — what it is follows the unit's shape, how much follows exposure
 
@@ -4610,69 +3964,13 @@ suggestion at most (#607). See
 
 ### CI artifacts — your own store, not the allowance (#601)
 
-**Files passed between jobs go through a store the organisation owns, not GitHub's capped
-artifact allowance** — `.github/actions/artifact-store/`, one for one with the official actions
-(`mode: publish` for release files): [`docs/artifact-store.md`](docs/artifact-store.md).
+Where CI jobs keep the files they pass each other is the repo's business; the templates' store:
+[`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#ci-artifacts--your-own-store-not-the-allowance-601).
 
 ### Self-hosted runners — capacity is the agent count, not the machine (#355)
 
-The templates assume GitHub-hosted capacity: every job gets a fresh machine the moment
-it is queued. **A self-hosted runner breaks that assumption, and a flow copied unchanged
-spends most of its wall time waiting rather than working.** Why, with the measurement: [ADR 539](docs/adr/539-ci-toolchain-rationale.md).
-
-- **A repo's capacity is how many agents it has, not how big the host is.** One agent
-  runs one job at a time for that repo, whatever the host has spare.
-- **Measure queue and work separately, at job and step level.** Run duration
-  (`created → updated`) adds the two together, so a slow suite and a starved runner read
-  identically. Compare each job's `startedAt` with the run's creation time, and each
-  step's duration with the job's, before you optimise either.
-- **Where the merge gate waits for a completed trunk run, give trunk its own agent.**
-  Branch runs that are informative only must not delay the one run a merge waits for.
-  Use **disjoint** label sets: trunk → a trunk-only label, everything else → the
-  general one, chosen in `runs-on` with an expression on `github.ref`. Until that lane
-  exists, a single shared agent is also why a copied template's every-branch trigger
-  goes back to trunk-only, with `pull_request` restored ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314), #384, #512). Two traps:
-  - **A label no online agent carries leaves the job queued forever, with no error.**
-    Register the agent before merging the routing, and change the routing in the same
-    change that retires the agent.
-  - **Route every job of a trunk run, including non-blocking ones.** A run is not
-    *completed* until its last job is, and `continue-on-error` does not change that.
-- **With few agents, every job is a queue slot.** A 13-second job (a secret scan) that
-  sits in its own job costs one more wait per run. Fold it into the main job as its
-  first steps; it still runs on every run and still fails the job before any test
-  starts. The main job must check out full history, which the scan needs. Split jobs
-  out again only when there are enough agents to run them side by side.
-- **Never run the same check twice in one job.** Drop the copy whose removal breaks
-  nothing; a test that pins the test script's shape decides which one that is.
-- **Test parallelism follows the cores the runner *exposes*, but more cores only help a
-  CPU-bound suite.** Runners that size their concurrency from `os.availableParallelism()`
-  (node:test does) are capped by the container's core limit, not by the host's. Raising
-  that limit is cheap on a memory-bound host, and it is not a speed-up you can assume. Before you count on a gain, compare the batch's wall time with the CPU it
-  actually used.
-- **Cap test-runner workers in CI with a fixed number. Size it to the slot's memory,
-  not to the CPUs the job can see (#478).** The bullet above assumes the slot limits
-  cores. Many slots limit only memory: they run as a memory-capped cgroup, and the
-  job's tmpfs work dir (`node_modules` included) counts against that cap. The job
-  still sees every CPU on the host. A runner that sizes its pool from
-  `os.availableParallelism()` (vitest, jest, node:test, playwright; pytest-xdist
-  `-n auto` and parallel PHPUnit do the same) then starts one worker per *host*
-  core, so the worker count changes when someone upgrades the host.
-  - The fix is a cap in the test config, read from CI so that local runs keep
-    their full parallelism: vitest `maxWorkers: process.env.CI ? 4 : undefined`,
-    jest `--maxWorkers=4`, node:test `--test-concurrency=4`, playwright
-    `workers: process.env.CI ? 4 : undefined`. Pick the number from the slot's
-    memory divided by one worker's peak, with room left for the work dir. Do not
-    use the core count.
-  - If a suite that used to be green starts timing out on a self-hosted pool with
-    no code change, check the slot's memory pressure (`memory.events` `high`) and
-    the worker count before you widen any timeout.
-- **Before adding an agent, check the runner's disk as well as its memory.** Each agent
-  brings its own runner install and workspace (GBs for a Node repo). On a
-  memory-bound host, a second agent inside an existing runner container buys the same
-  concurrency as a new container, without a second OS's overhead.
-- **A persistent runner never resets, so tests must clean up after themselves.** A test
-  that makes a temp dir and never removes it leaks on every run. The same persistence
-  makes a hosted cache action redundant: the package cache is already on disk.
+Which runners a repo's CI uses is the repo's business. Guidance for self-hosted runners:
+[`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#self-hosted-runners--capacity-is-the-agent-count-not-the-machine-355).
 
 ### Toolchain versions — strict precedence
 

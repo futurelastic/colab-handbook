@@ -23,12 +23,13 @@
 // Passes when:
 //   1. ids are non-empty, unique and of the shape ID_SHAPE, and every class is one of the three;
 //   2. every key is found in its dest file;
-//   3. hard and default rows live in a normative file (CONVENTIONS.md or project.schema.md) —
+//   3. hard and default rows live in a normative file (CONVENTIONS.md or project.schema.md), or in
+//      the CLI's own docs under tools/docs/ when the rule is mechanism the CLI enforces (#635) —
 //      only an explanation may move to docs/adr/ or docs/gotchas.d/;
 //   4. a hard row's key sits in a unit (paragraph, list item, table row) carrying a marker; the
 //      row's gate literals are required under the old form, optional under the new, and checked
 //      wherever given;
-//   5. every marked unit in the normative files holds at least one hard row's key — a marker no
+//   5. every marked unit in the normative files and tools/docs/ holds at least one hard row's key — a marker no
 //      row accounts for is a rule the inventory never saw;
 //   6. a new marker's id is a hard row of that file whose key sits in that unit, and its refuse
 //      clause is at least three words naming no tool (no code span, no `colab`, `gh` or `hook`);
@@ -44,6 +45,14 @@ import { units } from "./lib/md-units.mjs";
 const { collectHeadingSlugs } = createRequire(import.meta.url)("../tools/lib/md-anchors.js");
 
 export const NORMATIVE = ["CONVENTIONS.md", "project.schema.md"];
+// The CLI's own docs (#635): mechanism text moved out of CONVENTIONS.md keeps its rows here, with
+// the same ids. A rule that lives here is still a rule — the CLI still enforces it.
+export const TOOL_DOCS = "tools/docs/";
+export const isRuleHome = (f) => NORMATIVE.includes(f) || (f.startsWith(TOOL_DOCS) && f.endsWith(".md"));
+function toolDocs(root) {
+  const d = path.join(root, TOOL_DOCS);
+  return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith(".md")).sort().map((f) => TOOL_DOCS + f) : [];
+}
 export const CLASSES = new Set(["hard", "default", "explanation"]);
 const HEADER = ["id", "class", "gate", "rule", "key", "dest", "source"];
 const OLD_MARKER = /\*\*\[Hard — gate: [^\]]+\]\*\*/;
@@ -127,8 +136,8 @@ export function check({ root, inventory = "docs/rule-inventory.md" }) {
     const dest = destFile;
     const key = flat(unwrap(r.key));
     if (key.split(" ").length < 3) { say(r, `key "${r.key}" is too short to identify a rule`); continue; }
-    if (r.class !== "explanation" && !NORMATIVE.includes(dest)) {
-      say(r, `a ${r.class} rule must live in ${NORMATIVE.join(" or ")}, not "${dest}" — only an explanation may move to an ADR`);
+    if (r.class !== "explanation" && !isRuleHome(dest)) {
+      say(r, `a ${r.class} rule must live in ${NORMATIVE.join(" or ")} or under ${TOOL_DOCS}, not "${dest}" — only an explanation may move to an ADR`);
     }
     const hay = flatOf(dest);
     if (hay == null) { say(r, `dest "${dest}" does not exist`); continue; }
@@ -153,7 +162,7 @@ export function check({ root, inventory = "docs/rule-inventory.md" }) {
 
   // Marker coverage, both directions.
   const hardKeys = rows.filter((r) => r.class === "hard").map((r) => ({ r, key: flat(unwrap(r.key)) }));
-  for (const f of NORMATIVE) {
+  for (const f of [...NORMATIVE, ...toolDocs(root)]) {
     const t = read(f);
     if (t == null) continue;
     const us = units(t).filter((u) => u.kind !== "fence" && u.kind !== "heading");
