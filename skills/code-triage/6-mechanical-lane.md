@@ -5,10 +5,10 @@ condition; this file holds the step's full text — the commands, edge cases and
 behind them — moved here verbatim (#524).
 
 
-A fleet that runs a second, cheap engine for batch-mechanical work only feeds it when
+A fleet that runs a second, cheap agent runtime for batch-mechanical work only feeds it when
 someone mid-session happens to remember it exists — which trends toward zero use, the
 same failure `needs-plan` exists to prevent from the opposite direction (there, a group
-too hard to hand to the default engine untagged; here, a group too easy to deserve it).
+too hard to hand to the default agent runtime untagged; here, a group too easy to deserve it).
 Triage is the one moment the whole backlog is in view, so it is the only place these
 groups can be *assembled* rather than encountered one issue at a time.
 
@@ -28,7 +28,7 @@ narrows that default, it never widens it.
 
 ```sh
 gh label create mechanical-lane --color 1D76DB \
-  --description "Triage judged this batch-mechanical with a usable oracle — a candidate for the cheap engine lane, not the default one" 2>/dev/null || true
+  --description "Triage judged this batch-mechanical with a usable oracle — a candidate for the cheap agent-runtime lane, not the default one" 2>/dev/null || true
 gh issue edit <lead-issue> --add-label mechanical-lane
 gh issue comment <lead-issue> --body "mechanical-lane: <one-line why — the pattern being
 converted or generated, and the oracle command that adjudicates it>
@@ -43,7 +43,7 @@ Suggested batch size: <N> — <why that size, not one big batch>"
   both `mechanical-lane` and `needs-plan` is a contradiction worth a second look, not a
   state to write mechanically — a group hard enough to need a drafted plan first is not
   the batch-mechanical shape this flag describes.
-- **Suggest a batch size, do not dictate the invocation.** Which engine backs the lane,
+- **Suggest a batch size, do not dictate the invocation.** Which agent runtime backs the lane,
   how it is invoked, and its exact batch mechanics are per-fleet and deliberately outside
   this skill's scope (`CONVENTIONS.md` has none of that either) — the suggested size is a
   number and a one-line reason, not a runbook. Smaller batches have measurably

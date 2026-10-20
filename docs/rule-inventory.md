@@ -206,6 +206,15 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C1.model.08 | default | | If the test suite is fast Tier A is unnecessary; write the suite first, then split. | If your test suite is fast, you do not need Tier A | CONVENTIONS.md | — |
 | C1.model.09 | explanation | | Tier A `main` is a pure release branch so the expensive suite runs at promotion time, keeping sessions fast. | `main` in Tier A is a **pure release branch** | CONVENTIONS.md | — |
 
+### Glossary (added by #633)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C1g.glossary.01 | default | | Each word the rules rely on is defined once, in the Glossary; a later section links there rather than redefining it. | a later section links here rather than redefining it | CONVENTIONS.md | #633 |
+| C1g.glossary.02 | default | | The handbook's definitions lean on no outside vocabulary; what carries each thing on GitHub is an example, never the definition. | The definitions lean on no outside vocabulary | CONVENTIONS.md | #633 |
+| C1g.glossary.03 | default | | "Engine" unqualified means the issue engine; a qualified one keeps its own sense (a database engine, `engines.node`). | "Engine" unqualified means this | CONVENTIONS.md | #633 |
+| C1g.glossary.04 | default | | The program a coding agent runs in is its agent runtime, never called an engine. | Never called an engine. | CONVENTIONS.md | #633 |
+
 ### 2. Tiers
 
 | id | class | gate | rule | key | dest | source |
@@ -1749,7 +1758,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.planning.12 | default |  | code-wrap checks the rung it finds: the plan file is present or its place holds one line rung 0 because <reason>. | `code-wrap` checks the rung it finds | CONVENTIONS.md | #486 |
 | C5c.planning.13 | default |  | A non-rung-0 change wrapped with neither is reported as plan file missing, never as hand-off complete, and is never back-filled. | never as hand-off complete — and is never | CONVENTIONS.md | #486 |
 | C5c.planning.14 | default |  | code-triage may flag a hard group needs-plan with a one-line reason; a cross-backlog judgement, never a plan of its own. | may flag a hard group `needs-plan` with a one-line reason | CONVENTIONS.md | #94 |
-| C5c.planning.15 | default |  | The full plan is drafted at code-session start, inside the implementing session, seeded with the Issue plus the reason line: by a helper agent where the engine has one, otherwise by the session itself, which records drafted-by: self in the plan's frontmatter. | The full plan is drafted at code-session start** | CONVENTIONS.md | #94 |
+| C5c.planning.15 | default |  | The full plan is drafted at code-session start, inside the implementing session, seeded with the Issue plus the reason line: by a helper agent where the agent runtime has one, otherwise by the session itself, which records drafted-by: self in the plan's frontmatter. | The full plan is drafted at code-session start** | CONVENTIONS.md | #94 |
 | C5c.planning.16 | default |  | A rung-1 stub may upgrade to rung 2 mid-session; the flag decides only the default. | A rung-1 stub may still upgrade to rung 2 mid-session | CONVENTIONS.md | #94 |
 | C5c.planning.17 | default |  | Read the needs-plan flag by direct issue fetch, never the Search API. | Read the `needs-plan` flag by direct issue fetch | CONVENTIONS.md | #94 |
 | C5c.planning.18 | default |  | A plan is a sketch the code may overrule, not a contract; note deviation where the plan lives. | note deviation where the plan lives | CONVENTIONS.md | #94 |

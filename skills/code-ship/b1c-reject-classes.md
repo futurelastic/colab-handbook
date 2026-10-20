@@ -26,7 +26,7 @@ grading time**, never guessed from a label alone:
 - **`escalate`** — narrow, and every condition below must hold, not just one:
   1. **The issue set carries the `mechanical-lane` label** (`code-triage`,
      *mechanical-lane*, #93). That label is the one in-repo signal that this work was
-     dispatched below the fleet's default engine in the first place — which is what
+     dispatched below the fleet's default agent runtime in the first place — which is what
      makes "a rung above exists" a fact this skill can read, not a guess it is making.
      No label on the harvested set → no `escalate` class, ever, regardless of 2 and 3.
   2. **The gap is a plain oracle-unmet**, not an oracle-is-wrong or scope-is-wrong
@@ -48,7 +48,7 @@ grading time**, never guessed from a label alone:
   one-time bound now; nothing else needs to be written to record it, and condition 3
   above is how a later pass reads whether it was spent. Leave the claim held and the
   worktree in place, same as `decision` — do not tear down, do not release, do not
-  merge. **This skill does not itself pick or dispatch the next rung** — which engine
+  merge. **This skill does not itself pick or dispatch the next rung** — which agent runtime
   backs it, and how it is invoked, is per-fleet and deliberately out of this skill's
   scope, the same posture `mechanical-lane` itself already takes (`code-triage`).
   Report the escalation instead of a hard stop; whatever routes this fleet's mechanical

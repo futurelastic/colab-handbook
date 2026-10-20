@@ -1,6 +1,6 @@
 ---
 name: code-plan
-description: "Draft a full (rung-2) implementation plan for a hard Issue, into the same repo-local scratch file code-start writes its rung-1 stub to. Invoked two ways: by code-start when the Issue carries a needs-plan flag from code-triage, or mid-session when a rung-1 stub turns out to be sitting on ambiguous scope, a novel design with no precedent in the repo, or a dependency chain long enough that context is getting noisy. Drafted by a separate helper agent where the engine has one, or by the session itself where it does not, seeded with the Issue plus the triage reason line, against the repo as it actually is right now — not re-derived by the coordinator that flagged it. Trigger phrases: 'plan this properly', 'needs-plan is set', 'draft a full plan', 'this needs a real plan', 'escalate to a full plan', 'the stub isn't enough'. Invoked by code-start (on flag) or mid-session (on self-escalation); read at code-wrap/code-ship. Never runs standalone against a repo with no session open."
+description: "Draft a full (rung-2) implementation plan for a hard Issue, into the same repo-local scratch file code-start writes its rung-1 stub to. Invoked two ways: by code-start when the Issue carries a needs-plan flag from code-triage, or mid-session when a rung-1 stub turns out to be sitting on ambiguous scope, a novel design with no precedent in the repo, or a dependency chain long enough that context is getting noisy. Drafted by a separate helper agent where the agent runtime has one, or by the session itself where it does not, seeded with the Issue plus the triage reason line, against the repo as it actually is right now — not re-derived by the coordinator that flagged it. Trigger phrases: 'plan this properly', 'needs-plan is set', 'draft a full plan', 'this needs a real plan', 'escalate to a full plan', 'the stub isn't enough'. Invoked by code-start (on flag) or mid-session (on self-escalation); read at code-wrap/code-ship. Never runs standalone against a repo with no session open."
 ---
 
 # code-plan — draft the rung-2 plan a hard Issue needs before code starts
@@ -62,7 +62,7 @@ this skill names none.
 
 Then one of two paths. Neither is the fallback of the other:
 
-- **Your engine can run a separate helper agent** → hand it the seed and the contract
+- **Your agent runtime can run a separate helper agent** → hand it the seed and the contract
   above, let it write the section, and record `drafted-by: helper — <which one>` in the
   frontmatter. Use the most capable planner your operator has configured for this.
 - **It cannot, or none is configured** → draft the section yourself, in this session,

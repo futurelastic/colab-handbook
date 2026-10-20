@@ -49,7 +49,7 @@ as "unknown" — never as a guess.
 A session may be opened by an operator clicking a button rather than by a human
 typing. That spawn prompt has a fixed shape:
 
-> Run `<code-start, in your engine's invocation syntax>` for issue(s) #N in `<repo>`.
+> Run `<code-start, in your agent runtime's invocation syntax>` for issue(s) #N in `<repo>`.
 > Spawned from `<dashboard>` by `<operator>` at `<ts>` (intent `<id>`). Session name: `<name>`.
 
 Read it as questions already answered: `#N` is your issue, and `<name>` is the

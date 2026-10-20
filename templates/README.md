@@ -175,7 +175,7 @@ colab template ci-python --dest .github/workflows/ci.yml --roundtrip --roundtrip
 
 ### Migration round-trip — what the Laravel job proves, and what it cannot
 
-`ci-laravel.yml`'s `migrations` job runs every migration **twice per engine**: once from
+`ci-laravel.yml`'s `migrations` job runs every migration **twice per database engine**: once from
 zero, then — after rolling back the migrations the change adds and seeding rows at the
 schema *before* the change — once more, the way a deploy lands new migrations on data
 that predates them. The schema after both passes must match. Two things to know before
