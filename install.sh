@@ -4,15 +4,15 @@
 # Idempotent and safe to re-run.
 #
 #   ./install.sh          install the skills for your coding agent(s), user level — available
-#                         in every repo you open. At a terminal it ASKS which engine(s): one
-#                         data file per engine in engines/ (Claude Code, Codex, …) plus
+#                         in every repo you open. At a terminal it ASKS which agent runtime(s):
+#                         one data file per agent runtime in engines/ (Claude Code, Codex, …) plus
 #                         "other: give a path". Not at a terminal, with no flag below, it keeps
-#                         every engine it finds already linked — and, finding none, defaults to
+#                         every agent runtime it finds already linked — and, finding none, defaults to
 #                         Claude Code and says so (#530).
 #   ./install.sh --engine claude,codex
-#                         install for these engines, no question asked (ids: engines/*.conf).
+#                         install for these agent runtimes, no question asked (ids: engines/*.conf).
 #   ./install.sh --skills-dir <path>
-#                         install into this folder too — any engine engines/ does not know.
+#                         install into this folder too — any agent runtime engines/ does not know.
 #                         Remembered in <COLAB_HOME>/skills-dirs so re-runs and --check find it.
 #   ./install.sh --tools  ALSO symlink tools/colab onto your PATH (~/.local/bin/colab)
 #                         AND freeze a stamped copy of the CLI at ~/.colab/bin/colab.
@@ -99,7 +99,7 @@ while [ $# -gt 0 ]; do
       NOTIFY_URL="$1"; NOTIFY_FLAG=1; shift ;;
     --engine=*) ENGINE_FLAG="${ENGINE_FLAG:+$ENGINE_FLAG,}${a#--engine=}" ;;
     --engine)
-      [ $# -gt 0 ] || { echo "--engine needs an engine id (see engines/*.conf)" >&2; exit 2; }
+      [ $# -gt 0 ] || { echo "--engine needs an agent runtime id (see engines/*.conf)" >&2; exit 2; }
       ENGINE_FLAG="${ENGINE_FLAG:+$ENGINE_FLAG,}$1"; shift ;;
     --skills-dir=*) SKILLS_DIR_FLAG="${a#--skills-dir=}" ;;
     --skills-dir)
@@ -186,11 +186,11 @@ dir_has_our_link() {
   return 1
 }
 
-# Refuse an unknown engine BEFORE anything is installed, not halfway through the run.
+# Refuse an unknown agent runtime BEFORE anything is installed, not halfway through the run.
 if [ -n "$ENGINE_FLAG" ]; then
   for e in $(echo "$ENGINE_FLAG" | tr ',' ' '); do
     if [ ! -f "$ENGINES_DIR/$e.conf" ]; then
-      echo "--engine: no engine '$e' — known: $(known_engines | tr '\n' ' ')(or --skills-dir <path> for any other)" >&2
+      echo "--engine: no agent runtime '$e' — known: $(known_engines | tr '\n' ' ')(or --skills-dir <path> for any other)" >&2
       exit 2
     fi
     if [ -z "$(conf_get "$e" skills_dir)" ] && [ -z "$SKILLS_DIR_FLAG" ]; then
@@ -622,7 +622,7 @@ echo "== colab-handbook install ($([ "$DRY" = 1 ] && echo dry-run || echo apply)
 select_ref
 preflight
 
-# --- skills → each chosen engine's user-level folder (#530) ---
+# --- skills → each chosen agent runtime's user-level folder (#530) ---
 # TARGETS: one `<engine id>|<folder>` per line. POSIX only — no arrays (CI runs `sh -n` here).
 TARGETS=""
 add_target() {
@@ -644,7 +644,7 @@ add_linked_targets() {
   return 0
 }
 ask_engines() {
-  echo "engines — which coding agent(s) should get the skills?"
+  echo "agent runtimes — which coding agent(s) should get the skills?"
   i=0
   for e in $(known_engines); do
     i=$((i + 1)); d="$(engine_dir "$e")"; mark=""
@@ -684,7 +684,7 @@ ask_engines() {
   TARGETS=""   # an explicit answer replaces the default
   for e in $picked; do
     if [ "$e" = ":other" ]; then
-      printf '  skills folder for the other engine: '
+      printf '  skills folder for the other agent runtime: '
       p=""; read -r p || p=""
       if [ -n "$p" ]; then add_target generic "$(expand_home "$p")"; else echo "  (no folder given — skipped)"; fi
     else
@@ -706,12 +706,12 @@ else
   if [ -z "$TARGETS" ]; then
     first="$(default_engine)"
     add_target "$first" "$(engine_dir "$first")"
-    echo "engines: none had the skills linked yet → defaulted to $first ($(conf_get "$first" label))."
-    echo "         Another engine: --engine <id>[,<id>] (known: $(known_engines | tr '\n' ' '| sed 's/ $//')), or --skills-dir <path>."
+    echo "agent runtimes: none had the skills linked yet → defaulted to $first ($(conf_get "$first" label))."
+    echo "                Another agent runtime: --engine <id>[,<id>] (known: $(known_engines | tr '\n' ' '| sed 's/ $//')), or --skills-dir <path>."
     echo
   fi
 fi
-[ -n "$TARGETS" ] || warn "no engine chosen — no skills were installed (re-run and pick one, or pass --engine)"
+[ -n "$TARGETS" ] || warn "no agent runtime chosen — no skills were installed (re-run and pick one, or pass --engine)"
 
 while IFS='|' read -r eng dest; do
   [ -n "$eng" ] || continue

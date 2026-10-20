@@ -548,7 +548,7 @@ test('#530: an unknown engine, or generic with no folder, refuses before anythin
   const home = tmp(t);
   const bad = runInstall(home, ['--engine', 'nope']);
   assert.strictEqual(bad.status, 2);
-  assert.match(bad.stderr, /no engine 'nope' — known: claude codex/);
+  assert.match(bad.stderr, /no agent runtime 'nope' — known: claude codex/);
   const gen = runInstall(home, ['--engine=generic']);
   assert.strictEqual(gen.status, 2);
   assert.match(gen.stderr, /--skills-dir <path>/);
