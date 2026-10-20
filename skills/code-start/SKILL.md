@@ -13,7 +13,7 @@ runs code-plan when set, else writes a 3-5 line plan-lite stub. Pairs with code-
 
 If `.colab/skills/code-start.md` exists in this repo, read it before continuing. Local policy
 refines this skill for this repo and wins over the text below where they differ. It never
-changes a `colab` gate.
+changes a `colab` gate. **Role guide (#642):** what to decide is in the **author** guide — [`guides/author.md`](../../guides/author.md), *Before you plan* and *Plan*; this skill keeps its name and triggers, and its body stays the reference for *how*.
 
 The goal is to spend as little context as possible. The Issue is the feature's
 external memory: one `gh issue view` reloads the plan and hard-won knowledge, so

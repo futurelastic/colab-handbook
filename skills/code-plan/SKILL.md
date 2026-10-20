@@ -11,7 +11,7 @@ description: "Draft a full (rung-2) implementation plan for a hard Issue, into t
 
 If `.colab/skills/code-plan.md` exists in this repo, read it before continuing. Local policy
 refines this skill for this repo and wins over the text below where they differ. It never
-changes a `colab` gate.
+changes a `colab` gate. **Role guide (#642):** what to decide is in the **author** guide — [`guides/author.md`](../../guides/author.md), *Plan*; this skill keeps its name and triggers, and its body stays the reference for *how*.
 
 Runs **inside an implementing session**, either right after
 [`code-start`](../code-start/SKILL.md) reads a `needs-plan` flag, or mid-session when a

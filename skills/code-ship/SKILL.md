@@ -11,7 +11,7 @@ description: "Close the COORDINATOR half of a coding session, authorized: verify
 
 If `.colab/skills/code-ship.md` exists in this repo, read it before continuing. Local policy
 refines this skill for this repo and wins over the text below where they differ. It never
-changes a `colab` gate.
+changes a `colab` gate. **Role guide (#642):** what to decide is in the **reviewer** guide for the grade — [`guides/reviewer.md`](../../guides/reviewer.md) — and **by hand** for the landing — [`guides/by-hand.md`](../../guides/by-hand.md); this skill keeps its name and triggers, and its body stays the reference for *how*.
 
 This is the **coordinator's** half of closing a session — [`code-wrap`](../code-wrap/SKILL.md)
 is the implementer's. Where that skill asserts a checklist and stops, this one verifies
