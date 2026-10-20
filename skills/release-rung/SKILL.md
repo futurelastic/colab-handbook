@@ -11,7 +11,7 @@ description: "The MANUAL FALLBACK and explainer for ONE repo's release rung (CON
 
 If `.colab/skills/release-rung.md` exists in this repo, read it before continuing. Local policy
 refines this skill for this repo and wins over the text below where they differ. It never
-changes a `colab` gate.
+changes a `colab` gate. **Role guide (#642):** what to decide is in the **by hand** guide — [`guides/by-hand.md`](../../guides/by-hand.md), *Release*; this skill keeps its name and triggers, and its body stays the reference for *how*.
 
 The release rung of [`CONVENTIONS.md` §6](../../CONVENTIONS.md#6-releases) says who may cut a tag.
 **The release workflow drives it; this skill is the manual fallback and the explainer** (#426).

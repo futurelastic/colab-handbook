@@ -11,7 +11,7 @@ description: "Decide what to work on next in ONE repo. Takes every open Issue, d
 
 If `.colab/skills/code-triage.md` exists in this repo, read it before continuing. Local policy
 refines this skill for this repo and wins over the text below where they differ. It never
-changes a `colab` gate.
+changes a `colab` gate. **Role guide (#642):** what to decide is in the **coordinator** guide — [`guides/coordinator.md`](../../guides/coordinator.md); this skill keeps its name and triggers, and its body stays the reference for *how*.
 
 Runs **before** [`code-start`](../code-start/SKILL.md), on **one repo**. Its output is
 a short ranked list of *groups* you could open a session on today, plus an honest

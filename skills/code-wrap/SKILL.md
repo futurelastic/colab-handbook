@@ -11,7 +11,7 @@ description: "Close the IMPLEMENTER half of a coding session: distill what you l
 
 If `.colab/skills/code-wrap.md` exists in this repo, read it before continuing. Local policy
 refines this skill for this repo and wins over the text below where they differ. It never
-changes a `colab` gate.
+changes a `colab` gate. **Role guide (#642):** what to decide is in the **author** guide — [`guides/author.md`](../../guides/author.md), *Hand off*; this skill keeps its name and triggers, and its body stays the reference for *how*.
 
 **This is the implementer's half only.** It distills, gates, commits, and pushes a
 backup — then stops. It never merges to trunk; that is
