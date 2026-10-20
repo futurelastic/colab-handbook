@@ -4,7 +4,8 @@ How we manage branches, releases, and in-flight work across every repo we own �
 our orgs and in personal accounts alike.
 
 Written for **both humans and AI coding agents**. If you are an agent starting a session,
-read this file and the repo's `.github/project.yml` before touching anything.
+read this file and the repo's `.github/project.yml` before touching anything. Each word it
+relies on is defined once, in the [Glossary](#glossary).
 
 **This handbook decides outcomes, not implementations.** It tells you what must be true —
 which branch work lands on, what a release is, how to claim an issue. It never tells you
@@ -98,6 +99,33 @@ doors, core-path review), the place-claim and `writes: isolated` refusals, and a
 `**[Hard — gate: …]**`, names the command that refuses; it passes until its section is
 rewritten. Every rule's id and class is listed in [`docs/rule-inventory.md`](docs/rule-inventory.md);
 `scripts/check-rule-inventory.mjs` keeps the list and this file in step. Why: [ADR 523](docs/adr/523-conventions-hard-default-and-size-budget.md).
+
+---
+
+## Glossary
+
+Each word below is defined once, here, in the handbook's own terms; a later section links
+here rather than redefining it. The definitions lean on no outside vocabulary. The last
+column only says what carries each thing on GitHub, the issue engine this handbook's tooling
+drives today — an example, never the definition.
+
+| Term | Meaning here | On GitHub today |
+|---|---|---|
+| **trunk** | The branch a repo's work lands on: the value of `trunk:` in the marker ([§3](#3-githubprojectyml--the-marker)). A role, never a branch name. | the default branch, or `dev` |
+| **branch** | A named line of commits cut from trunk for one unit of work; its name ends in the issue number(s) it carries ([§4](#4-branches-and-commits)). | a git branch |
+| **commit** | One recorded change to the files, with a message. Trunk gets one per unit of work, squashed. | a git commit |
+| **change request** | A proposal to land a branch on trunk, reviewed before it lands — required only where a rule says so ([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)). | a pull request |
+| **CI result** | The outcome of the automated checks on one commit, read by that commit's sha, never by recency ([§4](#4-branches-and-commits)). | a workflow run |
+| **release** | The deliberate act that puts trunk in front of users — a promotion, a tag, or both, as `exposure` decides ([§6](#6-releases)). | a tag, a merge into `main` |
+| **issue** | One unit of work and its memory: the goal, the decisions, the evidence ([§5](#5-claiming-work--how-to-say-im-on-this)). | an issue |
+| **parent / child** | An issue holding others as its parts, and those parts. A parent is a container, not a start candidate ([§5, *Epics*](#epics--a-container-is-not-a-start-candidate)). | sub-issues |
+| **depends on** | X cannot start until Y's output exists. Never mere file contention ([§5, *Readiness*](#readiness--open-and-unclaimed-is-not-enough)). | a `blocked_by` relationship |
+| **hold** | A record that something is not free to take: a claim holds an issue, a place-claim a checkout, a park an issue until its wake condition ([§5](#disposition--a-park-must-name-its-wake-condition-279)). | assignee + `in-progress`; `refs/claims/*`; a `deferred:*` label |
+| **holder** | Whoever a hold names — a session, by its session id. For a file, every branch touching it that has not landed (`colab holders`). | the claim's session id |
+| **lane** | A route by kind: an issue's by what finishing it produces ([§5, *Delivery type*](#delivery-type--route-not-start-112)), CI's light or heavy run ([§7](#two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607)). | a `delivery:*` label; a workflow |
+| **evidence** | What shows an issue's outcome: the trunk sha, a `file:line`, and what was checked, posted on the issue before it closes. | an issue comment |
+| **issue engine** | The system that stores issues and their relations. **"Engine" unqualified means this**; a qualified one keeps its own sense (a database engine, `engines.node`). | GitHub Issues |
+| **agent runtime** | The program a coding agent runs in, which loads the skills — one data file each under [`engines/`](engines/README.md). Never called an engine. | — |
 
 ---
 
@@ -3793,7 +3821,7 @@ back-filled.
 start**, inside the implementing session, seeded with the Issue plus the reason line,
 against the repo as it is at coding time. One contract, two equal paths: the drafter takes
 that seed, appends one rung-2 section to the plan file, and stops before implementing — a
-separate helper agent where the engine has one, otherwise the session itself, which records
+separate helper agent where the agent runtime has one, otherwise the session itself, which records
 `drafted-by: self` in the plan's frontmatter ([`code-plan`](skills/code-plan/SKILL.md)). A rung-1 stub may
 still upgrade to rung 2 mid-session — the flag decides only the default.
 
@@ -4755,10 +4783,10 @@ later handbook version reaches an earlier-adopted repo.
 A team that wants a handbook skill to behave differently in its repo — write Issue comments
 in another language, run an extra check before wrap, skip a step its stack has no use for —
 writes that in **`.colab/skills/<skill>.md`**, one optional file per skill, free prose. Every
-skill opens with a block that loads the file: an injection line that engines supporting
+skill opens with a block that loads the file: an injection line that agent runtimes supporting
 load-time expansion fill in with the file's text, and a plain sentence — *if
 `.colab/skills/<skill>.md` exists in this repo, read it before continuing* — that is the
-engine-neutral path and works on its own. With no file, the skill runs unchanged. A large
+runtime-neutral path and works on its own. With no file, the skill runs unchanged. A large
 skill is a short core `SKILL.md` plus reference files beside it (#524); the core keeps every
 step under its own number, so an overlay names the step it refines (`code-ship` B1c,
 `code-sweep` §3) and never has to point into a reference file.

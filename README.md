@@ -21,7 +21,7 @@ colab register           # adds the repo to this machine's fleet list
 ```
 
 Then, in an agent session in that repo, run the `code-start` skill with an issue
-number — each engine has its own way to invoke a skill, see [*Choose your engine*](#choose-your-engine).
+number — each agent runtime has its own way to invoke a skill, see [*Choose your agent runtime*](#choose-your-agent-runtime).
 With an agent at hand, the `handbook-sync` skill replaces the last three commands and also does
 the rest of adoption (see [*Adopting it into a repo*](#adopting-it-into-a-repo)).
 You need `git`, `node` ≥ 18 and `gh` ≥ 2.94 logged in (`gh auth login`); distro
@@ -115,7 +115,7 @@ with a pointer to [#604](https://github.com/futurelastic/colab-handbook/issues/6
 ## Your first session
 
 A unit of work goes round one loop. Each step is a skill, invoked by name in an
-agent session (the syntax is the engine's — [*Choose your engine*](#choose-your-engine)),
+agent session (the syntax is the agent runtime's — [*Choose your agent runtime*](#choose-your-agent-runtime)),
 or followed by hand from [`skills/`](skills/).
 
 | Step | Skill | Who runs it | What it leaves behind |
@@ -235,9 +235,9 @@ the step you are refining by its number (`code-ship` B1c, `code-sweep` §3): a
 large skill is a short core plus reference files, and the core keeps every
 step's number.
 
-Claude Code loads the file into the skill automatically. Other engines get a
+Claude Code loads the file into the skill automatically. Other agent runtimes get a
 plain sentence in each skill telling the agent to read the file, which works
-without any engine support. Because the file instructs agents, a change to it
+without any runtime support. Because the file instructs agents, a change to it
 is never treated as docs-only: it merges on `auto-trunk` or a human's go, like a
 `CLAUDE.md` change. Rule:
 [`CONVENTIONS.md` §8, *Local policy*](CONVENTIONS.md#local-policy--a-repo-refines-a-skill-without-forking-it-520).
@@ -265,7 +265,7 @@ migration hold with or without it.
 | [`tools/`](tools/) | `colab` — a small CLI (optional): adopt a repo, claim issues, allocate ports, manage worktrees, and merge a finished branch to trunk when the repo grants it. JSON state, zero dependencies. Command reference: [`tools/README.md`](tools/README.md). |
 | [`audit/`](audit/) | An external conformance checker. Reads all your repos — every owner, including local-only ones — and reports drift in a single run. Advisory only. `--identity` also scans public repository descriptions and topics, which no git hook can see. `--batch-history` shows each repo's measured batch landing picture, flagged only against thresholds the repo declares. What each check means: [`audit/README.md`](audit/README.md). |
 | [`skills/`](skills/) | The session flow — see [*Your first session*](#your-first-session). Plain `SKILL.md` folders; `install.sh` links them into each coding agent you choose. |
-| [`engines/`](engines/) | One small data file per coding agent: where its user-level skills go, how a skill is invoked, what it supports. Adding an engine is adding a file — [`engines/README.md`](engines/README.md). |
+| [`engines/`](engines/) | One small data file per agent runtime: where its user-level skills go, how a skill is invoked, what it supports. Adding an agent runtime is adding a file — [`engines/README.md`](engines/README.md). |
 | [`install.sh`](install.sh) | Sets up **your machine**: skills, the `colab` CLI, the pre-commit hook, the fleet list. Idempotent; `--dry` shows everything first. |
 
 ## Setting up a machine
@@ -289,12 +289,12 @@ Later moves are explicit:
 A clone with uncommitted changes is never moved, and a re-run without either
 flag keeps whatever is checked out.
 
-### Choose your engine
+### Choose your agent runtime
 
 The skills are plain `SKILL.md` folders that call `git`, `gh` and `colab`; any
 coding agent that reads skills can run them. What differs is **where each
 agent looks for them**, so the install asks. At a terminal, `./install.sh`
-lists the engines it knows and lets you pick one or more, with *other: give a
+lists the agent runtimes it knows and lets you pick one or more, with *other: give a
 path* last. Unattended, say it with a flag:
 
 ```sh
@@ -303,21 +303,21 @@ path* last. Unattended, say it with a flag:
 ./install.sh --skills-dir ~/my-agent/skills   # any other agent: you give its folder
 ```
 
-| Engine | Skills folder | Invoke | Before the skills work there |
+| Agent runtime | Skills folder | Invoke | Before the skills work there |
 |---|---|---|---|
 | Claude Code (`claude`) | `~/.claude/skills` | `/code-start` | Nothing. This user-level install **wins** over a repo's own `.claude/skills/<name>` of the same name (precedence is enterprise > personal > project), so rename a repo variant you want used. |
 | OpenAI Codex (`codex`) | `~/.agents/skills` | `$code-start` | Its default sandbox has no network, so `gh` fails: set `[sandbox_workspace_write] network_access = true` in `~/.codex/config.toml`. Values from Codex's docs; not yet verified by a clean-machine run. |
 | anything else | `--skills-dir <path>` | the agent's own way | The agent's shell needs network access for `gh`. The folder is remembered in `~/.colab/skills-dirs`. |
 
-A re-run with no flag and no terminal keeps every engine it finds already
+A re-run with no flag and no terminal keeps every agent runtime it finds already
 linked, so an existing machine changes nothing. Finding none, it installs for
-Claude Code and says so. The per-engine facts live in [`engines/`](engines/),
+Claude Code and says so. The per-runtime facts live in [`engines/`](engines/),
 one file each — that folder is the source for the table above.
 
 | Flag | What it does |
 |---|---|
-| *(none)* | Symlink `skills/` into each chosen engine's user-level folder, so they are available in every repo you open. Asks at a terminal; otherwise keeps what is linked (see [*Choose your engine*](#choose-your-engine)). |
-| `--engine <id>[,<id>]` | Install for these engines (`claude`, `codex` — the files in `engines/`), no question asked. |
+| *(none)* | Symlink `skills/` into each chosen agent runtime's user-level folder, so they are available in every repo you open. Asks at a terminal; otherwise keeps what is linked (see [*Choose your agent runtime*](#choose-your-agent-runtime)). |
+| `--engine <id>[,<id>]` | Install for these agent runtimes (`claude`, `codex` — the files in `engines/`), no question asked. |
 | `--skills-dir <path>` | Also install into this folder, for an agent `engines/` does not know. |
 | `--tools` | The `colab` CLI twice: a **symlink** at `~/.local/bin/colab` for your sessions (it prints the `PATH` line if needed), and a stamped **frozen copy** at `~/.colab/bin/colab` for always-on services. Also creates an empty `~/.colab/state.json` if there is none. |
 | `--hooks` | Point this clone's git at `.githooks/`: a gitleaks secret scan and an identity scan whose vocabulary you keep outside every repo (see [`templates/README.md`](templates/README.md)). |
@@ -353,8 +353,8 @@ node audit/audit.mjs     # a conformance report across every registered repo
 colab update             # stamped copies that fell behind, the frozen CLI included
 ```
 
-`--check` reports, per engine, how many skills are linked, missing or broken,
-plus that engine's own caveats (Codex's sandbox network, for instance). It also reports whether the frozen copy is behind the latest release and
+`--check` reports, per agent runtime, how many skills are linked, missing or broken,
+plus that runtime's own caveats (Codex's sandbox network, for instance). It also reports whether the frozen copy is behind the latest release and
 which commands it does not dispatch, whether the state file exists, whether
 anything is registered, whether both pre-commit hooklets can run, and whether
 `notifyUrl` is unset, or lacks a URL, while a local observer declared one. ✗ means

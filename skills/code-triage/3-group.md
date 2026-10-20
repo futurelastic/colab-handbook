@@ -52,4 +52,4 @@ not evidence. Where the state lives depends on how the epic is built:
   "in progress on branch `x`", which is the form that most often survives its own
   branch and sends a session to redo shipped work.
 
-Verify `file:line` references before quoting them; engines get edited and refs rot.
+Verify `file:line` references before quoting them; code gets edited and refs rot.

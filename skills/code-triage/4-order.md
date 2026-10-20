@@ -22,7 +22,7 @@ gh issue view <lead-issue> --json labels -q '.labels[].name' | grep -xE 'priorit
 
 Then, within each band, rank the surviving groups:
 
-1. **Blocks other work** — a bug in a shared engine, a broken trunk, a stale claim
+1. **Blocks other work** — a bug in a shared module, a broken trunk, a stale claim
    nobody can get past. These unblock people, so they pay twice. Leverage counts here
    (#540), and any one of three measurements earns rank 1:
    - **≥ `dependents-count` open issues are `blocked_by` it** (3 unless the repo declares
