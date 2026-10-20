@@ -145,9 +145,9 @@ fi
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# ------------------------------------------------------------------ engines --
+# ------------------------------------------------------------------ agent runtimes (engines/) --
 # engines/<id>.conf is DATA: `key: value` lines, read here with sed and in --check by
-# tools/lib/engines.js. Nothing below names an engine — adding one is adding a file (#530).
+# tools/lib/engines.js. Nothing below names an agent runtime — adding one is adding a file (#530).
 # No `| head -1` anywhere here: under pipefail a writer killed by SIGPIPE aborts the whole run (set -e).
 conf_get() { sed -n "/^$2:/{s/^$2:[[:space:]]*//;p;q;}" "$ENGINES_DIR/$1.conf" 2>/dev/null; }
 conf_all() { sed -n "s/^$2:[[:space:]]*//p" "$ENGINES_DIR/$1.conf" 2>/dev/null; }
@@ -159,7 +159,7 @@ expand_home() {
     *) echo "$PWD/$1" ;;
   esac
 }
-# Engines with a fixed skills folder, in file order — `generic` (folder supplied by the user) is not one.
+# Agent runtimes with a fixed skills folder, in file order — `generic` (folder supplied by the user) is not one.
 known_engines() {
   for f in "$ENGINES_DIR"/*.conf; do
     [ -f "$f" ] || continue
@@ -169,7 +169,7 @@ known_engines() {
   return 0
 }
 engine_dir() { expand_home "$(conf_get "$1" skills_dir)"; }
-# The engine a machine with nothing linked gets: the one whose file says `default: yes` — never "the
+# The agent runtime a machine with nothing linked gets: the one whose file says `default: yes` — never "the
 # first file alphabetically", which would change the default the day someone adds aider.conf.
 default_engine() {
   for e in $(known_engines); do [ "$(conf_get "$e" default)" = yes ] && { echo "$e"; return 0; }; done
@@ -623,7 +623,7 @@ select_ref
 preflight
 
 # --- skills → each chosen agent runtime's user-level folder (#530) ---
-# TARGETS: one `<engine id>|<folder>` per line. POSIX only — no arrays (CI runs `sh -n` here).
+# TARGETS: one `<agent runtime id>|<folder>` per line. POSIX only — no arrays (CI runs `sh -n` here).
 TARGETS=""
 add_target() {
   case "
