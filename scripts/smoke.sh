@@ -27,6 +27,7 @@ node scripts/check-pack-allowlist.mjs
 node scripts/check-rule-inventory.mjs
 node scripts/check-doc-budget.mjs
 node scripts/check-engine-neutral.mjs
+node scripts/check-compat.mjs --base "$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)"   # #644
 env -u NODE_TEST_CONTEXT -u NODE_TEST_WORKER_ID node --test --test-reporter=dot tools/lib/refusal-sites.test.js
 
 base="$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)"
