@@ -162,7 +162,7 @@ function checkSkills({ root, home, colabHome }) {
   const byId = Object.fromEntries(all.map((e) => [e.id, e]));
   const targets = all.filter((e) => e.skills_dir).map((e) => ({ e, dir: engines.expandHome(e.skills_dir, home) }));
   for (const dir of engines.rememberedDirs(colabHome)) {
-    if (!targets.some((t) => t.dir === dir)) targets.push({ e: byId.generic || { id: 'generic', label: 'another engine', note: [], caveat: [] }, dir });
+    if (!targets.some((t) => t.dir === dir)) targets.push({ e: byId.generic || { id: 'generic', label: 'another agent runtime', note: [], caveat: [] }, dir });
   }
 
   const rows = [];
