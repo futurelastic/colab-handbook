@@ -153,7 +153,7 @@ shell its own `COLAB_SESSION=<any stable id>` so their holds stay apart.
   full plan from `code-plan`.
 
 Newcomers: read [`CONVENTIONS.md` §1](CONVENTIONS.md#1-the-model-in-one-picture)
-(the model) and [§11](CONVENTIONS.md#11-quick-reference) (quick reference)
+(the model) and the [quick reference](tools/docs/quick-reference.md)
 first. The rest of `CONVENTIONS.md` is reference — look things up, do not read
 it end to end.
 
@@ -193,7 +193,8 @@ brings an adopted repo up to the current handbook without losing your local
 edits.
 
 By hand, the same steps (full checklist:
-[`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this)):
+[`skills/handbook-sync/2-adoption-procedure.md`](skills/handbook-sync/2-adoption-procedure.md);
+the rules it serves: [`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this)):
 
 1. `colab adopt` — answers the two gating questions and writes
    `.github/project.yml`. It stops there and prints the remaining steps.
