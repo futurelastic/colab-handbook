@@ -2,7 +2,7 @@
 // check-doc-move — prove moving rationale out of the normative documents dropped nothing (#523).
 //
 //   node scripts/check-doc-move.mjs --base <rev> [--files CONVENTIONS.md,project.schema.md]
-//        [--into docs/adr,docs/gotchas.d] [--allow docs/rule-inventory.md] [--json]
+//        [--into docs/adr,docs/gotchas.d,tools/docs] [--allow docs/rule-inventory.md] [--json]
 //
 // The same unit check as scripts/check-skill-split.mjs (#524), applied to CONVENTIONS.md and
 // project.schema.md. Each file is read as it stood at <rev> and cut into units (paragraph, list
@@ -37,7 +37,7 @@ function usage(msg) {
 }
 
 const args = process.argv.slice(2);
-const opt = { json: false, files: ["CONVENTIONS.md", "project.schema.md"], into: ["docs/adr", "docs/gotchas.d"], allow: null };
+const opt = { json: false, files: ["CONVENTIONS.md", "project.schema.md"], into: ["docs/adr", "docs/gotchas.d", "tools/docs"], allow: null };
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--base") opt.base = args[++i];
   else if (args[i] === "--files") opt.files = args[++i].split(",").filter(Boolean);

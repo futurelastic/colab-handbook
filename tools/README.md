@@ -19,6 +19,10 @@ claim then fails closed, because it could not be checked against another machine
 This generalizes three machine-specific scripts (`issues.active`, `ports.reserved`,
 `worktree-new.sh`) so anyone, on any machine, in any repo, across any GitHub owner, can use them.
 
+**What the CLI enforces, and how**, for the rules `CONVENTIONS.md` states in tool-free words, lives
+in [`docs/`](docs/README.md) beside this file — today the CI gate, the red-trunk doors and the CI
+lanes (#635).
+
 ## Install
 
 ```sh
