@@ -67,7 +67,7 @@ is a human integration event of a promotion's weight.
   - Never press the PR's merge button, and never approve with the author's own account:
     the forge refuses the second, and the first skips every gate ship re-checks.
   - B1c's grade still runs before the PR is opened: a reject never reaches the pause.
-  - Every squash also carries a `Machine: <label>` trailer ([§4](../../CONVENTIONS.md#4-branches-and-commits)).
+  - Every squash also carries a `Machine: <label>` trailer ([§4](../../CONVENTIONS.md#4-branches-and-commits); how: [`tools/docs/branches.md`](../../tools/docs/branches.md#the-machine-trailer-and-public-repositories-350-367)).
 - **A repo declaring `owner:` lands exactly as above — onto trunk, never onto the owner's
   branch (#394).** `trunk:` there is the fleet's integration branch; the owner's branch is
   reached only by `colab deliver`, a separate step that opens or refreshes ONE pull request
