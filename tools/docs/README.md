@@ -14,6 +14,10 @@ adopter with its own tooling follows `CONVENTIONS.md` and may ignore this direct
 | [`releases.md`](releases.md) | cutting and finalizing candidates, the release workflow, operator grants, deploy-tag-fast, container deploys, version-source, npm, channels, the release summary | [§6, the release contract](../../CONVENTIONS.md#6-releases) |
 | [`distribution.md`](distribution.md) | install routes, dist refs, services over npx | [§6, *Distribution* and *Services over npx*](../../CONVENTIONS.md#distribution--one-install-surface-npx-442) |
 | [`branches.md`](branches.md) | the `Machine:` trailer, the squash-subject picker, the issue-close gates and the doors through them, the landed check's CI advisory | [§4, the landing contract](../../CONVENTIONS.md#4-branches-and-commits) |
+| [`claims.md`](claims.md) | the claim ref and its refusals, the tracker mirror and half-claims, the local cache, the claim comments and marker family, tracking issues | [§5, the claims and decisions contract](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), items 1–2 |
+| [`readiness.md`](readiness.md) | writing and reading the dependency graph, the checked and graph-empty markers, the `wake:` vocabulary, the `shape:` field, the disposition marker and who may apply it | [§5, the claims and decisions contract](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), items 3–6 |
+| [`decisions.md`](decisions.md) | recording and reopening a ruling, both labels at once, the options block, the `Mockup:` line, an ask said once, the decision box | [§5, the claims and decisions contract](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), items 7–8 |
+| [`grants.md`](grants.md) | the human flag, the migration grant's roles, `trust-humans` and the reviewer conditions | [§5, the claims and decisions contract](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), item 9 |
 
 ## How a section moves here (#635, the pattern #636–#640 follow)
 
