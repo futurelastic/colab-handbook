@@ -2,11 +2,13 @@
 
 Starting points you **copy into your own repo**. That is the entire model.
 
-> **These are NOT called remotely.** There is no `uses: futurelastic/colab-handbook/...`
-> anywhere, and nothing here is a reusable workflow another repo calls. (`dist-refs.yml` is a
+> **These are NOT called remotely — with one exception.** `instruction-files.yml` is a caller:
+> its one job `uses:` this handbook's reusable `.github/workflows/instruction-files.yml` (#588,
+> kept for compatibility — see *Where each file lives* below). Every other file here is copied,
+> not called. (`dist-refs.yml` is a
 > `workflow_call` workflow, but its caller is your own release workflow, in the same repo, via
 > `uses: ./.github/workflows/dist-refs.yml` — the file still lives, in full, where it runs.) An earlier version of this
-> handbook told repos to call shared workflows; that was reversed. Every workflow now
+> handbook told repos to call shared workflows; that was reversed. Every other workflow now
 > lives, in full, inside the repo that runs it. You copy the file, you edit it, **you
 > own it.** Divergence between your copy and this template is expected — a shared
 > workflow that silently changes under a hundred repos is the failure mode we are
@@ -69,6 +71,30 @@ Named it something other than `ci-heavy.yml`? Say so with `heavy-workflow:` in `
 - **A docs-only change needs no CI wait:** `colab ship` decides that from the diff (#606). The
   light templates show a commented `paths-ignore` for docs as an option; the old in-workflow
   docs-only guard is gone.
+
+## Where each file lives — the handbook ships no enforcement (#643)
+
+Every file in this folder is an **optional starting file**: copy it if it helps, change it as
+you like, or write your own. The handbook states rules; the tool that runs a file is what
+enforces anything, and that tool is the file's home. Where the runner is still a `colab`
+command in this repo, the file stays here until that command's replacement ships — code moves
+only after its replacement exists (epic #631), and a file that moves keeps its path here with a
+header naming its new home ([`docs/compat-surfaces.md`](../docs/compat-surfaces.md)).
+
+| File | Runs it today | Home |
+|---|---|---|
+| `ci-node.yml`, `ci-python.yml`, `ci-laravel.yml` (with the #625 `Migration round-trip` job), `ci-*-heavy.yml` | your forge's CI; `colab ship` / `promote` read or dispatch the runs; `colab template --roundtrip` writes the round-trip job | the adopter's CI layer; until it ships (#608), an optional starting file here |
+| `release-tag.yml`, `release-auto.yml` | your forge's CI; `release-auto.yml` runs `colab release cut` / `finalize --auto` | the release commands' new home (#608); an optional starting file here until then |
+| `dist-refs.yml`, `npx-launcher.mjs`, `npx-service.mjs` | your own release workflow and package `bin` | stays here, as an optional starting file |
+| `deploy-xserver.yml`, `deploy-container.yml`, `deploy-container-run.mjs`, `deploy-adapter-portainer.mjs` | your repo's deploy workflow | the adopter's deploy tooling; here as an optional starting file |
+| `pre-push-guard` | git, honouring `COLAB_SHIP=1` from `colab ship` | the tool that lands branches (#608); an optional starting file here until then |
+| `pre-commit-dispatch`, `pre-commit-identity`, `identity-vocabulary.example` | git (this repo's own `.githooks/` run them in place) | stays here, as an optional starting file |
+| `pre-commit-instruction-files`, `instruction-files.yml` | `colab instruction-files`; the reusable workflow in this repo | the `colab instruction-files` command; the reusable workflow is the one remote call this folder keeps, for compatibility |
+| `docs-lint.mjs`, `docs-lint.yml`, `branch-name.yml` | your CI (advisory or opt-in); `code-wrap`'s docs step | stays here, as an optional starting file |
+| `repo-CLAUDE-block.md`, `gotchas-d-README.md`, `adr-README.md` | nothing — text you paste or copy (`colab adopt` pastes the block) | stays here |
+
+Nothing in this table changes what a copied file does. A stamp, a drift report or a `colab`
+check that reads one of these files is that tool's behaviour, documented with the tool.
 
 ## What each template is for
 
@@ -376,6 +402,9 @@ drift is only ever a suggestion (#607), so the trailer is moot there. Full contr
 is missing or incoherent, when a declared toolchain disagrees with what CI actually
 pins, when branch names drift, and when a stamped copy has fallen behind its template.
 It is advisory — run it locally or on a schedule. It is **not** wired into any repo's CI.
+That multi-repo sweep is adopter tooling: it runs from here, unchanged, until its replacement
+ships, and then leaves; only the text checks stay
+([`audit/README.md`, *What stays and what leaves*](../audit/README.md#what-stays-and-what-leaves-643)).
 
 ## Runner policy
 

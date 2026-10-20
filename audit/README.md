@@ -14,6 +14,27 @@ them.
 It is **advisory**. It gates nothing. Run it by hand, or on a schedule (cron /
 LaunchAgent).
 
+Most of it is due to leave this repo: the handbook ships no enforcement (#643). See
+[*What stays and what leaves*](#what-stays-and-what-leaves-643) for which half stays.
+
+## What stays and what leaves (#643)
+
+The handbook keeps rules; the tools that adopt it check them (epic #631). For this folder that
+splits along one line:
+
+- **Stays: the text checks.** Markdown anchor links resolve (#158, below). The audit shares its
+  slugifier, `tools/lib/md-anchors.js`, with the rule-ID checks of #632, which live in
+  `scripts/check-rule-inventory.mjs`, not here. Run them on one checkout with `--local <path>`.
+- **Leaves, once the adopter's tooling runs it: the multi-repo sweep.** That covers the repo list
+  (`repos.txt`, `~/.colab/repos.txt`), remote slugs and the remote cache, `--identity`,
+  `--batch-history`, and the per-repo checks of the descriptor, CI, deploy, labels and template
+  stamps.
+
+Nothing has moved yet. Code moves only after its replacement ships (#631, #608), so every
+command on this page runs unchanged until then. `audit/audit.mjs` stays a published path
+([`docs/compat-surfaces.md`](../docs/compat-surfaces.md)); when the sweep leaves, that path keeps
+answering, as the text checks plus a pointer to where the sweep went.
+
 ## Requirements
 
 - Node (plain, no dependencies).
