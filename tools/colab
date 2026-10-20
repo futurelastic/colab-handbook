@@ -11515,8 +11515,9 @@ function resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag, declaredHolds 
   if (gh) {
     for (const num of issues) {
       if (!refsFromFlag.has(num)) continue;
-      const info = git.ghIssueView(repoAbs, num, ['body', 'labels']);
+      const info = git.ghIssueView(repoAbs, num, ['body', 'labels', 'state']);
       if (!info) continue; // read failed — a reminder never fires on a read we could not attempt
+      if (String(info.state || '').toUpperCase() === 'CLOSED') continue; // #647: nothing re-takes a closed issue
       const f = refsBrake.refsBrakeFinding({ issue: num, body: info.body, labels: info.labels, declaredHolds });
       if (f) brakeFindings.push(f);
     }
@@ -12729,9 +12730,7 @@ function cmdShipDryJson(opts) {
 
   // #74/#263: same close-gate split the prose path runs, reported via the additive fields above —
   // AND, since #263, folded into `checks` as its own precondition row (below).
-  const refsFromFlagJson = new Set(
-    String(opts.refs || '').split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean).map(Number),
-  );
+  const refsFromFlagJson = shipRefsFromFlag(opts, sess); // #647: + the hand-off's closed-before issues
   const split = resolveCloseRefsSplit(repoAbs, gh, sess.issues, refsFromFlagJson, descriptorHolds(doc));
   closeIssues = split.closeIssues; refsIssues = split.refsIssues; checklistFindings = split.gateFindings;
   refsBrakeFindings = split.brakeFindings;
@@ -13746,27 +13745,48 @@ function applyShipHandoff(repoAbs, sess, opts, trunk) {
     syncChain = shipHandoff.syncMergeChain((a) => git.git(a, repoAbs), refs.remoteSha, `refs/remotes/${remote}/${trunk}`);
   }
   const claimsByIssue = {};
+  const issueStates = {}; // #647: an issue closed before the hand-off needs no claim — read state too
   if (u && comment) {
     for (const n of shipguard.branchIssueNumbers(sess.branch)) {
-      const info = git.ghIssueView(repoAbs, n, ['comments']);
+      const info = git.ghIssueView(repoAbs, n, ['comments', 'state', 'closedAt']);
       claimsByIssue[n] = info ? liveClaimComments(info.comments || []).map((c) => ({ ...c })) : null;
+      if (info) issueStates[n] = { state: info.state || '', closedAt: info.closedAt || '' };
     }
   }
-  const v = shipHandoff.handoffVerdict({ url: opts.handoff, comment, branch: sess.branch, refs, claimsByIssue, syncChain });
+  const v = shipHandoff.handoffVerdict({ url: opts.handoff, comment, branch: sess.branch, refs, claimsByIssue, syncChain,
+    issueStates, refNumbers: refsFlagNumbers(opts.refs) });
   if (!v.ok) return v;
   sess.issues = v.issues;
   sess.handoff = v;
+  // #647: the closed-before-hand-off issues — Refs in the squash, no 🚢/🔖 comment in the tail.
+  sess.handoffRefs = new Set(v.refIssues || []);
   // #372: the implementer is the executor that handed off — name it, never leave it reading as the shipper.
-  const ex = (claimsByIssue[v.issues[0]] || []).find((c) => c.branch === sess.branch && c.login === v.executor.login);
+  const claimed = v.issues.find((n) => !sess.handoffRefs.has(n));
+  const ex = (claimsByIssue[claimed] || []).find((c) => c.branch === sess.branch && c.login === v.executor.login);
   if (ex && (ex.session || ex.sessionName)) sess.holder = { session: ex.session || '', sessionName: ex.sessionName || '' };
   return v;
+}
+
+/** The `--refs` value as issue numbers (`12,#13` → [12, 13]). */
+function refsFlagNumbers(refs) {
+  return String(refs || '').split(',').map((x) => x.trim().replace(/^#/, '')).filter(Boolean).map(Number);
+}
+
+/** #647: --refs ∪ the hand-off's closed-before issues — the set resolveCloseRefsSplit writes as Refs. */
+function shipRefsFromFlag(opts, sess) {
+  const set = new Set(refsFlagNumbers(opts.refs));
+  for (const n of (sess && sess.handoffRefs) || []) set.add(n);
+  return set;
 }
 
 function handoffDetail(v) {
   const head = v.syncMerges
     ? `${shortSha(v.handedOff)}, under ${v.syncMerges} clean base-sync merge${v.syncMerges === 1 ? '' : 's'} to the remote head ${shortSha(v.sha)} (#579)`
     : `${shortSha(v.sha)} = the remote head`;
-  return `${v.url} hands off ${head}; executor ${v.executor.login}'s live claim on ${v.issues.map((n) => '#' + n).join(' ')}`;
+  const refd = new Set(v.refIssues || []);
+  const closed = v.issues.filter((n) => !refd.has(n));
+  const tail = refd.size ? `; ${[...refd].map((n) => '#' + n).join(' ')} closed before the hand-off — Refs only, no claim needed (#647)` : '';
+  return `${v.url} hands off ${head}; executor ${v.executor.login}'s live claim on ${closed.map((n) => '#' + n).join(' ')}${tail}`;
 }
 
 /** The clause the 🚢 comment carries for a hand-off land — the executor still holds its claim. */
@@ -13922,9 +13942,7 @@ function cmdShip(argv) {
   // resolveCloseRefsSplit (#48, #74): --refs, the tracking label, and #74's close gate (an
   // unticked ## Plan checklist with no declared Remainder: #M). The claim is still released
   // unconditionally either way (B3, unchanged) — only Closes→Refs changes.
-  const refsFromFlag = new Set(
-    String(opts.refs || '').split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean).map(Number),
-  );
+  const refsFromFlag = shipRefsFromFlag(opts, sess); // #647: + the hand-off's closed-before issues
   for (const n of refsFromFlag) {
     if (!sess.issues.includes(n)) warn(`--refs #${n} is not a claimed issue on this branch — ignored`);
   }
@@ -14985,6 +15003,8 @@ function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, re
   const closedByShip = []; // the issues this ship actually closed — for (i2) below (#371)
   if (gh) {
     for (const num of sess.issues) {
+      // #647: closed before the hand-off — history the branch name carries, not work this ship did.
+      if (sess.handoffRefs && sess.handoffRefs.has(num)) continue;
       const isRef = refsSet.has(num);
       const info = git.ghIssueView(repoAbs, num, ['state', 'labels']);
       // A closed issue must have auto-closed; a ref'd (tracking) issue must have STAYED open. The
@@ -15834,6 +15854,14 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
     const sess = sessions[i];
     const closeIssues = sess.issues.filter((n) => closed.has(n));
     const refsIssues = sess.issues.filter((n) => !closed.has(n));
+    // #647: a hand-off member's Refs issue that is already CLOSED is one the build exempted as
+    // closed before the hand-off (an open one needed a claim) — history, so no 🔖 comment on it.
+    if (sess.handoff && gh && refsIssues.length) {
+      sess.handoffRefs = new Set(refsIssues.filter((n) => {
+        const info = git.ghIssueView(repoAbs, n, ['state']);
+        return info && String(info.state || '').toUpperCase() === 'CLOSED';
+      }));
+    }
     shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha: shortSha(c.sha), closeIssues, refsIssues, suffix, opts, gh });
   });
 
