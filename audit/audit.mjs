@@ -1456,7 +1456,7 @@ function auditRepoInner(target, ctx) {
         const rt = migrationGrant.roundtripJobWorkflows({ readFile: (p) => src.readFile(p), workflows });
         info.migrationRoundtrip = rt;
         if (!rt.length) {
-          warn(`migration-grant: reviewer, but no workflow in .github/workflows has a "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" job — every reviewer grant fails R (the mint and colab ship refuse); adopt the job from templates/ci-laravel.yml or the opt-in block in templates/ci-node.yml, or declare migration-grant: human`);
+          warn(`migration-grant: reviewer, but no workflow in .github/workflows has a "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" job — every reviewer grant fails R (the mint and colab ship refuse); adopt the job from templates/ci-laravel.yml, or the opt-in block in templates/ci-node.yml / ci-python.yml (\`colab template ci-node --roundtrip\` writes it live, #625), or declare migration-grant: human`);
         }
       }
     }

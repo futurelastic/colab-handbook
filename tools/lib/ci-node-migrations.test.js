@@ -1,6 +1,6 @@
 'use strict';
 /**
- * ci-node's opt-in Migration round-trip (#494).
+ * ci-node's opt-in Migration round-trip (#494), and ci-python's copy of it (#625).
  *
  * Run: `node --test tools/lib/*.test.js` — the existing CI glob picks this file up.
  *
@@ -21,6 +21,7 @@ const mg = require('./migration-grant');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const TEXT = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'ci-node.yml'), 'utf8');
+const PY_TEXT = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'ci-python.yml'), 'utf8');
 
 /** The template's own adoption recipe: `sed '/^  ##>>>/,/^  ##<<</ s/^  # \{0,1\}/  /'`. */
 function uncomment(text) {
@@ -46,29 +47,54 @@ function roundTripScript(text) {
 const SCRIPT = roundTripScript(ADOPTED);
 const files = (text) => ({ readFile: (p) => (p === '.github/workflows/ci.yml' ? text : null), workflows: ['ci.yml'] });
 
-test('as shipped: the block is fenced and every line in it is a comment — no job, nothing skipped (#494)', () => {
-  const lines = TEXT.split('\n');
-  const a = lines.findIndex((l) => /^  ##>>> migration round-trip/.test(l));
-  const b = lines.findIndex((l) => /^  ##<<< migration round-trip/.test(l));
-  assert.ok(a > 0 && b > a, 'fences present, in order');
-  for (const l of lines.slice(a + 1, b)) assert.match(l, /^  #/, l);
-  assert.deepStrictEqual(Object.keys(yaml.parse(TEXT).jobs), ['dedupe', 'gitleaks', 'build']);
-  assert.deepStrictEqual(mg.roundtripJobWorkflows(files(TEXT)), []);
-});
+for (const [label, text, toolchain, scheme] of [['ci-node', TEXT, 'node-version', 'postgres'], ['ci-python', PY_TEXT, 'python-version', 'postgresql']]) {
+  test(`${label} as shipped: every fence is closed and every line in one is a comment — no job, nothing skipped (#494, #625)`, () => {
+    const lines = text.split('\n');
+    let open = -1;
+    let pairs = 0;
+    lines.forEach((l, i) => {
+      if (/^  ##>>> migration round-trip/.test(l)) { assert.strictEqual(open, -1, `nested fence at ${i + 1}`); open = i; return; }
+      if (/^  ##<<< migration round-trip/.test(l)) { assert.notStrictEqual(open, -1, `stray close at ${i + 1}`); open = -1; pairs += 1; return; }
+      if (open !== -1) assert.match(l, /^  #/, `line ${i + 1}: ${l}`);
+    });
+    assert.strictEqual(open, -1, 'an unclosed fence');
+    assert.strictEqual(pairs, 4, 'workflow env, build outputs, build step, the job');
+    const doc = yaml.parse(text);
+    assert.deepStrictEqual(Object.keys(doc.jobs), ['dedupe', 'gitleaks', 'build']);
+    assert.ok(!('ROUNDTRIP_APPLY' in doc.env), 'no live ROUNDTRIP_APPLY as shipped');
+    assert.ok(!('roundtrip' in (doc.jobs.build.outputs || {})), 'no live roundtrip output as shipped');
+    assert.deepStrictEqual(mg.roundtripJobWorkflows(files(text)), []);
+  });
 
-test('adopted: the job R reads, wired after build like ci-laravel (#494)', () => {
-  const jobs = yaml.parse(ADOPTED).jobs;
-  const m = jobs.migrations;
-  assert.ok(m, 'uncommenting yields a migrations job');
-  assert.ok(m.name.startsWith(mg.ROUNDTRIP_JOB_PREFIX), m.name);
-  assert.strictEqual(m.needs, 'build');
-  assert.match(m.if, /!cancelled\(\) && needs\.build\.result == 'success'/);
-  assert.strictEqual(jobs.build.outputs['node-version'], '${{ steps.toolchain.outputs.node-version }}');
-  assert.deepStrictEqual(mg.roundtripJobWorkflows(files(ADOPTED)), ['ci.yml']);
-  assert.strictEqual(m.env.ROUNDTRIP_APPLY, '', 'APPLY ships empty: the adopter names the runner');
-  for (const k of ['MIGRATIONS_PATHS', 'ROUNDTRIP_RESET', 'ROUNDTRIP_DUMP', 'ROUNDTRIP_SEED']) assert.ok(k in m.env, k);
-  assert.match(ADOPTED, /^          DATABASE_URL: postgres:\/\/postgres:postgres@127\.0\.0\.1:\$\{\{ job\.services\.db\.ports\['5432'\] \}\}\/roundtrip$/m);
-  assert.ok(SCRIPT.length > 0, 'the leg has a Round-trip step with a script — R needs a step that ran');
+  test(`${label} adopted: the job R reads, wired after build, SKIPPED until ROUNDTRIP_APPLY is set (#494, #625)`, () => {
+    const adopted = uncomment(text);
+    const doc = yaml.parse(adopted);
+    const m = doc.jobs.migrations;
+    assert.ok(m, 'uncommenting yields a migrations job');
+    assert.ok(m.name.startsWith(mg.ROUNDTRIP_JOB_PREFIX), m.name);
+    assert.strictEqual(m.needs, 'build');
+    // Fail closed (#625): the job runs only when build says `on`, and build says `on` only for a
+    // non-empty ROUNDTRIP_APPLY. A skipped leg never passes R; a green no-op leg would.
+    assert.strictEqual(m.if, "${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.roundtrip == 'on' }}");
+    assert.strictEqual(doc.jobs.build.outputs.roundtrip, "${{ env.ROUNDTRIP_APPLY != '' && 'on' || 'off' }}");
+    assert.strictEqual(doc.jobs.build.outputs[toolchain], `\${{ steps.toolchain.outputs.${toolchain} }}`);
+    assert.strictEqual(doc.env.ROUNDTRIP_APPLY, '', 'APPLY ships empty: the adopter names the runner');
+    assert.ok(!('ROUNDTRIP_APPLY' in m.env), 'one source: the workflow env, which the gate reads');
+    for (const k of ['MIGRATIONS_PATHS', 'ROUNDTRIP_RESET', 'ROUNDTRIP_DUMP', 'ROUNDTRIP_SEED']) assert.ok(k in m.env, k);
+    // tools/lib/yaml.js reads no sequence of maps — the step is found by line, inside the build job.
+    const buildAt = adopted.indexOf('\n  build:\n');
+    const stepAt = adopted.indexOf('\n      - name: Migration round-trip configured?\n');
+    assert.ok(buildAt > 0 && stepAt > buildAt && stepAt < adopted.indexOf('\n  migrations:\n'), 'a skipped job says nothing, so build says why');
+    assert.match(adopted, /::warning::Migration round-trip is skipped: ROUNDTRIP_APPLY is empty/);
+    assert.deepStrictEqual(mg.roundtripJobWorkflows(files(adopted)), ['ci.yml']);
+    assert.match(adopted, new RegExp(`^          DATABASE_URL: ${scheme}://postgres:postgres@127\\.0\\.0\\.1:\\$\\{\\{ job\\.services\\.db\\.ports\\['5432'\\] \\}\\}/roundtrip$`, 'm'));
+    assert.ok(roundTripScript(adopted).length > 0, 'the leg has a Round-trip step with a script — R needs a step that ran');
+  });
+}
+
+test('ci-python runs the same three passes as ci-node — one script, two templates (#625)', () => {
+  const py = roundTripScript(uncomment(PY_TEXT));
+  assert.strictEqual(py, SCRIPT, 'the Round-trip scripts drifted apart: change both, or neither');
 });
 
 // --- the script, against a fake runner ----------------------------------------------------------

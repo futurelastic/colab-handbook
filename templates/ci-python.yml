@@ -33,6 +33,8 @@
 #   4. Byte-compile — the cheapest possible "does it even parse" gate.
 #   5. Run lint / tests only if the repo has them, so a repo without a suite is not
 #      forced to add placeholders to keep CI green.
+#   6. Opt-in, commented: a Migration round-trip for `migration-grant: reviewer` (#625) —
+#      `colab template ci-python --roundtrip` writes it live at copy.
 #
 # LIGHT LANE (#607): this file runs on every push and is what `colab ship` reads. Keep it
 # fast — secret scan, build, typecheck/lint, the fast tests (target: under 5 minutes).
@@ -103,6 +105,14 @@ env:
   GITLEAKS_VERSION: "8.30.1"
   # EDIT: the importable package/directory to byte-compile. Often `src` or the app name.
   PACKAGE_DIR: "."
+  ##>>> migration round-trip (opt-in, #625) — uncomment to the closing fence
+  # # EDIT: the command that applies every pending migration to $DATABASE_URL — e.g.
+  # # `alembic upgrade head`, `python manage.py migrate --noinput`, `yoyo apply --batch -d "$DATABASE_URL" migrations`.
+  # # Empty = the round-trip job is SKIPPED, and a skipped job never passes R: migrations ship
+  # # on a human grant until this is set (#625). Here, not in the job, because a job-level
+  # # `if:` cannot read `env` — the build job hands it on as an output.
+  # ROUNDTRIP_APPLY: ""
+  ##<<< migration round-trip
 
 # Self-hosted runner? The job layout below assumes GitHub-hosted capacity — a
 # fresh machine per job. With few self-hosted agents every job is a queue slot,
@@ -288,6 +298,13 @@ jobs:
     timeout-minutes: 30 # a hung build must not hold the runner for the 360-minute default (#572).
     # EDIT: NOT a measured fit (#572) — one Python adopter, whose build is a byte-compile (p99
     # under 1 min). Set it well above YOUR p99 — below it a slow but healthy suite goes red.
+    # Re-exported so the opt-in round-trip job below resolves Python exactly once, here.
+    outputs:
+      python-version: ${{ steps.toolchain.outputs.python-version }}
+  ##>>> migration round-trip (opt-in, #625) — uncomment to the closing fence
+  #     # `on` once ROUNDTRIP_APPLY is set; the round-trip job runs only then (#625).
+  #     roundtrip: ${{ env.ROUNDTRIP_APPLY != '' && 'on' || 'off' }}
+  ##<<< migration round-trip
     defaults:
       run:
         # EDIT: set to the directory holding the Python project if it is not at the root.
@@ -563,3 +580,193 @@ jobs:
         if: steps.tools.outputs.pytest == 'true'
         # Everything not marked heavy; ci-heavy.yml runs the rest. Exit 5 = no test selected.
         run: python -m pytest -q -m "not heavy" || [ $? -eq 5 ]
+  ##>>> migration round-trip (opt-in, #625) — uncomment to the closing fence
+  #
+  #     # A skipped job prints nothing, so the reason it is skipped is said here (#625).
+  #     - name: Migration round-trip configured?
+  #       run: |
+  #         if [ -z "${ROUNDTRIP_APPLY:-}" ]; then
+  #           echo "::warning::Migration round-trip is skipped: ROUNDTRIP_APPLY is empty in .github/workflows/ci.yml. Until it is set, condition R never passes and every migration ships on a human grant (#625)."
+  #         else
+  #           echo "Migration round-trip: on (ROUNDTRIP_APPLY is set)."
+  #         fi
+  ##<<< migration round-trip
+
+  # ---------------------------------------------------------------------------
+  # Migration round-trip — OPT-IN (#625; ci-node's job, #494). For `migration-grant: reviewer`:
+  # condition R reads a passing job named "Migration round-trip…" at the shipped head (CONVENTIONS.md §5),
+  # and the audit warns when a repo declares `reviewer` without one. Python has no canonical
+  # migration runner, so the job runs YOURS, forward-only, three times — each pass's schema
+  # must equal the first:
+  #
+  #   1. fresh       apply every migration to an empty database          (schema A)
+  #   2. re-apply    apply again on the same database — nothing changes  (must equal A)
+  #   3. on base     empty database, apply the BASE's migrations (+ ROUNDTRIP_SEED rows),
+  #                  then this change's on top                           (must equal A)
+  #
+  # Pass 3 is the shape of a real deploy: an edit to a migration that is already applied is
+  # skipped by the runner there, so its schema differs from pass 1. Pass 3 runs the base's
+  # migrations with THIS checkout's code and installed packages — a runner whose migrations
+  # import app code (Django, Alembic env.py) may need its own ROUNDTRIP_APPLY for that pass.
+  #
+  # To adopt AT COPY (#625) — the same commit that creates the workflows, so no later branch has
+  # to edit .github/workflows/ (such a branch fails R and ships on a human grant):
+  #   colab template ci-python --dest .github/workflows/ci.yml --roundtrip [--roundtrip-apply '<cmd>']
+  # By hand: remove the leading `# ` from every line between EACH pair of fences (four pairs:
+  # the workflow env, the build job's outputs and its last step, this job), e.g.
+  #   sed -i '/^  ##>>>/,/^  ##<<</ s/^  # \{0,1\}/  /' .github/workflows/ci.yml
+  # then walk its EDIT points. Kept commented, not merely gated: an adopted job that is skipped
+  # costs the repo trunk tree reuse (#511), so a repo that never runs migrations should not pay it.
+  # Adopted with ROUNDTRIP_APPLY still empty, the job is SKIPPED (fails closed): a skipped leg
+  # never passes R, and CI stays green, so a fresh repo with no migrations yet is not held red.
+  # A no-op job that ended green would pass R without testing anything — never make it one.
+  # ---------------------------------------------------------------------------
+  ##>>> migration round-trip (opt-in, #625) — uncomment to the closing fence
+  # migrations:
+  #   name: Migration round-trip (${{ matrix.engine }})
+  #   needs: build
+  #   # Explicit result check, not the implicit success(): success() reads EVERY ancestor,
+  #   # including `dedupe`, which is skipped on every ordinary push (#418). `roundtrip` is `on`
+  #   # only once ROUNDTRIP_APPLY (the workflow env, above) is set — skipped until then (#625).
+  #   if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.roundtrip == 'on' }}
+  #   runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+  #   timeout-minutes: 15 # a hung round-trip must not hold the runner for the 360-minute default (#572).
+  #   # EDIT: NOT measured for Python (#572) — ci-node's adopters ran p99 under 4 min. Keep it well above your own p99.
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - engine: postgres
+  #           image: postgres:17 # EDIT: the version production runs. A different one proves nothing about it.
+  #   services:
+  #     db:
+  #       image: ${{ matrix.image }}
+  #       env:
+  #         # A disposable server inside one job; this password never leaves the runner.
+  #         POSTGRES_PASSWORD: postgres
+  #       # Container port only: a shared self-hosted runner may already listen on 5432.
+  #       ports:
+  #         - 5432
+  #       options: >-
+  #         --health-cmd "pg_isready -U postgres"
+  #         --health-interval 5s
+  #         --health-timeout 5s
+  #         --health-retries 30
+  #   env:
+  #     # ROUNDTRIP_APPLY is in the workflow env at the top of this file (#625).
+  #     # EDIT: the prefixes under `migrations:` in .github/project.yml, space-separated.
+  #     MIGRATIONS_PATHS: "migrations/"
+  #     # EDIT: rows that look like OLD data (NULLs, rows a new foreign key would orphan),
+  #     # written between pass 3's two applies. Empty = no seeding.
+  #     ROUNDTRIP_SEED: ""
+  #     # Leave an empty database, and print its schema. The defaults run INSIDE the
+  #     # service container, so the client always matches the server's version.
+  #     ROUNDTRIP_RESET: >-
+  #       docker exec "$DB_CONTAINER" psql -q -U postgres -v ON_ERROR_STOP=1
+  #       -c 'DROP DATABASE IF EXISTS roundtrip WITH (FORCE)' -c 'CREATE DATABASE roundtrip'
+  #     ROUNDTRIP_DUMP: >-
+  #       docker exec "$DB_CONTAINER" pg_dump -U postgres --schema-only --no-owner --no-privileges roundtrip
+  #   steps:
+  #     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+  #       with:
+  #         # Full history: pass 3 reads the migrations as they were at the base.
+  #         fetch-depth: 0
+  #         persist-credentials: false
+  #
+  #     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+  #       with:
+  #         python-version: ${{ needs.build.outputs.python-version }}
+  #         # Same cache gate as the build job's setup-python (#571): hosted + a manifest only.
+  #         cache: ${{ runner.environment == 'github-hosted' && hashFiles('requirements*.txt', 'pyproject.toml') != '' && 'pip' || '' }}
+  #         cache-dependency-path: |
+  #           requirements*.txt
+  #           pyproject.toml
+  #
+  #     - name: Install dependencies
+  #       run: |
+  #         python -m pip install --upgrade pip
+  #         if [ -f pyproject.toml ]; then pip install -e .
+  #         elif [ -f requirements.txt ]; then pip install -r requirements.txt
+  #         fi
+  #         # EDIT: the migration runner and the database driver, if neither manifest above installs them.
+  #         if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+  #
+  #     - name: Round-trip
+  #       env:
+  #         DB_CONTAINER: ${{ job.services.db.id }}
+  #         DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:${{ job.services.db.ports['5432'] }}/roundtrip
+  #         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  #       run: |
+  #         set -euo pipefail
+  #         if [ -z "${ROUNDTRIP_APPLY:-}" ]; then
+  #           echo "::error::ROUNDTRIP_APPLY is empty — set the command that applies every pending migration (#494)."
+  #           exit 1
+  #         fi
+  #         if [ -z "${MIGRATIONS_PATHS:-}" ]; then
+  #           echo "::error::MIGRATIONS_PATHS is empty — copy the migrations: prefixes from .github/project.yml."
+  #           exit 1
+  #         fi
+  #         # pg_dump 17.6+ writes a random key on its \restrict lines; drop them before comparing.
+  #         dump() { eval "$ROUNDTRIP_DUMP" | { grep -vE '^\\(un)?restrict ' || true; }; }
+  #         T="$RUNNER_TEMP"
+  #
+  #         # The base: trunk from .github/project.yml (else the default branch); on trunk itself,
+  #         # the commit before the one that just landed. A pull request compares against its base.
+  #         trunk="$(sed -nE 's/^trunk:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' .github/project.yml 2>/dev/null | head -1 || true)"
+  #         base_ref="origin/${GITHUB_BASE_REF:-${trunk:-$DEFAULT_BRANCH}}"
+  #         base=""
+  #         if git rev-parse -q --verify "$base_ref" >/dev/null; then
+  #           base="$(git merge-base HEAD "$base_ref")"
+  #           [ "$base" != "$(git rev-parse HEAD)" ] || base="$(git rev-parse -q --verify 'HEAD^' || true)"
+  #         fi
+  #         if [ -n "$base" ]; then
+  #           # Added, modified AND renamed (#507): an edit to an applied migration is the trap pass 3 exists for.
+  #           # shellcheck disable=SC2086
+  #           touched="$(git diff --name-status --diff-filter=AMR "$base" HEAD -- $MIGRATIONS_PATHS)"
+  #           if [ -n "$touched" ]; then
+  #             echo "This change touches migrations (vs $base_ref):"
+  #             printf '%s\n' "$touched" | awk -F'\t' '{ print "  " (substr($1,1,1) == "A" ? "added   " : "modified") "  " $NF }'
+  #           else
+  #             echo "This change adds or modifies no migrations (vs $base_ref)."
+  #           fi
+  #         fi
+  #
+  #         # 1. Fresh: every migration applied to an empty database.
+  #         eval "$ROUNDTRIP_RESET"
+  #         eval "$ROUNDTRIP_APPLY"
+  #         dump > "$T/schema-a.sql"
+  #
+  #         # 2. Idempotent: applying again on the same database changes nothing.
+  #         eval "$ROUNDTRIP_APPLY"
+  #         dump > "$T/schema-a2.sql"
+  #         if ! diff -u "$T/schema-a.sql" "$T/schema-a2.sql"; then
+  #           echo "::error::Pass 2 (re-apply): a second apply changed the schema. The runner re-ran a migration it had already applied."
+  #           exit 1
+  #         fi
+  #
+  #         # 3. Deploy-shaped: the base's migrations first (plus old-looking rows), then this change's
+  #         #    on top. A migration that was edited after it was applied is skipped by the runner here,
+  #         #    exactly as on a real database, so the schema differs from pass 1.
+  #         eval "$ROUNDTRIP_RESET"
+  #         if [ -n "$base" ]; then
+  #           for p in $MIGRATIONS_PATHS; do
+  #             p="${p%/}"; rm -rf "$p"
+  #             if git cat-file -e "$base:$p" 2>/dev/null; then git archive "$base" "$p" | tar -x; fi
+  #           done
+  #           eval "$ROUNDTRIP_APPLY"
+  #           [ -z "${ROUNDTRIP_SEED:-}" ] || eval "$ROUNDTRIP_SEED"
+  #           for p in $MIGRATIONS_PATHS; do
+  #             p="${p%/}"; rm -rf "$p"
+  #             git checkout -q HEAD -- "$p" 2>/dev/null || true
+  #           done
+  #         else
+  #           echo "::notice::No base to compare against ($base_ref not found) — pass 3 applies from empty."
+  #         fi
+  #         eval "$ROUNDTRIP_APPLY"
+  #         dump > "$T/schema-b.sql"
+  #         if ! diff -u "$T/schema-a.sql" "$T/schema-b.sql"; then
+  #           echo "::error::Pass 3 (base, then this change): the schema differs from a fresh apply. A migration already on the base was edited, or the order only works on an empty database."
+  #           exit 1
+  #         fi
+  #         echo "Round-trip passed: fresh, re-applied, and on top of the base all give one schema."
+  ##<<< migration round-trip

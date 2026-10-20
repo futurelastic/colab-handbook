@@ -616,7 +616,8 @@ The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
   unchanged migration content id (#508), plus a live, passing `Migration round-trip`
   CI job on the shipped head. See [CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402).
   A repo with no such job can declare `reviewer`, but every reviewer grant there fails R and the
-  audit warns. `ci-laravel.yml` carries the job; `ci-node.yml` carries it as an opt-in block (#494).
+  audit warns. `ci-laravel.yml` carries the job; `ci-node.yml` and `ci-python.yml` carry it as an
+  opt-in block (#494) that `colab template <name> --roundtrip` writes live at copy (#625).
 - **The audit always reports the value** in `--json` as `migrationGrant` and `migrationGrantSource` (`repo`/`undeclared`).
 
 ### `ci-grant` — optional

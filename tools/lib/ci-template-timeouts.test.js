@@ -56,6 +56,7 @@ const CASES = [
   ['templates/ci-node.yml', 'build', {}],
   ['templates/ci-node.yml', 'migrations', { uncomment: true }],
   ['templates/ci-python.yml', 'build', {}],
+  ['templates/ci-python.yml', 'migrations', { uncomment: true }],
   ['templates/ci-laravel.yml', 'build', {}],
   ['templates/ci-laravel.yml', 'migrations', {}],
 ];
@@ -75,4 +76,5 @@ for (const [file, job, opts] of CASES) {
 
 test('the uncomment helper really reaches the opt-in block (guards the test itself)', () => {
   assert.strictEqual(jobsOf(read('templates/ci-node.yml')).migrations, undefined, 'ci-node migrations is no longer opt-in — drop the uncomment case');
+  assert.strictEqual(jobsOf(read('templates/ci-python.yml')).migrations, undefined, 'ci-python migrations is no longer opt-in — drop the uncomment case');
 });

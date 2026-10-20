@@ -132,7 +132,7 @@ Each printed line is a **finding**. It covers every job in a `deploy-*.yml` / `d
 including hand-written ones, plus the `build` and `migrations` jobs of a `ci-*` copy. A CI copy
 named something other than `ci.yml` gets the same check under its own name. A step-level
 `timeout-minutes` (deeper indent) does not count, because it caps one step and leaves the job
-unbounded. A commented-out job is not live and is not a finding. That includes `ci-node`'s opt-in
+unbounded. A commented-out job is not live and is not a finding. That includes the `ci-node`/`ci-python` opt-in
 migration round-trip, which needs its timeout once someone uncomments it.
 
 **Offer the graft.** Take the template's line and its `# EDIT:` note, placed at job level next to

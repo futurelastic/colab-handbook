@@ -74,10 +74,10 @@ Named it something other than `ci-heavy.yml`? Say so with `heavy-workflow:` in `
 
 | File | Copy to | For | Notes |
 |---|---|---|---|
-| `ci-node.yml` | `.github/workflows/ci.yml` | Pure Node repos: Vite SPA, node libs, Astro static, **Capacitor apps** | Resolves Node version from `project.yml` → `.nvmrc`/`engines` → **fails**. Never a default. |
+| `ci-node.yml` | `.github/workflows/ci.yml` | Pure Node repos: Vite SPA, node libs, Astro static, **Capacitor apps** | Resolves Node version from `project.yml` → `.nvmrc`/`engines` → **fails**. Never a default. Opt-in `Migration round-trip` job — `--roundtrip` writes it live, see *Migration round-trip* below. |
 | `ci-laravel.yml` | `.github/workflows/ci.yml` | Laravel + Inertia + Vite fullstack (with route/type codegen) | Same resolution for **both** PHP and Node. Includes the sqlite bootstrap + explicit wayfinder step, and a `migrations` job that round-trips the schema (migrate → rollback → seed → migrate, schema compared) on the test engine **and** the deploy engine (a MariaDB/MySQL service container at production's version). Its data-dependent checks need `ROUNDTRIP_SEEDER` — see *Migration round-trip* below. |
 | `ci-node-heavy.yml`, `ci-python-heavy.yml`, `ci-laravel-heavy.yml` | `.github/workflows/ci-heavy.yml` | The heavy lane beside the matching `ci-<stack>.yml` (above) | `schedule` + `workflow_dispatch` + `workflow_call`, never a push. Toolchain and install steps are copied from the light lane's `build` job, so the two resolve the same versions — keep them in step. `TRUNK` is an edit point. |
-| `ci-python.yml` | `.github/workflows/ci.yml` | Python: FastAPI/Flask services, CLIs, libraries | Resolves Python from `project.yml` → `.python-version`/`requires-python` → **fails**. `requirements.txt` does not count. **Hybrid** Python+Node repo: copy this, then paste `ci-node.yml`'s `build:` job alongside — see the template header. |
+| `ci-python.yml` | `.github/workflows/ci.yml` | Python: FastAPI/Flask services, CLIs, libraries | Resolves Python from `project.yml` → `.python-version`/`requires-python` → **fails**. `requirements.txt` does not count. **Hybrid** Python+Node repo: copy this, then paste `ci-node.yml`'s `build:` job alongside — see the template header. Opt-in `Migration round-trip` job, as in `ci-node.yml`. |
 | `release-tag.yml` | `.github/workflows/release.yml` | Any repo cutting `v*.*.*` releases | Triggers on tag push. Publishes a grouped GitHub Release — a `-rc.N` tag as a pre-release, every summary since the previous *final* tag. No toolchain, no deploy; its header shows the `!v*.*.*-*` exclusion a deploy trigger needs. |
 | `release-auto.yml` | `.github/workflows/release-auto.yml` | A repo whose release tags land on `main` (`trunk: main`, `deploy: tag` or `none`) and whose §6 release route cuts candidates | Runs `colab release cut --auto` after CI goes green on main — at the sha that CI run tested (`--sha`, #622), even once main has moved on — and `colab release finalize --auto` daily — plus an hourly run that re-tries only a refused cut, once the fetched CLI has moved within `RETRY_WINDOW_MINUTES` or a run at main's head was cancelled (#547) — from a handbook ref (`HANDBOOK_REF` — the `stable` channel by default, `next` for the fast channel, or an exact tag to freeze; #445) — the handbook's own copy runs its checkout's CLI instead, since it ships the CLI it releases with (#428). **Publishes the Release in the same run** — a tag pushed with `GITHUB_TOKEN` triggers no other workflow, so `release-tag.yml` would never fire for it. A refusal is a warning, not a red run. Reads and creates tags, and fast-forwards the release channels `next` / `stable` (branches naming the newest candidate / final, #445); never pushes a commit. The audit recognises any workflow running `release cut/finalize --auto` and warns when the route leaves candidates off, when it tags without publishing while a tag-push workflow waits, or when it commits. |
 | `dist-refs.yml` | `.github/workflows/dist-refs.yml` | A **private** repo shipping a **compiled** tool, installed as `npx github:<org>/<repo>#vX.Y.Z` ([CONVENTIONS §6, *Distribution*](../CONVENTIONS.md#distribution--one-install-surface-npx-442)) | `workflow_call`, called from the same run that cut the release tag (a tag pushed with `GITHUB_TOKEN` triggers nothing else). Takes one build artifact per `<os>-<arch>` and pushes each as an orphan commit at `refs/tags/dist/vX.Y.Z/<os>-<arch>` with a `SHA256SUMS`. Refuses a public or unreadable repository (a public compiled tool ships npm platform packages instead), a version that is not an existing tag, and a missing platform — before pushing any. Never moves a dist ref that exists. |
@@ -137,6 +137,41 @@ notice back and print the run they relied on. Three things to keep in a copy:
 
 Opt out with `tree-reuse: off` (`project.schema.md`) when trunk's run proves something a branch
 run cannot: secrets only trunk gets, `github.ref`-conditional steps, unpinned runner images.
+
+### Migration round-trip — have it from the first copy
+
+`migration-grant: reviewer` grants only where a `Migration round-trip…` job passed at the
+shipped head (condition R, [CONVENTIONS §5](../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
+`ci-laravel.yml` always carries it. `ci-node.yml` and `ci-python.yml` carry it as an opt-in
+block, and **the time to opt in is the copy** (#625):
+
+```sh
+colab template ci-node   --dest .github/workflows/ci.yml --roundtrip --roundtrip-apply 'npx knex migrate:latest'
+colab template ci-python --dest .github/workflows/ci.yml --roundtrip --roundtrip-apply 'alembic upgrade head'
+```
+
+- **Why at copy.** A later branch that adds the job edits `.github/workflows/`, and a branch
+  that can rewrite the job grading it never passes R — so that one branch, and its migration,
+  ships on a human grant. In the commit that creates the workflows, there is no such branch.
+- **No migrations yet?** Leave out `--roundtrip-apply`. The job is written but **skipped**
+  until `ROUNDTRIP_APPLY` (workflow `env`, top of the file) is set: a skipped leg never passes
+  R, so migrations ship on a human grant, and CI stays green — a fresh repo is not held red.
+  The build job prints a warning saying so. The cost while skipped: trunk does not reuse a
+  branch's identical-tree run (#511). A green no-op job would pass R without testing
+  anything; the job never becomes one.
+- **What `--roundtrip` writes:** every `##>>> migration round-trip` fence uncommented (four:
+  the workflow env, the build job's `roundtrip` output and its warning step, the job),
+  `ROUNDTRIP_APPLY` from `--roundtrip-apply`, and `MIGRATIONS_PATHS` from `.github/project.yml`
+  `migrations:` when declared. The other edit points (Postgres image, `ROUNDTRIP_SEED`, reset
+  and dump commands) are still yours to walk. By hand, the template header's `sed` does the
+  same uncommenting.
+- **Not in the heavy lane.** `--roundtrip` refuses `ci-*-heavy`: that lane never runs at a
+  branch's head, and R reads the shipped head.
+- **`colab template` names the gap.** Copying a `ci-*` template into a repo whose policy
+  resolves to `reviewer` (the repo key, else this machine's value) without any round-trip job
+  prints a warning with the re-copy command. The audit warns the same for a declared `reviewer`.
+- A copy made with `--roundtrip` differs from the template text, so `colab update` reads it as
+  locally edited and leaves it to you — copy-and-own, as for any edit.
 
 ### Migration round-trip — what the Laravel job proves, and what it cannot
 
