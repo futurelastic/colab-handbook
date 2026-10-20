@@ -10,6 +10,26 @@ Keep it flat. No nested maps, no anchors — the readers (the audit tool, the
 `- a` lines indented under the key). Anything else is reported as a parse
 finding rather than half-read.
 
+## Key kinds
+
+Every key below is one of three kinds. The kind says who may change the key, not how much
+it matters.
+
+| kind | what the key says | keys |
+|---|---|---|
+| **fact** | something true of the repo, which a reader can check against the repo | `tier`, `trunk`, `production`, `deploy`, `runbook`, `stack`, `integration`, `releaseBranch`, `owner`, `migrations`, `room`, `exposure`, `channels`, `distribution`, `ceremony`, `writes`, `contention`, `release`, `live-env`, `tree-reuse`, `ci-docs-skip`, `docs-only-paths`, `instruction-files`, `integration-profile`, `gate`, `node`, `php`, `python` |
+| **owner's grant** | who may take a consequential action here without a person's word each time | `autonomy`, `promotion`, `migration-grant`, `ci-grant`, and `release`'s `final-grant` |
+| **tool tuning** | how a tool behaves here; every valid value is safe to choose | `ports`, `worktreePorts`, `ship-batch`, `ship-batch-wait`, `ship-batch-steps`, `ci-wait-factor`, `thresholds`, `holds`, `generated`, `branchPrefix`, `ship-gate-workflows`, `ship-ignore-workflows`, `heavy-workflow` |
+
+`trust-humans` is identity, not a grant: it says who counts as a person, which every grant
+relies on, so the grant rule covers it too.
+
+**The grant rule, one rule for all four grant keys:** only a person changes a grant key or
+`trust-humans`. An agent may propose the change on a branch; it lands on a person's word,
+never on the agent's own. A fact changes when the repo does. Tuning may change without an
+issue only where the tool that reads it allows; that list is the tool's, and is never wider
+than the tuning row above.
+
 ## Fields
 
 ### `tier` — optional (legacy)
