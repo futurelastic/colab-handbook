@@ -67,7 +67,7 @@ test('a hard rule without its marker is a finding', async () => {
   const { check } = await load();
   const conv = CONV.replace('**[Hard — gate: colab ship]** ', '');
   const { findings } = check({ root: repo({ conventions: conv, inventoryRows: GOOD }) });
-  assert.ok(findings.some((f) => /row C\.ship\.01 .*carries no \*\*\[Hard — gate/.test(f)), findings.join('\n'));
+  assert.ok(findings.some((f) => /row C\.ship\.01 .*carries no Hard marker/.test(f)), findings.join('\n'));
 });
 
 test('a marker no row accounts for is a finding', async () => {
@@ -100,6 +100,99 @@ test('duplicate ids, unknown classes and an unescaped pipe are findings', async 
   assert.ok(findings.some((f) => /duplicate id/.test(f)));
   assert.ok(findings.some((f) => /class "must"/.test(f)));
   assert.ok(findings.some((f) => /has 8 cells, expected 7/.test(f)));
+});
+
+// #632: the new marker cites the row's id and states what must be refused, naming no tool.
+const NEW_CONV = (marker) => [
+  '# C',
+  '',
+  '## Trunk merges',
+  '',
+  `${marker} A human must trigger the trunk merge on a manual repo.`,
+  '',
+  '- Claim the issue before you start, never when finishing.',
+  '',
+].join('\n');
+const NEW_OK = '**[Hard C1.ship.01 — refuse: a trunk merge no human started]**';
+const newRows = ({ gate = '', id = 'C1.ship.01', cls = 'hard', dest = 'CONVENTIONS.md' } = {}) => [
+  `| ${id} | ${cls} | ${gate} | Wait for a human go. | A human must trigger the trunk merge | ${dest} | #1 |`,
+  '| C1.claim.01 | default | | Claim first. | Claim the issue before you start | CONVENTIONS.md | — |',
+];
+
+test('a new-form marker passes, and its row needs no gate (#632)', async () => {
+  const { check } = await load();
+  const { findings } = check({ root: repo({ conventions: NEW_CONV(NEW_OK), inventoryRows: newRows() }) });
+  assert.deepStrictEqual(findings, []);
+});
+
+test('a new-form row that does give a gate still has it checked (#632)', async () => {
+  const { check } = await load();
+  const rows = newRows({ gate: '`tools/colab::function gone`' });
+  const { findings } = check({ root: repo({ conventions: NEW_CONV(NEW_OK), inventoryRows: rows }) });
+  assert.ok(findings.some((f) => /row C1\.ship\.01 .*gate literal not found/.test(f)), findings.join('\n'));
+});
+
+test('an old-form row with no gate is a finding — the old form names its gate (#632)', async () => {
+  const { check } = await load();
+  const { findings } = check({ root: repo({ conventions: NEW_CONV('**[Hard — gate: colab ship]**'), inventoryRows: newRows() }) });
+  assert.ok(findings.some((f) => /row C1\.ship\.01 .*old .* names no gate/.test(f)), findings.join('\n'));
+});
+
+test('old and new markers coexist in one document (#632)', async () => {
+  const { check } = await load();
+  const conv = NEW_CONV(NEW_OK).replace('- Claim the issue', '- **[Hard — gate: colab claim]** Claim the issue');
+  const rows = [newRows()[0], '| C1.claim.01 | hard | `tools/colab::function shipAutonomyGate` | Claim first. | Claim the issue before you start | CONVENTIONS.md | — |'];
+  const { findings } = check({ root: repo({ conventions: conv, inventoryRows: rows }) });
+  assert.deepStrictEqual(findings, []);
+});
+
+test('a new marker citing an unknown, a non-hard or an elsewhere-keyed id is a finding (#632)', async () => {
+  const { check } = await load();
+  const unknown = check({ root: repo({ conventions: NEW_CONV(NEW_OK.replace('C1.ship.01', 'C1.ship.09')), inventoryRows: newRows() }) }).findings;
+  assert.ok(unknown.some((f) => /marker \[Hard C1\.ship\.09\] cites an id the inventory does not have/.test(f)), unknown.join('\n'));
+
+  const soft = check({ root: repo({ conventions: NEW_CONV(NEW_OK.replace('C1.ship.01', 'C1.claim.01')), inventoryRows: newRows() }) }).findings;
+  assert.ok(soft.some((f) => /\[Hard C1\.claim\.01\] cites a default row/.test(f)), soft.join('\n'));
+
+  const conv = NEW_CONV(NEW_OK).replace('- Claim the issue', '- **[Hard C1.ship.01 — refuse: work started without a claim]** Claim the issue');
+  const elsewhere = check({ root: repo({ conventions: conv, inventoryRows: newRows() }) }).findings;
+  assert.ok(elsewhere.some((f) => /CONVENTIONS\.md:7: marker \[Hard C1\.ship\.01\]: row C1\.ship\.01's key is not in this unit/.test(f)), elsewhere.join('\n'));
+});
+
+test('a refuse clause that names a tool, or says too little, is a finding (#632)', async () => {
+  const { check } = await load();
+  for (const [clause, re] of [
+    ['a merge colab did not see', /names a tool \("colab"\)/],
+    ['a push the pre-push hook rejects', /names a tool \("hook"\)/],
+    ['a merge with `--force`', /names a tool \("`"\)/],
+    ['unattended merges', /too short/],
+  ]) {
+    const conv = NEW_CONV(`**[Hard C1.ship.01 — refuse: ${clause}]**`);
+    const { findings } = check({ root: repo({ conventions: conv, inventoryRows: newRows() }) });
+    assert.ok(findings.some((f) => re.test(f)), `${clause}: ${findings.join('\n')}`);
+  }
+});
+
+test('a new marker quoted as code is an example, not a marker (#632)', async () => {
+  const { check } = await load();
+  const conv = NEW_CONV(NEW_OK).replace('- Claim the issue', '- The form is `**[Hard C9.x.01 — refuse: gh x]**`. Claim the issue');
+  const { findings } = check({ root: repo({ conventions: conv, inventoryRows: newRows() }) });
+  assert.deepStrictEqual(findings, []);
+});
+
+test('a malformed id is a finding (#632)', async () => {
+  const { check } = await load();
+  const rows = [...newRows(), '| claim-one | default | | Claim. | Claim the issue before you start | CONVENTIONS.md | — |'];
+  const { findings } = check({ root: repo({ conventions: NEW_CONV(NEW_OK), inventoryRows: rows }) });
+  assert.ok(findings.some((f) => /row claim-one .*id "claim-one" is not of the shape/.test(f)), findings.join('\n'));
+});
+
+test('a dest anchor must be a heading of its file — a dead anchor is a finding (#632)', async () => {
+  const { check } = await load();
+  const live = check({ root: repo({ conventions: NEW_CONV(NEW_OK), inventoryRows: newRows({ dest: 'CONVENTIONS.md#trunk-merges' }) }) }).findings;
+  assert.deepStrictEqual(live, []);
+  const dead = check({ root: repo({ conventions: NEW_CONV(NEW_OK), inventoryRows: newRows({ dest: 'CONVENTIONS.md#trunk-merge' }) }) }).findings;
+  assert.ok(dead.some((f) => /row C1\.ship\.01 .*dest anchor #trunk-merge is not a heading in CONVENTIONS\.md/.test(f)), dead.join('\n'));
 });
 
 test('this repo\'s inventory is clean', async () => {

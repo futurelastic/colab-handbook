@@ -13,9 +13,18 @@ history), which served as each section's checklist.
   or dropped. Update the row in the same commit as the edit, or restore the rule;
 - a `hard` or `default` row's `dest` is not `CONVENTIONS.md` or `project.schema.md`. Only an
   `explanation` may move to `docs/adr/` or `docs/gotchas.d/`;
-- a `hard` row's key is not inside a unit carrying the `**[Hard — gate: …]**` marker, or one
-  of its gate literals is no longer in the named file — the rule may no longer be gated;
-- a marker in either document holds no `hard` row's key.
+- a row's id is empty, repeated, or not of the shape `C<§>.<sub>.<nn>` / `S<§>.<sub>.<nn>`;
+- a row's `dest` carries an `#anchor` that is not a heading of that file — a dead anchor;
+- a `hard` row's key is not inside a unit carrying a Hard marker, or one of its gate literals
+  is no longer in the named file — the rule may no longer be gated;
+- a marker in either document holds no `hard` row's key;
+- a `**[Hard <id> — refuse: …]**` marker cites an id that is not a `hard` row whose key sits
+  in that unit, or its refuse clause is under three words or names a tool (a code span,
+  `colab`, `gh`, `hook`). It says what must be refused; who refuses it is the adopter's.
+
+Two marker forms pass (#632). `**[Hard <id> — refuse: <what must be refused>]**` is the form
+every rule is rewritten to, one section at a time; an adopter's test cites the id. The older
+`**[Hard — gate: <what refuses>]**` names the command, and its row must name a gate.
 
 A new rule needs a new row, and a new hard rule needs its marker too. The checker cannot see
 a rule nobody added a row for; review still has to.
@@ -34,10 +43,12 @@ a rule nobody added a row for; review still has to.
     the row records where it went.
 - **gate** — hard rows only: `<file>::<literal>`, several joined by ` ; `. A literal rather
   than a line number, so the check does not drift with every edit to the gate's file.
+  Required under the older marker; optional under the new one, and checked wherever given.
 - **rule** — a one-sentence paraphrase, for reading. Not checked.
 - **key** — a verbatim phrase from the rule's text. Compared after collapsing whitespace and
   dropping `*` emphasis; `\|` in a cell is a literal pipe.
-- **dest** — the file the rule (or moved explanation) lives in now.
+- **dest** — the file the rule (or moved explanation) lives in now, optionally `file#anchor`;
+  the anchor must be a heading of that file, slugged as the audit slugs it.
 - **source** — the issue the text cites for it, or `—`.
 
 ## The #160 kinds, re-read
@@ -169,11 +180,13 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C1.hard.01 | default | | A rule is hard only when a gate enforces it, and a hard rule opens with a marker naming what refuses. | A rule is hard only when a gate enforces it. | CONVENTIONS.md | #518 |
+| C1.hard.01 | default | | A rule is hard only when a gate enforces it, and a hard rule opens with a marker carrying its id and what must be refused. | A rule is hard only when a gate enforces it. | CONVENTIONS.md | #518 |
 | C1.hard.02 | default | | Every unmarked rule is a default, refinable through a `project.yml` field or the repo's local policy. | which a repo may refine through a `project.yml` field where one exists | CONVENTIONS.md | #518 |
 | C1.hard.03 | default | | A local-policy refinement never lowers a hard rule. | A refinement never lowers a hard rule. | CONVENTIONS.md | #520 |
 | C1.hard.04 | default | | An unrefined default stands as written: a "must" is still a "must". | Until a repo refines a default, its wording stands as written | CONVENTIONS.md | #523 |
-| C1.hard.05 | default | | Every rule's class and each hard rule's gate literal are listed in the rule inventory, kept in step by its check. | keeps the list and this file in step | CONVENTIONS.md | #523 |
+| C1.hard.05 | default | | Every rule's id and class are listed in the rule inventory, kept in step by its check. | keeps the list and this file in step | CONVENTIONS.md | #523 |
+| C1.hard.06 | default | | A hard rule's marker names no tool; an adopter proves its gate by citing the rule's id in its own tests. | an adopter proves its gate by citing the id in its own tests | CONVENTIONS.md | #632 |
+| C1.hard.07 | default | | The older marker naming the refusing command passes until its section is rewritten. | names the command that refuses; it passes until its section is rewritten | CONVENTIONS.md | #632 |
 
 ### 2. Reading §2 through exposure (added by #523)
 
