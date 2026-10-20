@@ -9681,6 +9681,7 @@ function listTemplates(templatesDir) {
 }
 
 const HELP_TEMPLATE = `colab template [<name>] [--dest <path>] [--repo <path>] [--force]
+                      [--roundtrip [--roundtrip-apply <cmd>]]
 
 Copy a colab-handbook template into a repo, STAMPED with the handbook's current version. The
 stamp lets the audit tell you later when the source template has moved on.
@@ -9697,6 +9698,17 @@ Options:
   --repo <path>   target repo root for the default destination (default: git root of cwd) —
                   *.yml templates only; a non-YAML template always requires --dest.
   --force         overwrite an existing destination. You OWN the copy — local edits are lost.
+  --roundtrip     (ci-node, ci-python) write the opt-in "Migration round-trip" job LIVE, so a
+                  repo under migration-grant: reviewer has it from the commit that creates its
+                  CI (#625) — a later branch adding it edits .github/workflows/ and fails R.
+                  MIGRATIONS_PATHS is filled from .github/project.yml migrations: when declared.
+                  Until ROUNDTRIP_APPLY is set the job is SKIPPED: R never passes (migrations
+                  ship on a human grant) and CI stays green. Refused for a *-heavy template —
+                  the heavy lane never runs at the shipped head R reads. ci-laravel's job is
+                  always on.
+  --roundtrip-apply <cmd>
+                  the command that applies every pending migration (implies --roundtrip), e.g.
+                  'npx knex migrate:latest' or 'alembic upgrade head'.
 
 The copied file gets one stamp line:
   # colab-handbook: <name> @ <version>
@@ -9714,10 +9726,11 @@ copy as behind a changed template, review the diff and re-copy to re-stamp.
 
 function cmdTemplate(argv) {
   const opts = parseArgs(argv, {
-    values: { '--dest': 'dest', '--repo': 'repo' },
-    flags: { '--force': 'force', '-h': 'help', '--help': 'help' },
+    values: { '--dest': 'dest', '--repo': 'repo', '--roundtrip-apply': 'roundtripApply' },
+    flags: { '--force': 'force', '--roundtrip': 'roundtrip', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_TEMPLATE);
+  if (opts.roundtripApply != null) opts.roundtrip = true;
 
   // The frozen copy carries tools/ only — no templates/ to copy from, and no git history to stamp
   // with: handbookVersion() from <COLAB_HOME> would answer 'v0', so even a copy that found its
@@ -9785,6 +9798,13 @@ function cmdTemplate(argv) {
     throw new UserError(`"${stem}.${ext}" has no formulaic destination — pass --dest <path> (e.g. --dest tools/${stem}.${ext}).`);
   }
 
+  // #625: refused before anything is written — a heavy lane never runs at the head R reads.
+  const roundtrip = require('./lib/template-roundtrip');
+  if (opts.roundtrip) {
+    const why = ext === 'yml' ? roundtrip.refusal(stem, fs.readFileSync(srcFile, 'utf8')) : `${stem}.${ext} is not a CI template`;
+    if (why) throw new UserError(`--roundtrip: ${why}`);
+  }
+
   if (fs.existsSync(destFile) && !opts.force) {
     warn(`${destFile} already exists — not overwriting.`);
     print('Compare your copy against the current template:');
@@ -9821,6 +9841,23 @@ function cmdTemplate(argv) {
       if (r.missed.length) trunkNotes.push(`  ⚠ trunk: not found in this template, check by hand: ${r.missed.join(', ')}.`);
     }
   }
+  // #625: the round-trip job written live, at copy — the commit that creates the workflows.
+  const roundtripNotes = [];
+  if (opts.roundtrip && roundtrip.ALWAYS_ON.has(stem)) {
+    roundtripNotes.push(`  round-trip: ${stem}'s "Migration round-trip" job is always on — nothing to enable.`);
+  } else if (opts.roundtrip) {
+    const doc = repoForCopy ? repoDescriptorDoc(repoForCopy) : null;
+    const declared = migrationPaths.parseMigrationPaths(doc).paths;
+    let r;
+    try { r = roundtrip.enableRoundtrip(body, { apply: opts.roundtripApply, paths: declared }); } catch (e) { throw new UserError(`--roundtrip-apply: ${e.message}`); }
+    body = r.text;
+    roundtripNotes.push(`  round-trip: wrote the "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" job live (${r.changes.join(', ')}).`);
+    if (r.missed.length) roundtripNotes.push(`  ⚠ round-trip: not found in this template, set by hand: ${r.missed.join(', ')}.`);
+    if (!declared.length) roundtripNotes.push('  round-trip: no migrations: in .github/project.yml — check MIGRATIONS_PATHS (an EDIT point) names your migrations directory.');
+    if (!String(opts.roundtripApply || '').trim()) {
+      roundtripNotes.push('  round-trip: ROUNDTRIP_APPLY is empty, so the job is SKIPPED — R never passes and migrations ship on a human grant until you set it (workflow env, top of the file).');
+    }
+  }
   // A *.yml copy has no shebang to protect, so this is still a plain prepend at line 1 — unchanged
   // from before. A *.mjs copy opens with `#!/usr/bin/env node`; insertStamp puts the stamp on line
   // 2 instead so the shebang stays first and the file keeps running as a script (#252).
@@ -9835,6 +9872,27 @@ function cmdTemplate(argv) {
   print(`✓ ${stem}.${ext} @ ${version} → ${destFile}`);
   print('  stamped. Walk its # EDIT: markers, declare your toolchain, then commit. You own this file now.');
   for (const l of trunkNotes) print(l);
+  for (const l of roundtripNotes) print(l);
+  // #625: a repo whose policy resolves to reviewer needs the job — say which, at the copy, not at
+  // the first migration's ship. Any workflow carrying it counts (the dest itself included).
+  if (ext === 'yml' && /^ci-/.test(stem) && repoForCopy && !opts.roundtrip) {
+    const pol = migrationGrantPolicyFor(repoDescriptorDoc(repoForCopy));
+    if (pol && pol.policy === 'reviewer') {
+      const wfDir = path.join(repoForCopy, '.github', 'workflows');
+      let wfs = [];
+      try { wfs = fs.readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f)); } catch (_) { wfs = []; }
+      const readFile = (rel) => { try { return fs.readFileSync(path.join(repoForCopy, rel), 'utf8'); } catch (_) { return null; } };
+      const destText = fs.readFileSync(destFile, 'utf8');
+      const live = migrationGrant.roundtripJobWorkflows({ readFile, workflows: wfs }).length
+        || migrationGrant.roundtripJobWorkflows({ readFile: () => destText, workflows: ['dest'] }).length;
+      if (!live) {
+        const fix = roundtrip.hasRoundtripFence(fs.readFileSync(srcFile, 'utf8'))
+          ? `re-copy with --force --roundtrip [--roundtrip-apply '<cmd>'] in this same commit`
+          : 'add one to this repo\'s CI (templates/ci-laravel.yml, ci-node.yml and ci-python.yml carry it)';
+        print(`  ⚠ migration-grant resolves to reviewer here (${pol.source || 'repo'}), but no workflow has a "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" job — every reviewer grant fails R. ${fix}.`);
+      }
+    }
+  }
   // #526: a repo adopting a CI template usually has CI already. Both then run on every push —
   // name them and leave the choice to the person, never decide it here.
   if (ext === 'yml' && /^ci-/.test(stem) && repoForCopy) {

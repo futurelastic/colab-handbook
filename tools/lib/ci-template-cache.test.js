@@ -99,6 +99,7 @@ const SETUP_CASES = [
   ['templates/ci-node.yml', 'migrations', true, (s) => s.name === 'Setup Node', ['package-lock.json'], ['package.json', 'pnpm-lock.yaml'], 'npm'],
   ['templates/ci-laravel.yml', 'build', false, (s) => /actions\/setup-node@/.test(s.uses || ''), ['package-lock.json'], ['package.json', 'composer.lock'], 'npm'],
   ['templates/ci-python.yml', 'build', false, (s) => /actions\/setup-python@/.test(s.uses || ''), ['requirements.txt', 'requirements-dev.txt', 'pyproject.toml'], ['setup.py', 'setup.cfg'], 'pip'],
+  ['templates/ci-python.yml', 'migrations', true, (s) => /actions\/setup-python@/.test(s.uses || ''), ['requirements.txt', 'requirements-dev.txt', 'pyproject.toml'], ['setup.py', 'setup.cfg'], 'pip'],
 ];
 
 for (const [file, job, uncomment, find, onFiles, offFiles, value] of SETUP_CASES) {

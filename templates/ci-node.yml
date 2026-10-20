@@ -21,7 +21,8 @@
 #   4. Run typecheck / lint / test only if package.json declares those scripts, so a
 #      repo without them is not forced to add placeholders to keep CI green.
 #   5. Build, if package.json declares the BUILD_COMMAND script.
-#   6. Opt-in, commented: a Migration round-trip for `migration-grant: reviewer` (#494).
+#   6. Opt-in, commented: a Migration round-trip for `migration-grant: reviewer` (#494) —
+#      `colab template ci-node --roundtrip` writes it live at copy (#625).
 #
 # LIGHT LANE (#607): this file runs on every push and is what `colab ship` reads. Keep it
 # fast — secret scan, build, typecheck/lint, the fast tests (target: under 5 minutes).
@@ -93,6 +94,14 @@ env:
   # EDIT: npm script to build. Change for monorepos or non-standard scripts. Empty, or a
   # script package.json does not declare, skips the build with a notice (#526).
   BUILD_COMMAND: "build"
+  ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
+  # # EDIT: the command that applies every pending migration to $DATABASE_URL — e.g.
+  # # `npx knex migrate:latest`, `npx dbmate --no-dump-schema up`, `node scripts/migrate.mjs`.
+  # # Empty = the round-trip job is SKIPPED, and a skipped job never passes R: migrations ship
+  # # on a human grant until this is set (#625). Here, not in the job, because a job-level
+  # # `if:` cannot read `env` — the build job hands it on as an output.
+  # ROUNDTRIP_APPLY: ""
+  ##<<< migration round-trip
 
 # Self-hosted runner? The job layout below assumes GitHub-hosted capacity — a
 # fresh machine per job. With few self-hosted agents every job is a queue slot,
@@ -304,6 +313,10 @@ jobs:
     # Re-exported so the opt-in round-trip job below resolves Node exactly once, here.
     outputs:
       node-version: ${{ steps.toolchain.outputs.node-version }}
+  ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
+  #     # `on` once ROUNDTRIP_APPLY is set; the round-trip job runs only then (#625).
+  #     roundtrip: ${{ env.ROUNDTRIP_APPLY != '' && 'on' || 'off' }}
+  ##<<< migration round-trip
     defaults:
       run:
         # EDIT: set to the directory holding package.json if the app is not at the root.
@@ -598,6 +611,17 @@ jobs:
           else
             npm run "$BUILD_COMMAND"
           fi
+  ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
+  #
+  #     # A skipped job prints nothing, so the reason it is skipped is said here (#625).
+  #     - name: Migration round-trip configured?
+  #       run: |
+  #         if [ -z "${ROUNDTRIP_APPLY:-}" ]; then
+  #           echo "::warning::Migration round-trip is skipped: ROUNDTRIP_APPLY is empty in .github/workflows/ci.yml. Until it is set, condition R never passes and every migration ships on a human grant (#625)."
+  #         else
+  #           echo "Migration round-trip: on (ROUNDTRIP_APPLY is set)."
+  #         fi
+  ##<<< migration round-trip
 
   # ---------------------------------------------------------------------------
   # Migration round-trip — OPT-IN (#494). Needed for `migration-grant: reviewer`: condition R
@@ -616,20 +640,26 @@ jobs:
   # migrations with THIS checkout's code and node_modules — a runner whose migrations import
   # app code may need its own ROUNDTRIP_APPLY for that pass.
   #
-  # To adopt: remove the leading `# ` from every line between the two fences, e.g.
+  # To adopt AT COPY (#625) — the same commit that creates the workflows, so no later branch has
+  # to edit .github/workflows/ (such a branch fails R and ships on a human grant):
+  #   colab template ci-node --dest .github/workflows/ci.yml --roundtrip [--roundtrip-apply '<cmd>']
+  # By hand: remove the leading `# ` from every line between EACH pair of fences (four pairs:
+  # the workflow env, the build job's outputs and its last step, this job), e.g.
   #   sed -i '/^  ##>>>/,/^  ##<<</ s/^  # \{0,1\}/  /' .github/workflows/ci.yml
-  # then walk its EDIT points. Kept commented, not behind an `if:`: a job skipped on every run
-  # would cost every repo trunk tree reuse (#511), and a no-op job that ends green would pass
-  # R without testing anything. The branch that uncomments it edits .github/workflows/, so that
-  # one branch fails R and ships on a human grant (a branch never grades itself).
+  # then walk its EDIT points. Kept commented, not merely gated: an adopted job that is skipped
+  # costs the repo trunk tree reuse (#511), so a repo that never runs migrations should not pay it.
+  # Adopted with ROUNDTRIP_APPLY still empty, the job is SKIPPED (fails closed): a skipped leg
+  # never passes R, and CI stays green, so a fresh repo with no migrations yet is not held red.
+  # A no-op job that ended green would pass R without testing anything — never make it one.
   # ---------------------------------------------------------------------------
   ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
   # migrations:
   #   name: Migration round-trip (${{ matrix.engine }})
   #   needs: build
   #   # Explicit result check, not the implicit success(): success() reads EVERY ancestor,
-  #   # including `dedupe`, which is skipped on every ordinary push (#418).
-  #   if: ${{ !cancelled() && needs.build.result == 'success' }}
+  #   # including `dedupe`, which is skipped on every ordinary push (#418). `roundtrip` is `on`
+  #   # only once ROUNDTRIP_APPLY (the workflow env, above) is set — skipped until then (#625).
+  #   if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.roundtrip == 'on' }}
   #   runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
   #   timeout-minutes: 15 # a hung round-trip must not hold the runner for the 360-minute default (#572).
   #   # EDIT: measured (#572): p99 under 4 min on every adopter. Keep it well above your own p99.
@@ -654,10 +684,7 @@ jobs:
   #         --health-timeout 5s
   #         --health-retries 30
   #   env:
-  #     # EDIT: the command that applies every pending migration to $DATABASE_URL — e.g.
-  #     # `npx knex migrate:latest`, `npx dbmate --no-dump-schema up`, `node scripts/migrate.mjs`.
-  #     # Required: an enabled round-trip that applies nothing must not pass R.
-  #     ROUNDTRIP_APPLY: ""
+  #     # ROUNDTRIP_APPLY is in the workflow env at the top of this file (#625).
   #     # EDIT: the prefixes under `migrations:` in .github/project.yml, space-separated.
   #     MIGRATIONS_PATHS: "migrations/"
   #     # EDIT: rows that look like OLD data (NULLs, rows a new foreign key would orphan),

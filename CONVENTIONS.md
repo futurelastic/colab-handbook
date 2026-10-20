@@ -3022,13 +3022,13 @@ properties hold it together:
   sync is not the reviewed one. Ship re-reads CI itself
   and never trusts the recorded `ci-roundtrip:` value. The job is found by the name
   prefix `Migration round-trip` (the legs of `templates/ci-laravel.yml`, or of the opt-in
-  block in `templates/ci-node.yml`, #494). Every leg
+  block in `templates/ci-node.yml` / `ci-python.yml`, #494, #625). A skipped leg fails R. Every leg
   needs a run that completed with success and ran at least one step. The template's job
   rolls back to the oldest migration the branch **adds or modifies** (#507), so a branch
   that only repairs an existing `down()` gets a round-trip that actually runs it, and the
   run's log names every file it exercised. A copy older than that counts added files only:
   its green says nothing about a modified migration, so re-sync it before a reviewer grant
-  relies on it. Node has no canonical migration runner, so ci-node's job runs the repo's own
+  relies on it. Node and Python have no canonical migration runner, so their job runs the repo's own
   forward-only runner three times — fresh, re-applied, and on top of the base's migrations —
   and each schema must equal the first: a forward-only runner has no `down()` to exercise,
   and an edit to an applied migration shows up as a differing schema instead. A repo without
@@ -5024,6 +5024,8 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    and a first final, which is the operator's to set because `colab release cut` refuses
    with none to bump from. `colab adopt` lists these as step-6 lines; the no-production
    row's route is a proposal for the human to confirm, never a choice the agent makes.
+   **Under `migration-grant: reviewer`, copy the CI with its round-trip in the same act** —
+   `colab template <ci-node|ci-python> --roundtrip` (#625; why: [templates/README](templates/README.md#migration-round-trip--have-it-from-the-first-copy)).
 7. **Register the repo** — `colab register`, updating both the audit fleet list and the
    reserved-ports aggregation. Unregistered = invisible to the fleet audit.
 8. **Leave existing branches alone** — grandfathered.
