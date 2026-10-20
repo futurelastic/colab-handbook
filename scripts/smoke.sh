@@ -6,7 +6,7 @@
 #   2. stray control bytes in tracked text,
 #   3. the self-audit, the rule inventory and the normative documents' size budget (#523),
 #      and the refusal gate — every `✗` colab prints names its next command (#532),
-#      and the engine-neutral skill bodies (#531),
+#      the engine-neutral skill bodies (#531), and the GitHub binding against the codec samples (#634),
 #   4. the unit tests for what this branch changed — a tools/lib/<m>.test.js runs when
 #      it, or its module tools/lib/<m>.js, differs from origin/main. Everything else
 #      is left to CI's full run.
@@ -27,6 +27,7 @@ node scripts/check-pack-allowlist.mjs
 node scripts/check-rule-inventory.mjs
 node scripts/check-doc-budget.mjs
 node scripts/check-engine-neutral.mjs
+node scripts/check-github-binding.mjs
 node scripts/check-compat.mjs --base "$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)"   # #644
 env -u NODE_TEST_CONTEXT -u NODE_TEST_WORKER_ID node --test --test-reporter=dot tools/lib/refusal-sites.test.js
 
