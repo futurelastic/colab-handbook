@@ -328,6 +328,14 @@ jobs:
           echo 'run /code-wrap' > skills/code-plan/zz-planted.md
           if node scripts/check-engine-neutral.mjs 2>/dev/null; then echo "gate passed with a planted slash command"; exit 1; fi
           rm -f skills/code-plan/zz-planted.md
+      # The public GitHub binding (#634) may show only wire strings the codec's golden samples hold,
+      # and must show every sample section. The planted copy (one separator changed) proves the gate
+      # can fail; tools/lib/github-binding.test.js proves each finding class.
+      - name: GitHub binding agrees with the codec samples
+        run: |
+          node scripts/check-github-binding.mjs
+          sed 's/^✅ Released$/✅ Released./' bindings/github.md > "$RUNNER_TEMP/planted-binding.md"
+          if node scripts/check-github-binding.mjs "$RUNNER_TEMP/planted-binding.md" 2>/dev/null; then echo "gate passed with a planted drifted wire"; exit 1; fi
       # The stamp heuristic decides whether a repo's file is "ours". A false positive there ends in
       # advice to overwrite that file, so it is the one piece of logic here with unit tests.
       #

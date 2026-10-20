@@ -105,9 +105,9 @@ rewritten. Every rule's id and class is listed in [`docs/rule-inventory.md`](doc
 ## Glossary
 
 Each word below is defined once, here, in the handbook's own terms; a later section links
-here rather than redefining it. The definitions lean on no outside vocabulary. The last
-column only says what carries each thing on GitHub, the issue engine this handbook's tooling
-drives today — an example, never the definition.
+here rather than redefining it. The definitions lean on no outside vocabulary. The last column
+says what carries each thing on GitHub, the issue engine this handbook's tooling drives today —
+an example, never the definition; its exact strings are in [`bindings/github.md`](bindings/github.md).
 
 | Term | Meaning here | On GitHub today |
 |---|---|---|
