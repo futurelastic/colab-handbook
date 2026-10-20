@@ -2407,6 +2407,14 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 |---|---|---|---|---|---|---|
 | S1.preamble.01 | default |  | Keep project.yml flat: no nested maps, no anchors. | Keep it flat. No nested maps, no anchors | project.schema.md | — |
 | S1.preamble.02 | default |  | Anything outside the minimal YAML subset is reported as a parse finding, not half-read. | Anything else is reported as a parse finding rather than half-read. | project.schema.md | — |
+### Key kinds
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S1.keykinds.01 | default |  | Every project.yml key is one of three kinds: a fact, an owner's grant or tool tuning; the kind says who may change it. | Every key below is one of three kinds. | project.schema.md#key-kinds | #641 |
+| S1.keykinds.02 | default |  | `trust-humans` is identity, not a grant, and the grant rule covers it too. | `trust-humans` is identity, not a grant | project.schema.md#key-kinds | #641 |
+| S1.keykinds.03 | default |  | Only a person changes a grant key or `trust-humans`; an agent may only propose the change. | only a person changes a grant key or `trust-humans` | project.schema.md#key-kinds | #641 |
+| S1.keykinds.04 | default |  | A tool may let tuning change without an issue only within the tuning row, never wider. | is never wider than the tuning row above | project.schema.md#key-kinds | #641 |
 
 ### `tier`
 
