@@ -328,6 +328,27 @@ jobs:
           echo 'run /code-wrap' > skills/code-plan/zz-planted.md
           if node scripts/check-engine-neutral.mjs 2>/dev/null; then echo "gate passed with a planted slash command"; exit 1; fi
           rm -f skills/code-plan/zz-planted.md
+      # The public GitHub binding (#634) may show only wire strings the codec's golden samples hold,
+      # and must show every sample section. The planted copy (one separator changed) proves the gate
+      # can fail; tools/lib/github-binding.test.js proves each finding class.
+      - name: GitHub binding agrees with the codec samples
+        run: |
+          node scripts/check-github-binding.mjs
+          sed 's/^✅ Released$/✅ Released./' bindings/github.md > "$RUNNER_TEMP/planted-binding.md"
+          if node scripts/check-github-binding.mjs "$RUNNER_TEMP/planted-binding.md" 2>/dev/null; then echo "gate passed with a planted drifted wire"; exit 1; fi
+      # #644: adopters name the handbook's public surfaces (section anchors, skills, commands,
+      # project.yml keys, codec strings, package paths, engine confs, templates), so none may
+      # disappear without its stub, alias or a minor-release retirement — docs/compat-surfaces.md.
+      # Base = where this branch left trunk; on trunk itself, the commit before the merge. The
+      # removed template proves the gate can fail.
+      - name: Public surfaces stay compatible
+        run: |
+          base="$(git merge-base HEAD origin/main)"
+          [ "$base" = "$(git rev-parse HEAD)" ] && base="$(git rev-parse HEAD^)"
+          node scripts/check-compat.mjs --base "$base"
+          mv templates/README.md "$RUNNER_TEMP/planted-README.md"
+          if node scripts/check-compat.mjs 2>/dev/null; then echo "gate passed with a template removed"; exit 1; fi
+          mv "$RUNNER_TEMP/planted-README.md" templates/README.md
       # The stamp heuristic decides whether a repo's file is "ours". A false positive there ends in
       # advice to overwrite that file, so it is the one piece of logic here with unit tests.
       #
