@@ -73,14 +73,14 @@ consumes a release. Do not create `dev` "to be ready" — see [§10](#10-anti-pa
 
 ### Hard rules and defaults
 
-**A rule is hard only when a gate enforces it.** A hard rule opens with a
-`**[Hard — gate: …]**` marker naming what refuses — a `colab` command or a git hook — and
-it holds whatever a repo's local policy says. Every other rule is a **default**: one way to
-do it, which a repo may refine through a `project.yml` field where one exists, else in its
-local policy (`.colab/skills/<skill>.md`,
-[§8](#local-policy--a-repo-refines-a-skill-without-forking-it-520)). A refinement never
-lowers a hard rule. Until a repo refines a default, its wording stands as written: a
-"must" is still a "must".
+**A rule is hard only when a gate enforces it.** A hard rule opens with a marker,
+`**[Hard <id> — refuse: …]**`: its inventory id, then what must be refused, naming no tool —
+an adopter proves its gate by citing the id in its own tests. It holds whatever a repo's local
+policy says. Every other rule is a **default**: one way to do it, which a repo may refine
+through a `project.yml` field where one exists, else in its local policy
+(`.colab/skills/<skill>.md`, [§8](#local-policy--a-repo-refines-a-skill-without-forking-it-520)).
+A refinement never lowers a hard rule. Until a repo refines a default, its wording stands as
+written: a "must" is still a "must".
 
 The hard set is short:
 
@@ -95,10 +95,10 @@ The hard set is short:
 
 The rest of `colab ship`'s preconditions (trunk CI green and its cure rule and ci-grant
 doors, core-path review), the place-claim and `writes: isolated` refusals, and a few
-`colab adopt` refusals are gated too, and each is marked where it is stated. Every rule's
-class, and each hard rule's gate literal, is listed in
-[`docs/rule-inventory.md`](docs/rule-inventory.md); `scripts/check-rule-inventory.mjs`
-keeps the list and this file in step. Why: [ADR 523](docs/adr/523-conventions-hard-default-and-size-budget.md).
+`colab adopt` refusals are gated too, and each is marked where it is stated. An older marker,
+`**[Hard — gate: …]**`, names the command that refuses; it passes until its section is
+rewritten. Every rule's id and class is listed in [`docs/rule-inventory.md`](docs/rule-inventory.md);
+`scripts/check-rule-inventory.mjs` keeps the list and this file in step. Why: [ADR 523](docs/adr/523-conventions-hard-default-and-size-budget.md).
 
 ---
 
