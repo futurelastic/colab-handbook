@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 // check-engine-neutral — no skill body assumes one coding agent (#531).
 //
-//   node scripts/check-engine-neutral.mjs [dir]      (default: skills/)
+//   node scripts/check-engine-neutral.mjs [dir]      (default: skills/ and guides/)
 //
 // WHY. The skills install into any engine (#530): each engine has its own file under engines/
 // saying how a skill is invoked, whether helper agents exist, and so on. A skill body that writes
 // one engine's slash command, calls one engine's tool by name, or names a vendor's model reads as
 // broken everywhere else — and the coupling creeps back one helpful example at a time. So this
 // scans every .md under skills/ and fails on any of the shapes below. engines/ and the READMEs'
-// engine table are where engine-specific text belongs; they are not scanned.
+// engine table are where engine-specific text belongs; they are not scanned. The role guides
+// (guides/, #642) are what the skills alias to, so they are held to the same rules by default.
 //
 // What fails, one rule each (a rule id is printed with every finding):
 //   slash-invoke   `/<skill-name>` used as a command — name the skill instead ("run code-start").
@@ -45,10 +46,9 @@ function mdFiles(dir) {
   return out.sort();
 }
 
-/** Scan `dir` (a skills folder); returns `[{file, line, rule, text}]`. */
-export function scan(dir) {
-  const skillNames = fs.readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isDirectory()).map((e) => e.name);
+/** Scan `dir` (a skills folder, or a folder of guides naming `skillNames`); returns `[{file, line, rule, text}]`. */
+export function scan(dir, skillNames = fs.readdirSync(dir, { withFileTypes: true })
+  .filter((e) => e.isDirectory()).map((e) => e.name)) {
   const rs = rules(skillNames);
   const findings = [];
   for (const f of mdFiles(dir)) {
@@ -64,13 +64,20 @@ if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
   const dir = path.resolve(process.argv[2] || path.join(root, "skills"));
   if (!fs.existsSync(dir)) { console.error(`check-engine-neutral: no such directory ${dir}`); process.exit(2); }
   const found = scan(dir);
+  // With no argument, the role guides the skills alias to (#642) are held to the same rules,
+  // with the skills' names as the slash-command list.
+  const guides = path.join(root, "guides");
+  if (!process.argv[2] && fs.existsSync(guides)) {
+    const names = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+    found.push(...scan(guides, names));
+  }
   for (const f of found) {
     console.error(`${path.relative(root, f.file)}:${f.line}: [${f.rule}] ${f.text.slice(0, 160)}`);
   }
   if (found.length) {
-    console.error(`check-engine-neutral: ${found.length} engine-specific line(s) in skill bodies — name the skill, ` +
+    console.error(`check-engine-neutral: ${found.length} engine-specific line(s) in skill or guide bodies — name the skill, ` +
       `describe the capability, and leave the engine's syntax to engines/<id>.conf (#531).`);
     process.exit(1);
   }
-  console.log("check-engine-neutral: ok — no skill body names an engine's tool, invocation or model");
+  console.log("check-engine-neutral: ok — no skill or guide body names an engine's tool, invocation or model");
 }

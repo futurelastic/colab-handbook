@@ -11,7 +11,7 @@ description: "Clear out everything finished in ONE repo: find every worktree who
 
 If `.colab/skills/code-sweep.md` exists in this repo, read it before continuing. Local policy
 refines this skill for this repo and wins over the text below where they differ. It never
-changes a `colab` gate.
+changes a `colab` gate. **Role guide (#642):** what to decide is in the **by hand** guide — [`guides/by-hand.md`](../../guides/by-hand.md), *Clean up a repo*; this skill keeps its name and triggers, and its body stays the reference for *how*.
 
 After a few parallel sessions, two things drift apart:
 

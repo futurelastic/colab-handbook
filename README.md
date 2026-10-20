@@ -265,6 +265,7 @@ migration hold with or without it.
 | [`tools/`](tools/) | `colab` — a small CLI (optional): adopt a repo, claim issues, allocate ports, manage worktrees, and merge a finished branch to trunk when the repo grants it. JSON state, zero dependencies. Command reference: [`tools/README.md`](tools/README.md). |
 | [`audit/`](audit/) | An external conformance checker. Reads all your repos — every owner, including local-only ones — and reports drift in a single run. Advisory only. `--identity` also scans public repository descriptions and topics, which no git hook can see. `--batch-history` shows each repo's measured batch landing picture, flagged only against thresholds the repo declares. What each check means: [`audit/README.md`](audit/README.md). |
 | [`skills/`](skills/) | The session flow — see [*Your first session*](#your-first-session). Plain `SKILL.md` folders; `install.sh` links them into each coding agent you choose. |
+| [`guides/`](guides/) | The role guides — author, reviewer, coordinator, cure, by hand — each written as the files that role leaves for the next. The judgement only; the skills keep their names and point to their guide. |
 | [`engines/`](engines/) | One small data file per agent runtime: where its user-level skills go, how a skill is invoked, what it supports. Adding an agent runtime is adding a file — [`engines/README.md`](engines/README.md). |
 | [`install.sh`](install.sh) | Sets up **your machine**: skills, the `colab` CLI, the pre-commit hook, the fleet list. Idempotent; `--dry` shows everything first. |
 
