@@ -125,8 +125,7 @@ it, never a substitute.
 
 **Adoption, in the order a run needs it** — full text: [2-adoption-details.md](2-adoption-details.md).
 
-- **The checklist is [2-adoption-procedure.md](2-adoption-procedure.md)** (moved from
-  [`CONVENTIONS.md` §9](../../CONVENTIONS.md#9-adopting-this) by #640, which keeps the contract) —
+- **The checklist is [2-adoption-procedure.md](2-adoption-procedure.md)** (§9 keeps the contract, #640) —
   work it in order; never copy its steps elsewhere in this skill or into the Issue (two copies drift).
 - **Ordering trap:** run `colab labels --ensure` *before* the claim — `colab claim` keeps a local
   claim silently when the label does not exist yet.

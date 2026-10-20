@@ -18,6 +18,7 @@ adopter with its own tooling follows `CONVENTIONS.md` and may ignore this direct
 | [`readiness.md`](readiness.md) | writing and reading the dependency graph, the checked and graph-empty markers, the `wake:` vocabulary, the `shape:` field, the disposition marker and who may apply it | [§5, the claims and decisions contract](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), items 3–6 |
 | [`decisions.md`](decisions.md) | recording and reopening a ruling, both labels at once, the options block, the `Mockup:` line, an ask said once, the decision box | [§5, the claims and decisions contract](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), items 7–8 |
 | [`grants.md`](grants.md) | the human flag, the migration grant's roles, `trust-humans` and the reviewer conditions | [§5, the claims and decisions contract](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), item 9 |
+| [`adoption.md`](adoption.md) | the human step of `colab adopt`, what it executes and how `--land` lands the descriptor; `adopt --local`, the integration branch and `colab deliver` | [§9, the adoption contract](../../CONVENTIONS.md#9-adopting-this), items 4, 5 and 8 |
 | [`quick-reference.md`](quick-reference.md) | the `gh`, `git` and `colab` commands for starting, finishing and releasing work | the whole of [`CONVENTIONS.md`](../../CONVENTIONS.md#11-quick-reference); formerly §11 (#640) |
 
 ## How a section moves here (#635, the pattern #636–#640 follow)

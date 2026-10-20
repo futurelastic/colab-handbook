@@ -103,19 +103,26 @@ test('a rule may move to the CLI\'s docs under tools/docs/, and its marker there
   assert.ok(check({ root: other }).findings.some((f) => /row C\.ship\.01 .*must live in .*tools\/docs\//.test(f)));
 });
 
-test('an adoption step may move to the handbook-sync skill, and its marker there is checked; another skill is no home (#640)', async () => {
+test('a default step may move to the handbook-sync skill; a hard rule may not, its marker there is still seen; another skill is no home (#640)', async () => {
   const { check } = await load();
-  const conv = CONV.replace('**[Hard — gate: colab ship]** A human must trigger the trunk merge on a manual repo.\n\n', '');
-  const to = (dest) => GOOD.map((r) => r.startsWith('| C.ship.01') ? r.replace('| CONVENTIONS.md |', `| ${dest} |`) : r);
-  const dir = repo({ conventions: conv, inventoryRows: to('skills/handbook-sync/2-adoption-procedure.md') });
+  const conv = CONV.replace('- Claim the issue before you start, never when finishing.\n\n', '');
+  const to = (id, dest) => GOOD.map((r) => r.startsWith(`| ${id}`) ? r.replace('| CONVENTIONS.md |', `| ${dest} |`) : r);
+  const dir = repo({ conventions: conv, inventoryRows: to('C.claim.01', 'skills/handbook-sync/2-adoption-procedure.md') });
   fs.mkdirSync(path.join(dir, 'skills', 'handbook-sync'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'skills', 'handbook-sync', '2-adoption-procedure.md'), '# adopt\n\n**[Hard — gate: colab ship]** A human must trigger the trunk merge on a manual repo.\n\n**[Hard — gate: colab claim]** An unaccounted marker.\n');
-  const { findings } = check({ root: dir });
-  assert.deepStrictEqual(findings, ['skills/handbook-sync/2-adoption-procedure.md:5: a Hard marker no inventory row accounts for — add the rule\'s row (class hard)']);
-  const other = repo({ conventions: conv, inventoryRows: to('skills/code-ship/SKILL.md') });
+  const file = path.join(dir, 'skills', 'handbook-sync', '2-adoption-procedure.md');
+  fs.writeFileSync(file, '# adopt\n\n- Claim the issue before you start, never when finishing.\n');
+  assert.deepStrictEqual(check({ root: dir }).findings, []);
+  fs.appendFileSync(file, '\n**[Hard — gate: colab claim]** An unaccounted marker.\n');
+  assert.deepStrictEqual(check({ root: dir }).findings, ['skills/handbook-sync/2-adoption-procedure.md:5: a Hard marker no inventory row accounts for — add the rule\'s row (class hard)']);
+  // A hard rule names the gate that refuses: tool text, so it stays under tools/docs/.
+  const hard = repo({ conventions: CONV.replace('**[Hard — gate: colab ship]** A human must trigger the trunk merge on a manual repo.\n\n', ''), inventoryRows: to('C.ship.01', 'skills/handbook-sync/2-adoption-procedure.md') });
+  fs.mkdirSync(path.join(hard, 'skills', 'handbook-sync'), { recursive: true });
+  fs.writeFileSync(path.join(hard, 'skills', 'handbook-sync', '2-adoption-procedure.md'), '# adopt\n\n**[Hard — gate: colab ship]** A human must trigger the trunk merge on a manual repo.\n');
+  assert.ok(check({ root: hard }).findings.some((f) => /row C\.ship\.01 .*a hard rule must live in .*under tools\/docs\/, not/.test(f)));
+  const other = repo({ conventions: conv, inventoryRows: to('C.claim.01', 'skills/code-ship/SKILL.md') });
   fs.mkdirSync(path.join(other, 'skills', 'code-ship'), { recursive: true });
-  fs.writeFileSync(path.join(other, 'skills', 'code-ship', 'SKILL.md'), '# ship\n\n**[Hard — gate: colab ship]** A human must trigger the trunk merge on a manual repo.\n');
-  assert.ok(check({ root: other }).findings.some((f) => /row C\.ship\.01 .*must live in .*skills\/handbook-sync\//.test(f)));
+  fs.writeFileSync(path.join(other, 'skills', 'code-ship', 'SKILL.md'), '# ship\n\n- Claim the issue before you start, never when finishing.\n');
+  assert.ok(check({ root: other }).findings.some((f) => /row C\.claim\.01 .*must live in .*skills\/handbook-sync\//.test(f)));
 });
 
 test('duplicate ids, unknown classes and an unescaped pipe are findings', async () => {

@@ -2864,8 +2864,9 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
 
 Adoption is a procedure, and a procedure lives with the skill that walks it:
 [`skills/handbook-sync/2-adoption-procedure.md`](skills/handbook-sync/2-adoption-procedure.md)
-holds every step, command and trap, moved there verbatim by #640. This section keeps what an
-adoption must leave true, in words that name no tool.
+holds every step, command and trap, moved there verbatim by #640 (the human-gated mechanics of
+the adoption tool sit in [`tools/docs/adoption.md`](tools/docs/adoption.md)). This section keeps what
+an adoption must leave true, in words that name no tool.
 
 **The adoption contract (#640)** — the rules the procedure serves:
 
