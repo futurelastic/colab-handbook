@@ -1,0 +1,181 @@
+# Publish downloads — TEMPLATE. Copy me into your repo at .github/workflows/publish-downloads.yml.
+#
+# This is a starting point, not a dependency. Once you copy it, YOU OWN THIS FILE.
+# Edit it freely; nothing calls this file remotely and nothing will update it for you.
+#
+# EDIT POINTS are marked `# EDIT:` — walk them once after copying.
+#
+# It needs its script in your repo (copy-and-own as well), at the path PUBLISH_SCRIPT names below:
+#   colab template publish-downloads.mjs --dest .github/downloads/publish-downloads.mjs
+#
+# For: a repo whose FINAL releases carry files people install on their own machines (a .dmg, a .deb, an
+# .msi, a tarball …), published to a self-hosted downloads site — one folder per app, the newest finals kept
+# by the site (colab-handbook #648; docs/downloads.md has the whole contract). What is published comes from
+# the repo's `.github/project.yml` `downloads:` block plus a manifest.json the site's portal lists the app
+# from; the script's header documents both.
+#
+# WHAT IT DOES for a final tag vX.Y.Z whose files are on its GitHub Release: uploads them with rsync over SSH
+# in the order that keeps a half-finished run harmless — the version folder (with a combined SHA256SUMS last
+# inside it, written only after every file read back over HTTPS against it), then the installers with the
+# site address stamped in, then manifest.json, then latest.json LAST — and reads it all back. A published
+# version is immutable: nothing is ever replaced, and a build whose SHA256SUMS differs from the published
+# one is refused. A re-run of a complete version verifies and sends nothing. NEVER a candidate (-rc.N).
+#
+# WHEN IT RUNS.
+#   - Chained: your release/build workflow calls this one as its LAST job for a final tag, after the jobs
+#     that attach the files to the Release, and only when none of them failed:
+#         downloads:
+#           needs: [build-macos, build-linux]          # the jobs that upload the Release's files
+#           if: ${{ !contains(github.ref_name, '-') }}  # finals only
+#           uses: ./.github/workflows/publish-downloads.yml
+#           with: { tag: '${{ github.ref_name }}' }
+#           secrets: inherit
+#     (A tag pushed or a Release published with GITHUB_TOKEN starts no other workflow, so a chained call is
+#     the reliable trigger — not `on: release`.) Nothing is published from an incomplete Release: the script
+#     names what is missing and uploads nothing.
+#   - By hand (Actions → Run workflow) with a tag: retries a failed publish, finishes a partial one (only the
+#     missing files are sent), re-checks a complete one. `dry_run` stages and lists — it uploads nothing.
+#   The project.yml, manifest, installers and script are read from THIS run's checkout: the tag's commit when
+#   chained, the branch you dispatch from when run by hand.
+#
+# THE RUNNER. The read-back goes over HTTPS to the site, which may be reachable only on a private network —
+# a GitHub-hosted runner then cannot read anything back. `runs-on` is an input: a bare label or a JSON label
+# list of a runner that can reach the site. If the site's name does not resolve there, the run fails saying
+# so, before anything is sent. The runner needs `gh`, `rsync` and `ssh`; Node is set up by the job.
+#
+# CONFIGURATION — per repo, never shared between repos:
+#   secrets   DOWNLOADS_SSH_KEY · DOWNLOADS_SSH_HOST · DOWNLOADS_SSH_PORT · DOWNLOADS_SSH_USER ·
+#             DOWNLOADS_KNOWN_HOSTS — an upload account restricted to this app's folder, that cannot delete
+#   variable  DOWNLOADS_URL — the site's root address (https). The script appends /<app>; no host is ever
+#             written in the repository.
+#
+# THIS FILE DOES NOT CHANGE YOUR REPO'S EXPOSURE (OR LEGACY TIER): it publishes files a final already made.
+name: Publish downloads
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: false
+      runs-on:
+        type: string
+        default: '["self-hosted","linux"]' # EDIT: a runner that can reach the downloads site
+      reserved:
+        type: string
+        default: '' # EDIT: names the site keeps for itself, refused as an app slug (space-separated)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing FINAL tag to publish, e.g. v1.4.0 (a candidate is refused)'
+        type: string
+        required: true
+      dry_run:
+        description: 'Dry run: stage and list what would be sent — nothing is uploaded'
+        type: boolean
+        default: false
+      runs-on:
+        description: 'Runner: a bare label or a JSON label list of a runner that can reach the site'
+        type: string
+        default: '["self-hosted","linux"]' # EDIT: keep in step with the workflow_call default
+      reserved:
+        description: 'Names the site reserves for itself, refused as an app slug (space-separated)'
+        type: string
+        default: '' # EDIT: keep in step with the workflow_call default
+
+permissions: {}
+
+concurrency:
+  group: publish-downloads
+  cancel-in-progress: false
+
+env:
+  PUBLISH_SCRIPT: .github/downloads/publish-downloads.mjs # EDIT: where you copied the script
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.tag }}
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    timeout-minutes: 45 # EDIT: above your own p99 — large installers over a slow link take a while
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      DOWNLOADS_URL: ${{ vars.DOWNLOADS_URL }}
+      DOWNLOADS_RESERVED: ${{ inputs.reserved }}
+      DOWNLOADS_SSH_HOST: ${{ secrets.DOWNLOADS_SSH_HOST }}
+      DOWNLOADS_SSH_PORT: ${{ secrets.DOWNLOADS_SSH_PORT }}
+      DOWNLOADS_SSH_USER: ${{ secrets.DOWNLOADS_SSH_USER }}
+    steps:
+      - name: A final tag only
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$TAG is not a final tag (vX.Y.Z): only finals are published"; exit 1; }
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22' # EDIT: any Node >= 18 runs the script
+
+      - name: The tools the run needs
+        run: |
+          set -euo pipefail
+          need="gh"; [ "$DRY_RUN" = "true" ] || need="gh rsync ssh"
+          for t in $need; do command -v "$t" >/dev/null || { echo "::error::$t is not on this runner — pick one that has it (the runs-on input)"; exit 1; }; done
+          node "$PUBLISH_SCRIPT" check
+
+      - name: Download the Release's files
+        id: assets
+        run: |
+          set -euo pipefail
+          DIR="$RUNNER_TEMP/assets"; rm -rf "$DIR"; mkdir -p "$DIR"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' > "$RUNNER_TEMP/release-assets.txt"
+          while IFS= read -r name; do
+            if grep -qxF -- "$name" "$RUNNER_TEMP/release-assets.txt"; then
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$DIR"
+            fi
+          done < <(node "$PUBLISH_SCRIPT" names "$TAG")
+          ls -l "$DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Write the upload key (this run only)
+        if: inputs.dry_run != true
+        env:
+          KEY: ${{ secrets.DOWNLOADS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DOWNLOADS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [ -n "$KEY" ] && [ -n "$KNOWN_HOSTS" ] || { echo "::error::the downloads upload secrets are not set on this repo"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/downloads-ssh"
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/downloads-ssh/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/downloads-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/downloads-ssh/key" "$RUNNER_TEMP/downloads-ssh/known_hosts"
+
+      - name: Publish
+        env:
+          ASSETS: ${{ steps.assets.outputs.dir }}
+          DOWNLOADS_KEY_FILE: ${{ runner.temp }}/downloads-ssh/key
+          DOWNLOADS_KNOWN_HOSTS_FILE: ${{ runner.temp }}/downloads-ssh/known_hosts
+        run: |
+          set -euo pipefail
+          FLAG=""; [ "$DRY_RUN" = "true" ] && FLAG="--dry-run"
+          # The script's own status is kept: a `{ …; echo; } | tee` group would end on the echo and go green.
+          status=0
+          { echo "### Downloads → $TAG"; echo; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          node "$PUBLISH_SCRIPT" publish "$TAG" "$ASSETS" $FLAG 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Remove the upload key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/downloads-ssh"

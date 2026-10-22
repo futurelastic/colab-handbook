@@ -157,3 +157,12 @@ migration round-trip, which needs its timeout once someone uncomments it.
   prints nothing for a job that declares one.
 - A copy that declines the graft is reported with its reason on the Issue, like any other declined
   graft (§4).
+
+### A hand-written publish to a downloads site (#648)
+
+A workflow that rsyncs a final's files to a self-hosted downloads site with its own script is a copy of
+the shared `publish-downloads` template waiting to happen ([§6, *Downloads*](../../CONVENTIONS.md#downloads--finals-to-a-self-hosted-site-648)).
+Offer the move as a proposal per repo, following [`docs/downloads.md`](../../docs/downloads.md),
+*Moving an existing publish script onto the template* — never a blind overwrite: the old script's file
+list becomes the `downloads:` block, and the repo's secrets are renamed by the operator, not by the sync.
+Verify with a `dry_run` dispatch; a version already on the site then reads back as a verified no-op.

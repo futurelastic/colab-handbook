@@ -281,7 +281,7 @@ and the audit is what catches it:
   audit warns when a *private* repository's workflows upload Release assets (`gh release upload`,
   `gh release create <tag> <files>`, a release action given `files:`). A compiled tool moves its
   binaries to dist refs (`templates/dist-refs.yml` + `templates/npx-launcher.mjs`, CONVENTIONS.md
-  §6 *Distribution*); an asset that is only a by-product (an SBOM) can stay — it is a warning.
+  §6 *Distribution*); an asset that is only a by-product (an SBOM) can stay — it is a warning. A hand-written publish to a downloads site: [offer the shared template](7-convention-drift.md#a-hand-written-publish-to-a-downloads-site-648).
 - **A tag-triggered deploy copy must exclude pre-release tags (#513):** `- "!v*.*.*-*"` right after `- "v*.*.*"`, else every candidate tag deploys; the audit fails it under `deploy: tag` — [graft and exemptions](7-convention-drift.md#a-tag-triggered-deploy-copy-must-exclude-pre-release-tags-513).
 - **A long-running CI or deploy job should declare `timeout-minutes` (#577):** a `deploy-*` job without one is a finding; a `ci-*` `build` / live `migrations` job without one is a suggestion (#607) — offer the template's value plus its `# EDIT:` note, sized by the adopter above their own p99, and never overwrite a value the copy has — [check and graft](7-convention-drift.md#a-long-running-ci-or-deploy-job-must-declare-timeout-minutes-577).
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.

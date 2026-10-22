@@ -119,6 +119,7 @@ design-exploration-files-its-issue-first--before-the-first-mockup-not-after
 6-releases
 distribution--one-install-surface-npx-442
 services-over-npx--init-update-rollback-465
+downloads--finals-to-a-self-hosted-site-648
 7-ci-and-toolchain
 what-ship-reads--the-ci-contract-607
 two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607
@@ -229,6 +230,7 @@ holds
 exposure
 channels
 distribution
+downloads
 ceremony
 writes
 contention
@@ -348,6 +350,8 @@ templates/pre-commit-dispatch
 templates/pre-commit-identity
 templates/pre-commit-instruction-files
 templates/pre-push-guard
+templates/publish-downloads.mjs
+templates/publish-downloads.yml
 templates/release-auto.yml
 templates/release-tag.yml
 templates/repo-CLAUDE-block.md

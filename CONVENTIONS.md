@@ -2533,6 +2533,13 @@ installed side by side, an update that fails its health check switches back, and
 state and secrets live outside the install. The verbs and the template:
 [`tools/docs/distribution.md`](tools/docs/distribution.md#services-over-npx--init-update-rollback-465).
 
+### Downloads — finals to a self-hosted site (#648)
+
+Files a person installs on their own machine, published to a self-hosted downloads site, are only ever a
+final's, and a published version is never replaced. A site's newest-version pointer moves only forward and
+only after the version's files and checksums read back complete. A repo opts in with `downloads:` in its
+descriptor; the contract and the shared template: [`docs/downloads.md`](docs/downloads.md).
+
 ---
 
 ## 7. CI and toolchain

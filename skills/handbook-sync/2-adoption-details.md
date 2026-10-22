@@ -211,6 +211,13 @@ extra step-6 lines — read them there; this section adds only the judgement aro
   secrets are set. Arming a deploy is never adoption's act. When the operator does arm it,
   the `"!v*.*.*-*"` line right after `"v*.*.*"` comes with the trigger (#513): a copy that
   keeps only the positive pattern deploys every release-candidate tag.
+- **The downloads template**, where finals carry files people install on their own machines and
+  they go to a self-hosted downloads site ([§6, *Downloads*](../../CONVENTIONS.md#downloads--finals-to-a-self-hosted-site-648)):
+  `colab template publish-downloads` and `colab template publish-downloads.mjs --dest
+  .github/downloads/publish-downloads.mjs`, a `downloads:` block and a `manifest.json`
+  ([`docs/downloads.md`](../../docs/downloads.md)), and the release workflow's last job calling it.
+  `runs-on` is a runner that can reach the site — the same preflight as above. The secrets and
+  the upload account are the operator's; verify with a `dry_run` dispatch, never a real one.
 - **The first final** is the operator's. `colab release cut` refuses with no final to bump
   from, so tell them in the report, with the command; tag `v0.1.0` yourself only when told to.
 

@@ -17,7 +17,7 @@ it matters.
 
 | kind | what the key says | keys |
 |---|---|---|
-| **fact** | something true of the repo, which a reader can check against the repo | `tier`, `trunk`, `production`, `deploy`, `runbook`, `stack`, `integration`, `releaseBranch`, `owner`, `migrations`, `room`, `exposure`, `channels`, `distribution`, `ceremony`, `writes`, `contention`, `release`, `live-env`, `tree-reuse`, `ci-docs-skip`, `docs-only-paths`, `instruction-files`, `integration-profile`, `gate`, `node`, `php`, `python` |
+| **fact** | something true of the repo, which a reader can check against the repo | `tier`, `trunk`, `production`, `deploy`, `runbook`, `stack`, `integration`, `releaseBranch`, `owner`, `migrations`, `room`, `exposure`, `channels`, `distribution`, `ceremony`, `writes`, `contention`, `release`, `downloads`, `live-env`, `tree-reuse`, `ci-docs-skip`, `docs-only-paths`, `instruction-files`, `integration-profile`, `gate`, `node`, `php`, `python` |
 | **owner's grant** | who may take a consequential action here without a person's word each time | `autonomy`, `promotion`, `migration-grant`, `ci-grant`, and `release`'s `final-grant` |
 | **tool tuning** | how a tool behaves here; every valid value is safe to choose | `ports`, `worktreePorts`, `ship-batch`, `ship-batch-wait`, `ship-batch-steps`, `ci-wait-factor`, `thresholds`, `holds`, `generated`, `branchPrefix`, `ship-gate-workflows`, `ship-ignore-workflows`, `heavy-workflow` |
 
@@ -968,6 +968,24 @@ An unknown value is a **finding** (`fail`), like every enum. A declared tool wit
 **advisory** (`warn`): the evidence is text in this repository's workflows, so a publish step
 in a reusable workflow that lives elsewhere is invisible to it. Not coupled to `exposure` —
 §6 says *every* distributed tool installs with npx, a team-only tool included.
+
+### `downloads` — optional
+
+```yaml
+downloads:
+  app: myapp                         # the app's folder on the downloads site
+  files: [myapp-{v}.tgz, MyApp_{v}_x64.dmg]   # every final carries these; {v} is X.Y.Z
+  optional: [MyApp_{v}_x64.msi]      # published when the Release has it
+  installers: [scripts/install.sh]   # stamped with the site root, uploaded beside latest.json
+  manifest: .github/downloads/manifest.json   # the default
+```
+
+Says that this repository publishes its **finals' files to a self-hosted downloads site**, and
+which. Read by the [`publish-downloads`](templates/publish-downloads.mjs) template, which refuses —
+before uploading anything — an `app` that is not `[a-z0-9][a-z0-9-]*`, starts with `_` or is a name
+the site reserves, a file name with a path in it, a listed file missing from the Release, and an
+invalid manifest. Absent means the repo publishes nothing there; the audit reads no rule from it.
+The site, the order and the manifest's fields: [`docs/downloads.md`](docs/downloads.md).
 
 ### `ci` — deliberately not a field
 
