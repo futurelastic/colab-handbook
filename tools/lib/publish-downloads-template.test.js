@@ -21,6 +21,10 @@
  *     site over HTTP: dependencies first, each once, a satisfied one left alone, a cycle / a missing / a failing
  *     dependency stops before the app, INSTALL_SKIP_REQUIRES=1 installs only the app. The PowerShell one runs where
  *     `pwsh` is on PATH (CI's Linux runners carry it).
+ *   - the portal fields (#655): every new field optional and shape-checked; the icon and screenshot files checked
+ *     (present, <= 1 MB, bytes matching the name, a square icon, one name each) at load; published inside the version
+ *     folder and its SHA256SUMS but not latest.json's `files`; read back; the site's manifest names them `X.Y.Z/<name>`
+ *     and has `<site>` stamped; a changed image of a published version refuses, naming it.
  */
 
 const test = require('node:test');
@@ -187,7 +191,9 @@ test('publish → order, read-back, stamped installer; re-run is a verified no-o
   assert.deepStrictEqual(fs.readdirSync(path.join(fx.site, '1.2.0')).sort(), ['Probe_1.2.0_x64.dmg', 'SHA256SUMS', 'probe-1.2.0.tgz']);
   assert.match(fs.readFileSync(path.join(fx.site, 'install.sh'), 'utf8'), /BASE='https:\/\/dl\.example\.invalid'/);
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(fx.site, 'latest.json'), 'utf8')).version, '1.2.0');
-  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(fx.site, 'manifest.json'), 'utf8')), MANIFEST);
+  // the site's copy has <site> replaced by the site root (#655); the repo's keeps the token
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(fx.site, 'manifest.json'), 'utf8')),
+    { ...MANIFEST, install: { ...MANIFEST.install, linux: { steps: [`curl -fsSL ${BASE}/probe/install.sh | sh`] } } });
 
   const again = await run(fx);
   assert.deepStrictEqual(again.calls, [], 'a re-run of a complete version calls rsync zero times');
@@ -519,4 +525,137 @@ test('the reference PowerShell installer, run as `irm | iex`, leaves the session
   } finally {
     await site.close();
   }
+});
+
+// ── portal fields (#655) ─────────────────────────────────────────────────────────────────────────
+
+/** The first bytes of a PNG of w×h: what the script reads (signature, IHDR). */
+function png(w, h, pad = 0) {
+  const ihdr = Buffer.alloc(25);
+  ihdr.writeUInt32BE(13, 0); ihdr.write('IHDR', 4, 'latin1'); ihdr.writeUInt32BE(w, 8); ihdr.writeUInt32BE(h, 12);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ihdr, Buffer.alloc(pad)]);
+}
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+
+const PORTAL = {
+  ...MANIFEST,
+  description: { en: 'Probe watches **one** thing.\n\n- fast\n- small\n\nSee [the guide](https://example.invalid/guide).', vi: 'Probe theo dõi *một* thứ.' },
+  icon: 'media/icon.png',
+  screenshots: [
+    { file: 'media/main.png', alt: 'The main window', caption: { en: 'Main', vi: 'Chính' }, theme: 'light' },
+    { file: 'media/dark.jpg', alt: 'The main window, dark', theme: 'dark' },
+  ],
+  examples: [{ caption: 'Check a host', command: 'probe check example.invalid', output: 'ok  12 ms\n' }, { caption: 'Version', command: 'probe --version' }],
+  install: {
+    ...MANIFEST.install,
+    prompt: { en: 'Install Probe from <site>/probe — read <site>/probe/manifest.json and follow it.' },
+    handover: ['Open Probe and sign in to <site>'],
+  },
+  listed: false,
+};
+
+/** The fixture with PORTAL's manifest and its image files beside it (`images` overrides a file's bytes). */
+function portalFixture({ manifest = PORTAL, images = {} } = {}) {
+  const fx = fixture({ manifest });
+  const dir = path.join(fx.repo, '.github', 'downloads', 'media');
+  fs.mkdirSync(dir, { recursive: true });
+  const files = { 'icon.png': png(256, 256), 'main.png': png(1280, 800), 'dark.jpg': JPEG, ...images };
+  for (const [n, b] of Object.entries(files)) if (b !== null) fs.writeFileSync(path.join(dir, n), b);
+  return fx;
+}
+
+test('portal fields: all optional, each shape-checked, every problem named', async () => {
+  const m = await load();
+  assert.doesNotThrow(() => m.validateManifest(MANIFEST), 'a manifest without them stays valid');
+  assert.doesNotThrow(() => m.validateManifest(PORTAL));
+  assert.doesNotThrow(() => m.validateManifest({ ...PORTAL, icon: 'brand/icon.svg', listed: true }));
+  const bad = (patch, ...want) => assert.throws(() => m.validateManifest({ ...PORTAL, ...patch }),
+    (e) => want.every((w) => w.test(e.message)) || assert.fail(e.message));
+  bad({ description: '<b>hi</b>' }, /description: raw HTML/);
+  bad({ description: { en: '# Title\n\n![x](https://a/b.png)', vi: '```\ncode\n```' } },
+    /description\.en: no headings/, /description\.en: no inline images/, /description\.vi: no code blocks/);
+  bad({ description: 'see [it](http://plain.invalid)' }, /the link "http:\/\/plain\.invalid" is not an https/);
+  bad({ description: 'x'.repeat(2001) }, /longer than 2000/);
+  bad({ icon: '../icon.png' }, /icon: "\.\.\/icon\.png" is not a path inside/);
+  bad({ icon: 'icon.jpg' }, /icon: "icon\.jpg" is not a \.png \/ \.svg file/);
+  bad({ screenshots: Array(7).fill(PORTAL.screenshots[0]) }, /screenshots: a list of at most 6/);
+  bad({ screenshots: [{ file: 'a.gif', alt: '', theme: 'sepia', zoom: 2 }] },
+    /screenshots\[0\]\.zoom: unknown/, /screenshots\[0\]\.file: "a\.gif"/, /screenshots\[0\]\.alt: a one-line text is required/, /screenshots\[0\]\.theme/);
+  bad({ examples: [{ command: 'a\nb', output: Array(12).fill('line').join('\n') }] },
+    /examples\[0\]\.caption/, /examples\[0\]\.command: one line/, /examples\[0\]\.output: more than 10 lines/);
+  bad({ examples: Array(7).fill(PORTAL.examples[1]) }, /examples: a list of at most 6/);
+  bad({ install: { prompt: 'x', handover: [] } }, /install: an object keyed by platform/);
+  bad({ install: { ...PORTAL.install, prompt: '', handover: [] } }, /install\.prompt: a text/, /install\.handover: a non-empty list/);
+  bad({ listed: 'no' }, /listed: true or false/);
+});
+
+test('portal fields: the image files are checked when the repo is loaded, and `check` says so', async () => {
+  const m = await load();
+  const ok = portalFixture();
+  assert.doesNotThrow(() => m.loadRepo(ok.repo));
+  const c = spawnSync(process.execPath, [SCRIPT, 'check', '--root', ok.repo], { encoding: 'utf8' });
+  assert.strictEqual(c.status, 0, c.stderr);
+  assert.match(c.stdout, /valid, 3 image\(s\), unlisted$/m);
+  const refuses = (opts, re) => assert.throws(() => m.loadRepo(portalFixture(opts).repo), re);
+  refuses({ images: { 'main.png': null } }, /screenshots\[0\]\.file media\/main\.png: no such file next to \.github\/downloads\/manifest\.json/);
+  refuses({ images: { 'main.png': png(1280, 800, 1024 * 1024) } }, /media\/main\.png: \d+ bytes, over the 1048576-byte limit/);
+  refuses({ images: { 'dark.jpg': png(10, 10) } }, /media\/dark\.jpg: its bytes are a png, not the jpeg its name says/);
+  refuses({ images: { 'main.png': Buffer.from('not an image') } }, /its bytes are not an image/);
+  refuses({ images: { 'icon.png': png(256, 128) } }, /icon media\/icon\.png: 256×128, an icon is square/);
+  const svg = (vb) => Buffer.from(`<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"${vb}><rect/></svg>`);
+  const svgIcon = { ...PORTAL, icon: 'media/icon.svg' };
+  assert.doesNotThrow(() => m.loadRepo(portalFixture({ manifest: svgIcon, images: { 'icon.svg': svg(' viewBox="0 0 64 64"') } }).repo));
+  refuses({ manifest: svgIcon, images: { 'icon.svg': svg('') } }, /an SVG icon needs a viewBox/);
+  refuses({ manifest: svgIcon, images: { 'icon.svg': svg(' viewBox="0 0 64 32"') } }, /64×32, an icon is square/);
+  const twins = { ...PORTAL, screenshots: [...PORTAL.screenshots, { file: 'other/main.png', alt: 'x' }] };
+  const fx = portalFixture({ manifest: twins });
+  fs.mkdirSync(path.join(fx.repo, '.github', 'downloads', 'other'));
+  fs.writeFileSync(path.join(fx.repo, '.github', 'downloads', 'other', 'main.png'), png(10, 10));
+  assert.throws(() => m.loadRepo(fx.repo), /another image is also named main\.png/);
+});
+
+test('portal fields: images go in the version folder and SHA256SUMS, not latest.json; the site\'s manifest names them there', async () => {
+  const m = await load();
+  const fx = portalFixture();
+  const { config, manifest } = m.loadRepo(fx.repo);
+  const outDir = tmp('pd-out-');
+  const staged = await m.stage({ tag: 'v1.2.0', assetsDir: fx.assets, outDir, baseUrl: BASE, root: fx.repo, config, manifest });
+  assert.deepStrictEqual(fs.readdirSync(path.join(outDir, '1.2.0')).sort(),
+    ['Probe_1.2.0_x64.dmg', 'SHA256SUMS', 'dark.jpg', 'icon.png', 'main.png', 'probe-1.2.0.tgz']);
+  assert.deepStrictEqual(Object.keys(m.parseSums(Buffer.from(staged.sums))).sort(),
+    ['Probe_1.2.0_x64.dmg', 'dark.jpg', 'icon.png', 'main.png', 'probe-1.2.0.tgz']);
+  assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(outDir, 'latest.json'), 'utf8')).files).sort(),
+    ['Probe_1.2.0_x64.dmg', 'probe-1.2.0.tgz'], 'latest.json lists what an installer downloads, no images');
+  const site = JSON.parse(fs.readFileSync(path.join(outDir, 'manifest.json'), 'utf8'));
+  assert.strictEqual(site.icon, '1.2.0/icon.png');
+  assert.deepStrictEqual(site.screenshots.map((s) => s.file), ['1.2.0/main.png', '1.2.0/dark.jpg']);
+  assert.strictEqual(site.screenshots[0].alt, 'The main window');
+  assert.strictEqual(site.install.prompt.en, `Install Probe from ${BASE}/probe — read ${BASE}/probe/manifest.json and follow it.`);
+  assert.deepStrictEqual(site.install.handover, [`Open Probe and sign in to ${BASE}`]);
+  assert.strictEqual(site.listed, false);
+  assert.doesNotThrow(() => m.validateManifest(site), 'the site\'s copy is itself a valid manifest (checkRequires reads it)');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(fx.repo, '.github', 'downloads', 'manifest.json'), 'utf8')).icon,
+    'media/icon.png', 'the repo\'s manifest is not changed');
+  // an image with a binary's name refuses
+  const clash = portalFixture({ manifest: { ...PORTAL, icon: 'media/probe-1.2.0.png' }, images: { 'probe-1.2.0.png': png(8, 8) } });
+  fs.writeFileSync(path.join(clash.assets, 'probe-1.2.0.png'), 'a binary');
+  const cfg = m.loadRepo(clash.repo);
+  await assert.rejects(m.stage({ tag: 'v1.2.0', assetsDir: clash.assets, outDir: tmp('pd-out-'), baseUrl: BASE, root: clash.repo,
+    config: { ...cfg.config, optional: ['probe-{v}.png'] }, manifest: cfg.manifest }), /the image probe-1\.2\.0\.png has the name of a file of this version/);
+});
+
+test('portal fields: published and read back; a re-run is a no-op; a changed image of a published version refuses, naming it', { skip: !HAS_RSYNC && 'rsync not on PATH' }, async () => {
+  const fx = portalFixture();
+  const first = await run(fx);
+  for (const n of ['icon.png', 'main.png', 'dark.jpg']) {
+    assert.ok(first.result.uploaded.includes(`1.2.0/${n}`), `${n} read back as uploaded`);
+    assert.ok(fs.readFileSync(path.join(fx.site, '1.2.0', n)).equals(fs.readFileSync(path.join(fx.repo, '.github', 'downloads', 'media', n))));
+  }
+  assert.match(fs.readFileSync(path.join(fx.site, '1.2.0', 'SHA256SUMS'), 'utf8'), /  icon\.png\n/);
+  const again = await run(fx);
+  assert.deepStrictEqual(again.calls, [], 'a re-run with the same images calls rsync zero times');
+  fs.writeFileSync(path.join(fx.repo, '.github', 'downloads', 'media', 'main.png'), png(1280, 801));
+  await assert.rejects(run(fx), /already published and its SHA256SUMS differs from this build's \(main\.png\).*only images differ: publish from the tag/);
+  fs.writeFileSync(path.join(fx.assets, 'probe-1.2.0.tgz'), 'rebuilt');
+  await assert.rejects(run(fx), /\(main\.png, probe-1\.2\.0\.tgz\).*publish a new version instead/);
 });

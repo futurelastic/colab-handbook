@@ -37,7 +37,9 @@
 #   - By hand (Actions → Run workflow) with a tag: retries a failed publish, finishes a partial one (only the
 #     missing files are sent), re-checks a complete one. `dry_run` stages and lists — it uploads nothing.
 #   The project.yml, manifest, installers and script are read from THIS run's checkout: the tag's commit when
-#   chained, the branch you dispatch from when run by hand.
+#   chained, the branch you dispatch from when run by hand. So are the manifest's icon and screenshots (#655),
+#   which go INTO the version folder: re-running an older tag by hand, run the workflow from that tag, or its
+#   images may differ from the published ones and the run is refused (a published version is immutable).
 #
 # THE RUNNER. The read-back goes over HTTPS to the site, which may be reachable only on a private network —
 # a GitHub-hosted runner then cannot read anything back. `runs-on` is an input: a bare label or a JSON label
