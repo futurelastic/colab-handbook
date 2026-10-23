@@ -17,8 +17,8 @@
 //       - myapp-{v}.tgz
 //       - MyApp_{v}_aarch64.dmg
 //     optional: [MyApp_{v}_x64.msi]     # published when the Release has it (optional key)
-//     installers:                       # repo paths, uploaded to /<app>/ with @DOWNLOADS_URL@ stamped (optional key)
-//       - scripts/install.sh
+//     installers:                       # repo paths, uploaded to /<app>/ with @DOWNLOADS_URL@ and
+//       - scripts/install.sh            #   @DOWNLOADS_REQUIRES@ stamped (optional key)
 //     manifest: .github/downloads/manifest.json   # optional key, this is the default path
 //
 // Only that subset of YAML is read here (scalars, `- item` lists, `[a, b]` lists, comments): this script has no
@@ -32,6 +32,12 @@
 //   DOWNLOADS_KEY_FILE              the private key file the workflow wrote from DOWNLOADS_SSH_KEY
 //   DOWNLOADS_KNOWN_HOSTS_FILE      the known-hosts file the workflow wrote from DOWNLOADS_SSH_KNOWN_HOSTS
 //   DOWNLOADS_RESERVED              names the site keeps for itself, refused as an app slug (space/comma list)
+//
+// THE APPS IT REQUIRES (#653) come from manifest.json's optional `requires`: [{"slug": "<app>", "min": "X.Y.Z"}],
+// other apps on the same site that its installers install first. Before anything is sent, every slug must have a final
+// on the site at >= min, and following the site's manifests from them must never lead back here (a cycle). The list
+// is stamped into each installer as `slug:min slug:min` at @DOWNLOADS_REQUIRES@ — an installer of an app that requires
+// anything must carry that placeholder. The installer side (order, once per run, opt-out) is docs/downloads.md.
 //
 // THE ORDER ON THE SITE, which is what makes a half-finished run harmless:
 //   1. <X.Y.Z>/ with every file except SHA256SUMS        (rsync --ignore-existing: a published file is never replaced)
@@ -67,6 +73,8 @@ const FINAL_TAG = /^v(\d+\.\d+\.\d+)$/
 const SLUG = /^[a-z0-9][a-z0-9-]*$/
 const PLATFORMS = ['macos', 'windows', 'linux']
 export const PLACEHOLDER = '@DOWNLOADS_URL@'
+export const REQUIRES_PLACEHOLDER = '@DOWNLOADS_REQUIRES@'
+const VERSION = /^\d+\.\d+\.\d+$/
 export const DEFAULT_MANIFEST = '.github/downloads/manifest.json'
 /** Names the script itself writes at the app's root; an installer may not take one. */
 const ROOT_NAMES = new Set(['latest.json', 'manifest.json'])
@@ -228,7 +236,7 @@ export function validateManifest(m) {
   const problems = []
   if (m === null || typeof m !== 'object' || Array.isArray(m)) throw new Error('manifest.json is not a JSON object')
   for (const k of Object.keys(m))
-    if (!['schema', 'name', 'summary', 'install'].includes(k)) problems.push(`unknown field "${k}"`)
+    if (!['schema', 'name', 'summary', 'install', 'requires'].includes(k)) problems.push(`unknown field "${k}"`)
   if (m.schema !== undefined && m.schema !== 1) problems.push('schema must be 1')
   if (!isText(m.name, true)) problems.push('name: a one-line text is required')
   if (!isText(m.summary, true)) problems.push('summary: a one-line text is required')
@@ -253,9 +261,30 @@ export function validateManifest(m) {
         problems.push(`install.${os}.prompts: a list of texts`)
     }
   }
+  if (m.requires !== undefined) {
+    if (!Array.isArray(m.requires)) problems.push('requires: a list of {"slug", "min"}')
+    else {
+      const seen = new Set()
+      m.requires.forEach((r, i) => {
+        const at = `requires[${i}]`
+        if (r === null || typeof r !== 'object' || Array.isArray(r)) return problems.push(`${at}: an object {"slug", "min"}`)
+        for (const k of Object.keys(r)) if (!['slug', 'min'].includes(k)) problems.push(`${at}.${k}: unknown field`)
+        if (typeof r.slug !== 'string' || !SLUG.test(r.slug)) problems.push(`${at}.slug: an app slug, [a-z0-9][a-z0-9-]*`)
+        else if (seen.has(r.slug)) problems.push(`${at}.slug: ${r.slug} is listed twice`)
+        else seen.add(r.slug)
+        if (typeof r.min !== 'string' || !VERSION.test(r.min)) problems.push(`${at}.min: a version X.Y.Z`)
+      })
+    }
+  }
   if (problems.length) throw new Error(`manifest.json: ${problems.join('; ')}`)
   return m
 }
+
+/** The manifest's `requires`, as given (an empty list when it declares none). */
+export const requiresOf = (manifest) => (Array.isArray(manifest?.requires) ? manifest.requires : [])
+
+/** What an installer's @DOWNLOADS_REQUIRES@ becomes: `slug:min slug:min`, in the manifest's order. */
+export const requiresStamp = (manifest) => requiresOf(manifest).map((r) => `${r.slug}:${r.min}`).join(' ')
 
 /** Reads and validates the repo's config + manifest. */
 export function loadRepo(root, env = {}) {
@@ -274,11 +303,17 @@ export function loadRepo(root, env = {}) {
     throw new Error(`${config.manifest} is not JSON: ${error.message}`)
   }
   validateManifest(manifest)
+  if (requiresOf(manifest).some((r) => r.slug === config.app))
+    throw new Error(`${config.manifest}: requires names ${config.app} itself`)
   for (const p of config.installers) {
     const f = join(root, p)
     if (!existsSync(f)) throw new Error(`downloads.installers: ${p} does not exist`)
-    if (!readFileSync(f, 'utf8').includes(PLACEHOLDER))
-      throw new Error(`${p} has no ${PLACEHOLDER} to stamp the downloads address into`)
+    const text = readFileSync(f, 'utf8')
+    if (!text.includes(PLACEHOLDER)) throw new Error(`${p} has no ${PLACEHOLDER} to stamp the downloads address into`)
+    if (requiresOf(manifest).length > 0 && !text.includes(REQUIRES_PLACEHOLDER))
+      throw new Error(
+        `${p} has no ${REQUIRES_PLACEHOLDER}, so it would install ${config.app} without the apps its manifest requires — add the dependency step (docs/downloads.md)`,
+      )
   }
   return { config, manifest }
 }
@@ -340,7 +375,8 @@ export async function stage({ tag, assetsDir, outDir, baseUrl, root, config, man
   const rootFiles = []
   for (const p of config.installers) {
     const source = readFileSync(join(root, p), 'utf8')
-    writeFileSync(join(outDir, basename(p)), source.split(PLACEHOLDER).join(base))
+    const stamped = source.split(PLACEHOLDER).join(base).split(REQUIRES_PLACEHOLDER).join(requiresStamp(manifest))
+    writeFileSync(join(outDir, basename(p)), stamped)
     rootFiles.push(basename(p))
   }
   writeFileSync(join(outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
@@ -405,6 +441,49 @@ export async function assertResolves(baseUrl, resolver = lookup) {
 }
 
 /**
+ * Checks, reading the site only, that every app `manifest` requires can be installed from it: each slug has a final
+ * (`latest.json`) at >= its min and a valid manifest, and following those manifests' own `requires` never leads back
+ * to `app` or round any other loop. Throws naming the slug and the reason; returns the slugs visited, in order.
+ */
+export async function checkRequires({ app, manifest, baseUrl, fetchImpl = fetch }) {
+  const base = siteRoot(baseUrl)
+  const visited = []
+  const done = new Set()
+  async function walk(requires, chain) {
+    for (const { slug, min } of requires) {
+      const via = chain.join(' → ')
+      if (chain.includes(slug)) throw new Error(`requires: a cycle — ${via} → ${slug}; nothing was published`)
+      const latest = await readBytes(fetchImpl, `${base}/${slug}/latest.json`)
+      if (latest === null) throw new Error(`requires: ${slug} (required by ${via}) has no final on the site — publish it first; nothing was published`)
+      let version = null
+      try {
+        version = JSON.parse(latest.toString('utf8')).version
+      } catch {
+        version = null
+      }
+      if (typeof version !== 'string' || !VERSION.test(version))
+        throw new Error(`requires: ${base}/${slug}/latest.json names no version; nothing was published`)
+      if (compareVersions(version, min) < 0)
+        throw new Error(`requires: ${via} needs ${slug} >= ${min}, and the site's newest final of it is ${version}; nothing was published`)
+      if (done.has(slug)) continue
+      done.add(slug)
+      visited.push(slug)
+      const raw = await readBytes(fetchImpl, `${base}/${slug}/manifest.json`)
+      if (raw === null) throw new Error(`requires: ${slug} has no manifest.json on the site; nothing was published`)
+      let theirs
+      try {
+        theirs = validateManifest(JSON.parse(raw.toString('utf8')))
+      } catch (error) {
+        throw new Error(`requires: ${slug}'s manifest.json on the site is not valid (${error.message}); nothing was published`)
+      }
+      await walk(requiresOf(theirs), [...chain, slug])
+    }
+  }
+  await walk(requiresOf(manifest), [app])
+  return visited
+}
+
+/**
  * Uploads a staged tree (see `stage`) in the order the header gives. `dest` is the rsync destination (`user@host:`
  * in production — the account's root is the app's folder), `sshArgs` the `-e` command line.
  */
@@ -426,8 +505,13 @@ export async function publish({
   const rootFiles = readdirSync(outDir).filter((n) => n !== 'latest.json' && n !== version && n !== 'manifest.json')
   rootFiles.sort()
   rootFiles.push('manifest.json') // installers first, manifest after them, latest.json last
-  const out = { version, uploaded: [], unchanged: [], skippedLatest: false, dryRun }
+  const out = { version, uploaded: [], unchanged: [], skippedLatest: false, dryRun, requires: [] }
   const slash = /[/:]$/.test(dest) ? '' : '/'
+
+  // Every app this one requires must be installable from the site before anything of this one is on it.
+  const manifest = JSON.parse(readFileSync(join(outDir, 'manifest.json'), 'utf8'))
+  out.requires = await checkRequires({ app, manifest, baseUrl, fetchImpl })
+  if (out.requires.length) log(`requires: ${out.requires.join(', ')} — each on the site at the version needed`)
 
   const remoteSums = await readBytes(fetchImpl, `${root}/${version}/SHA256SUMS`)
   if (remoteSums !== null && !remoteSums.equals(localSums)) {
@@ -534,7 +618,8 @@ async function main(argv, env) {
   if (!['check', 'names', 'publish'].includes(command)) throw new Error(usage)
   const { config, manifest } = loadRepo(root, env)
   if (command === 'check') {
-    console.log(`downloads: ${config.app} — ${config.files.length} file(s), ${config.optional.length} optional, ${config.installers.length} installer(s), manifest ${config.manifest} valid`)
+    const req = requiresOf(manifest).length ? `, requires ${requiresStamp(manifest)}` : ''
+    console.log(`downloads: ${config.app} — ${config.files.length} file(s), ${config.optional.length} optional, ${config.installers.length} installer(s), manifest ${config.manifest} valid${req}`)
     return 0
   }
   if (command === 'names') {
