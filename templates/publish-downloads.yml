@@ -45,7 +45,9 @@
 #
 # CONFIGURATION — per repo, never shared between repos:
 #   secrets   DOWNLOADS_SSH_KEY · DOWNLOADS_SSH_HOST · DOWNLOADS_SSH_PORT · DOWNLOADS_SSH_USER ·
-#             DOWNLOADS_KNOWN_HOSTS — an upload account restricted to this app's folder, that cannot delete
+#             DOWNLOADS_SSH_KNOWN_HOSTS — an upload account restricted to this app's folder, that cannot delete.
+#             The older name DOWNLOADS_KNOWN_HOSTS is still read when DOWNLOADS_SSH_KNOWN_HOSTS is unset, so a
+#             repo set up before the rename keeps publishing; rename the secret when convenient.
 #   variable  DOWNLOADS_URL — the site's root address (https). The script appends /<app>; no host is ever
 #             written in the repository.
 #
@@ -151,7 +153,7 @@ jobs:
         if: inputs.dry_run != true
         env:
           KEY: ${{ secrets.DOWNLOADS_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.DOWNLOADS_KNOWN_HOSTS }}
+          KNOWN_HOSTS: ${{ secrets.DOWNLOADS_SSH_KNOWN_HOSTS || secrets.DOWNLOADS_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           umask 077

@@ -30,7 +30,7 @@
 //   DOWNLOADS_SSH_HOST/PORT/USER    where rsync goes (repo secrets). The account is restricted to the app's
 //                                   folder server-side and cannot delete: its root IS /<app>/
 //   DOWNLOADS_KEY_FILE              the private key file the workflow wrote from DOWNLOADS_SSH_KEY
-//   DOWNLOADS_KNOWN_HOSTS_FILE      the known-hosts file the workflow wrote from DOWNLOADS_KNOWN_HOSTS
+//   DOWNLOADS_KNOWN_HOSTS_FILE      the known-hosts file the workflow wrote from DOWNLOADS_SSH_KNOWN_HOSTS
 //   DOWNLOADS_RESERVED              names the site keeps for itself, refused as an app slug (space/comma list)
 //
 // THE ORDER ON THE SITE, which is what makes a half-finished run harmless:

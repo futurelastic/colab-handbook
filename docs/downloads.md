@@ -108,7 +108,7 @@ Per repo, never shared between repos:
 |---|---|---|
 | `DOWNLOADS_SSH_KEY` | secret | private key of an upload account restricted to this app's folder, unable to delete |
 | `DOWNLOADS_SSH_HOST`, `DOWNLOADS_SSH_PORT`, `DOWNLOADS_SSH_USER` | secrets | where rsync goes |
-| `DOWNLOADS_KNOWN_HOSTS` | secret | the host key line(s); host keys are checked strictly |
+| `DOWNLOADS_SSH_KNOWN_HOSTS` | secret | the host key line(s); host keys are checked strictly. The older name `DOWNLOADS_KNOWN_HOSTS` is still read when this one is unset |
 | `DOWNLOADS_URL` | variable | the site root, `https://…`; the script appends `/<app>` |
 
 ## Moving an existing publish script onto the template
