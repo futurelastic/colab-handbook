@@ -20,12 +20,12 @@ The headers of both files are the operating detail; this page is the contract.
     manifest.json                what the portal lists (below)
     latest.json                  {"version": "X.Y.Z", "files": {"<name>": {"sha256", "size"}}}
     install.sh, install.ps1 …    the repo's installers, the site root stamped in
-    X.Y.Z/                       one final's files + SHA256SUMS
+    X.Y.Z/                       one final's files, the manifest's images + SHA256SUMS
 ```
 
 - **Finals only.** The tag must be `vX.Y.Z`; a candidate (`-rc.N`) is refused by the workflow and
   again by the script.
-- **Upload order:** the version folder → each file read back over HTTPS against the checksums this
+- **Upload order:** the version folder (with the manifest's images) → each file read back over HTTPS against the checksums this
   build computed → `X.Y.Z/SHA256SUMS` → installers → `manifest.json` → `latest.json` last → read
   back. A run stopped anywhere leaves the site consistent: a folder without `SHA256SUMS` is
   incomplete, and `latest.json` never names a version whose folder is not complete.
@@ -76,11 +76,21 @@ portal can list every app from the site alone. The script validates it before an
   "schema": 1,
   "name": "MyApp",
   "summary": { "en": "One line on what it is for.", "vi": "Một dòng về công dụng." },
+  "description": "MyApp keeps **one** folder in sync across your machines.\n\n- for teams of 2–20\n- no account needed",
+  "icon": "media/icon.png",
+  "screenshots": [
+    { "file": "media/main.png", "alt": "The main window with two synced folders", "caption": "Main window", "theme": "light" }
+  ],
+  "examples": [
+    { "caption": "Check a folder", "command": "myapp status ~/Shared", "output": "~/Shared  in sync  3 peers" }
+  ],
   "install": {
     "macos":   { "steps": ["Open the .dmg", "Drag MyApp to Applications"],
                  "prompts": ["\"Cannot verify the developer\": System Settings → Privacy & Security → Open Anyway"] },
     "windows": { "steps": ["irm <site>/myapp/install.ps1 | iex"] },
-    "linux":   { "steps": ["curl -fsSL <site>/myapp/install.sh | sh"] }
+    "linux":   { "steps": ["curl -fsSL <site>/myapp/install.sh | sh"] },
+    "prompt":  "Install MyApp on this machine: read <site>/myapp/manifest.json and follow the steps for this OS.",
+    "handover": ["Open MyApp and scan the pairing code with your phone"]
   },
   "requires": [{ "slug": "mysvc", "min": "2.1.0" }]
 }
@@ -95,9 +105,48 @@ portal can list every app from the site alone. The script validates it before an
 | `install.<os>.steps` | yes | The install steps, in order. |
 | `install.<os>.prompts` | no | Known prompts a person meets while installing, and what to answer. |
 | `requires` | no | Other apps on the same site this one needs, in install order: `{"slug", "min"}`, `min` the lowest working version `X.Y.Z`. A portal lists them with the app ("installs mysvc too"). |
+| `description` | no | What the app does and who it is for: a few short paragraphs in the Markdown subset [below](#what-a-portal-shows-655), at most 2000 characters per language. |
+| `icon` | no | A square image, `.png` or `.svg` (with a square `viewBox`), path relative to `manifest.json`. |
+| `screenshots` | no | At most 6 `{"file", "alt", "caption", "theme"}`: `file` a `.png`/`.jpg`/`.jpeg`/`.webp` path relative to `manifest.json`; `alt` required, one line, what the image shows; `caption` optional, one line; `theme` optional, `"light"` or `"dark"`. |
+| `examples` | no | For a command-line app with nothing to screenshot: at most 6 `{"caption", "command", "output"}` — `caption` one line, `command` one line as typed, `output` optional plain text of at most 10 lines. |
+| `install.prompt` | no | What a person pastes into an agent that is already set up (a coding-agent session, say); the agent then installs the app itself. |
+| `install.handover` | no | The steps only a person can do after the install (scan a pairing code, sign in). A portal shows them after both the prompt route and the command route. |
+| `listed` | no | `false` marks a component installed only as another app's `requires`. The site serves it as usual; a portal leaves it out of the app list, or shows it apart as "installed automatically". Absent means `true`. |
 
-Every text is either a string or one string per language code (`{"en": "…", "vi": "…"}`). Unknown
-fields are refused, so a misspelled field is caught at publish rather than missing from the portal.
+Every text is either a string or one string per language code (`{"en": "…", "vi": "…"}`) —
+`examples[].command` and `.output` are the exception, plain strings, since a command has no
+language. Unknown fields are refused, so a misspelled field is caught at publish rather than
+missing from the portal. An app may have screenshots, examples, both or neither.
+
+**`<site>` is replaced at publish.** In the copy of `manifest.json` the site gets, every `<site>` in
+`install` (steps, prompts, `prompt`, `handover`) becomes the site root (`DOWNLOADS_URL`), so the
+manifest on the site is complete on its own and an agent reading it gets real addresses. The repo's
+copy keeps `<site>`. Texts outside `install` are published as written.
+
+## What a portal shows (#655)
+
+**`description`** accepts a small Markdown subset: paragraphs (a blank line between them), `- ` or
+`1. ` lists, `**bold**`, `*emphasis*`, `` `code` `` and `[text](https://…)` links. The script
+refuses raw HTML, headings (the portal titles the app itself), inline images (use `screenshots`),
+code blocks (use `examples`) and any link that is not `https://`. Anything else shows as plain text.
+
+**The icon and the screenshots are files in the repo**, next to `manifest.json` (a `media/` folder
+beside it, say), read from the same checkout as the manifest. Before anything is sent — and by
+`check` — each one must exist, be at most 1 MB, have the bytes of the type its name says (a `.png`
+that is really a JPEG is refused), and not share a file name with another image; the icon must be
+square. They are published **inside the version folder**, next to the binaries:
+
+- they are in that version's `SHA256SUMS`, read back like every file, and as immutable;
+- they are not in `latest.json`'s `files`, which lists what an installer downloads;
+- the site's `manifest.json` names them `X.Y.Z/<name>`, relative to the app's folder, so a portal
+  shows `<site>/<app>/X.Y.Z/main.png`. The manifest names the version it was published with — the
+  newest, which is the one the site keeps.
+
+A version's images belong to the commit that version was built from. **Adding or changing an image
+reaches the site with the next version**: re-running the publish of a version already on the site
+with different images is refused as an immutable change (the message names the images), so run a
+by-hand publish of an older tag from that tag (Actions → Run workflow → use the workflow from the
+tag), not from a branch whose images have moved on.
 
 ## Requires — apps installed first (#653)
 
