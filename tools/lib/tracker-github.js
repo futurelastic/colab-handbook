@@ -15,7 +15,9 @@
  *     `null` is "could not read", never "none").
  *
  * Behaviour-preserving by construction: every method spawns the exact argv and options the call
- * site it replaced spawned (pinned by tools/lib/tracker-github.test.js's argv table).
+ * site it replaced spawned (pinned by tools/lib/tracker-github.test.js's argv table). The one
+ * addition is the environment: `exec` pins `GH_REPO` to the resolved remote's repo (#658,
+ * `pinnedOpts`), so no call depends on gh's default repo or on which other remotes exist.
  *
  * This module must NOT require ./tracker (tracker requires this one), and git.js must never require
  * this module at its top level: git.js ends in `module.exports = {…}`, which REPLACES the exports
@@ -26,9 +28,68 @@
 
 let _runner = null; // test seam only — see withRunner
 
-/** Spawn `gh <args>` with `opts` (git.run's options: cwd, timeoutMs, maxBuffer, …). */
+/**
+ * #658 — `[HOST/]OWNER/REPO` for a remote URL, in the form `GH_REPO` takes, or null.
+ *
+ * Only a host gh is known to serve is pinned: `github.com`, or the `GH_HOST` the environment names.
+ * Any other host — an SSH alias, a self-hosted forge gh was never pointed at — reads as null, and
+ * the call keeps gh's own resolution exactly as before, rather than pinning a name gh cannot reach.
+ */
+function ghRepoFromUrl(url, env = process.env) {
+  const s = String(url || '').trim();
+  let m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/([^/]+)\/([^/]+?)(?:\.git)?\/*$/i.exec(s);
+  if (!m) m = /^(?:[^@/\s]+@)?([^:/\s]+):([^/]+)\/([^/]+?)(?:\.git)?\/*$/.exec(s);
+  if (!m) return null;
+  const host = m[1].toLowerCase();
+  const ghHost = String(env.GH_HOST || '').toLowerCase();
+  if (host === 'github.com') return `${m[2]}/${m[3]}`;
+  if (ghHost && host === ghHost) return `${host}/${m[2]}/${m[3]}`;
+  return null;
+}
+
+const _pinCache = new Map(); // resolved cwd → GH_REPO value or null; one repo's remote does not move mid-run
+function _resetPinCache() { _pinCache.clear(); }
+
+/**
+ * #658 — the repo every `gh` call is pinned to: the one colab's own resolved remote points at
+ * (`origin`, or `colab.remote` / the single remote — tools/lib/git.js `remoteInfo`, #301), read
+ * for the call's `cwd`. Without it a bare `gh issue|pr|run …` follows gh's own default, which on
+ * a fork checkout with an `upstream` remote and no `gh repo set-default` is the UPSTREAM — a ship
+ * then read the carried issues as CLOSED and trunk CI as "no run" from the wrong repo.
+ * null when nothing resolves (no remote, ambiguous remotes, a host gh does not serve): unpinned.
+ */
+function pinnedRepo(cwd) {
+  const key = require('path').resolve(cwd || process.cwd());
+  if (_pinCache.has(key)) return _pinCache.get(key);
+  let slug = null;
+  try {
+    // The CONFIGURED url, not `git remote get-url`: get-url expands `url.<x>.insteadOf`, which
+    // rewrites how git reaches the remote (a mirror, a local path), never which forge repo it is.
+    const g = require('./git');
+    const { name } = g.remoteInfo(key);
+    const u = name ? g.git(['config', '--get', `remote.${name}.url`], key) : null;
+    slug = u && u.ok ? ghRepoFromUrl(u.stdout) : null;
+  } catch (_) { slug = null; }
+  _pinCache.set(key, slug);
+  return slug;
+}
+
+/**
+ * `opts` with `GH_REPO` set to `pinnedRepo(opts.cwd)` — unless the call already names its repo
+ * (`--repo`/`-R`), the caller passed its own `GH_REPO`, or the environment sets one (an explicit
+ * choice, honoured as gh honours it). Every other option passes through untouched.
+ */
+function pinnedOpts(args, opts = {}) {
+  if ((args || []).some((a) => a === '--repo' || a === '-R' || /^--repo=/.test(String(a)))) return opts;
+  const base = opts.env || process.env;
+  if (base.GH_REPO) return opts;
+  const slug = pinnedRepo(opts.cwd);
+  return slug ? { ...opts, env: { ...base, GH_REPO: slug } } : opts;
+}
+
+/** Spawn `gh <args>` with `opts` (git.run's options: cwd, timeoutMs, maxBuffer, …), pinned to origin's repo (#658). */
 function exec(args, opts = {}) {
-  return _runner ? _runner(args, opts) : require('./git').run('gh', args, opts);
+  return _runner ? _runner(args, opts) : require('./git').run('gh', args, pinnedOpts(args, opts));
 }
 
 /**
@@ -103,4 +164,4 @@ function create(repoAbs) {
   };
 }
 
-module.exports = { exec, withRunner, create };
+module.exports = { exec, withRunner, create, ghRepoFromUrl, pinnedRepo, pinnedOpts, _resetPinCache };

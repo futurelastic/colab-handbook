@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const tracker = require('./tracker');
 const gh = require('./tracker-github');
@@ -151,4 +152,54 @@ test('no gh spawn is left outside the adapter, and git.js never loads it at its 
   const gitSrc = fs.readFileSync(path.join(__dirname, 'git.js'), 'utf8');
   assert.ok(!/^(const|let|var)\s.*require\(['"]\.\/tracker-github['"]\)/m.test(gitSrc), 'git.js must require tracker-github lazily (load-time cycle)');
   assert.ok(!/require\(['"]\.\/tracker['"]\)/.test(fs.readFileSync(path.join(__dirname, 'tracker-github.js'), 'utf8')), 'tracker-github must not require tracker');
+});
+
+// ---- #658: every gh spawn pinned to the resolved remote's repo -------------------------------
+
+test('#658: ghRepoFromUrl reads OWNER/REPO for github.com in every url form, and refuses hosts gh does not serve', () => {
+  const env = {};
+  for (const u of ['https://github.com/o/r.git', 'https://github.com/o/r', 'https://github.com/o/r/',
+    'git@github.com:o/r.git', 'git@github.com:o/r', 'ssh://git@github.com/o/r.git', 'ssh://git@github.com:22/o/r.git',
+    'https://x-access-token:abc@github.com/o/r.git', 'https://GitHub.com/o/r.git']) {
+    assert.strictEqual(gh.ghRepoFromUrl(u, env), 'o/r', u);
+  }
+  assert.strictEqual(gh.ghRepoFromUrl('https://github.com/o/r.dots.git', env), 'o/r.dots');
+  for (const u of ['/srv/git/r.git', 'git@my-alias:o/r.git', 'https://gitlab.com/o/r.git', 'https://github.com/o', '', null]) {
+    assert.strictEqual(gh.ghRepoFromUrl(u, env), null, String(u));
+  }
+  assert.strictEqual(gh.ghRepoFromUrl('https://ghe.example.com/o/r.git', { GH_HOST: 'ghe.example.com' }), 'ghe.example.com/o/r');
+});
+
+test('#658: exec pins GH_REPO to the resolved remote, and leaves an explicit --repo / GH_REPO alone', { skip: process.platform === 'win32' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-tracker-pin-'));
+  const prev = { PATH: process.env.PATH, GH_REPO: process.env.GH_REPO, GH_HOST: process.env.GH_HOST };
+  try {
+    const repo = path.join(dir, 'repo');
+    execFileSync('git', ['init', '-q', repo]);
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:own-org/app.git'], { cwd: repo });
+    execFileSync('git', ['remote', 'add', 'upstream', 'https://github.com/up-org/app.git'], { cwd: repo });
+    const log = path.join(dir, 'gh.log');
+    fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh\necho "$GH_REPO|$*" >> "${log}"\n`, { mode: 0o755 });
+    process.env.PATH = `${dir}:${prev.PATH}`;
+    delete process.env.GH_REPO; delete process.env.GH_HOST;
+    git._resetRemoteCache(); gh._resetPinCache();
+    gh.exec(['issue', 'view', '1'], { cwd: repo });
+    gh.exec(['issue', 'view', '1', '--repo', 'x/y'], { cwd: repo });
+    gh.exec(['issue', 'view', '1'], { cwd: repo, env: { ...process.env, GH_REPO: 'mine/own' } });
+    process.env.GH_REPO = 'from/env';
+    gh.exec(['issue', 'view', '1'], { cwd: repo });
+    delete process.env.GH_REPO;
+    gh.exec(['issue', 'view', '1'], { cwd: dir }); // not a repo → unpinned
+    assert.deepStrictEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), [
+      'own-org/app|issue view 1',
+      '|issue view 1 --repo x/y',
+      'mine/own|issue view 1',
+      'from/env|issue view 1',
+      '|issue view 1',
+    ]);
+  } finally {
+    for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    git._resetRemoteCache(); gh._resetPinCache();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
