@@ -774,8 +774,9 @@ owner, before anything else is read, and says so in the `core-path review` row. 
 no owner carves its paths out, exactly like an ownerless line. Everything else is unchanged:
 logins and emails still count, a team of the fork's own org still counts, and a line the fork
 adds to the file applies as written. The fork test is the one `colab adopt` uses: a remote named
-`upstream` whose URL differs from `origin`'s. The fork's owner is read from its remote URL. When
-either is unknown, nothing is ignored. `colab adopt` names the ignored teams at adoption time, so
+`upstream` whose URL differs from `origin`'s — or, on a checkout without that remote, the committed
+record of the same test, `instruction-files: upstream` in `project.yml` (#602, #658). The fork's
+owner is read from its configured remote URL. When either is unknown, nothing is ignored. `colab adopt` names the ignored teams at adoption time, so
 a fork owner who wants a review on some paths learns there that the fix is to write the fork's own
 owners into the file, as a fork patch.
 

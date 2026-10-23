@@ -13440,13 +13440,19 @@ function readTargetCodeowners(repoAbs, target) {
 
 /**
  * #483: is this repo a fork, and which org owns it? The fork test is adopt's own (#449: a remote named
- * `upstream` whose URL differs from origin's), so adopt and ship never disagree about the shape; the
- * owner is read from this repo's remote URL. Either unknown → `{ fork: false }`, nothing is dropped.
+ * `upstream` whose URL differs from origin's), so adopt and ship never disagree about the shape — or,
+ * with no such remote on this checkout, the committed record of that same test (#658): the descriptor's
+ * `instruction-files: upstream` (#602), which adopt writes on a detected fork. A checkout that never
+ * added the remote then still reads as the fork its descriptor says it is. The owner is read from
+ * this repo's remote URL. Either unknown → `{ fork: false }`, nothing is dropped.
  */
 function codeownersForkContext(repoAbs) {
-  if (!adoptDetectFork(repoAbs)) return { fork: false, ownOrg: null };
+  const declared = instructionFile.parseInstructionFiles(projectDoc(repoAbs)).exempt;
+  if (!adoptDetectFork(repoAbs) && !declared) return { fork: false, ownOrg: null };
   const name = git.remoteInfo(repoAbs).name || 'origin';
-  const u = git.git(['remote', 'get-url', name], repoAbs);
+  // The configured url, as the gh pin reads it (#658): `get-url` expands `url.<x>.insteadOf`, which
+  // changes how git reaches the remote, never which org owns it.
+  const u = git.git(['config', '--get', `remote.${name}.url`], repoAbs);
   const ownOrg = u.ok ? codeowners.remoteOwner(u.stdout) : null;
   return { fork: !!ownOrg, ownOrg };
 }

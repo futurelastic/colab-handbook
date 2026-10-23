@@ -1514,8 +1514,8 @@ instruction-files: upstream   # absent = every CLAUDE.md is judged
 A fork whose `CLAUDE.md`/`AGENTS.md` belong to the upstream it tracks (`CONVENTIONS.md` §9, *A
 fork of an upstream*) declares this, and the instruction-file check — the audit's
 `prose-in-claude-md`/`no-agents-md`, the pre-commit hooklet, the reusable CI workflow, all one gate —
-passes without judging them (#602). It is the committed record of `colab adopt`'s fork test (a
-remote CI cannot see), which adopt writes on a detected fork; never a second fork test.
+passes without judging them (#602). It is the committed record of `colab adopt`'s fork test, written on
+a detected fork, never a second test — read by CI and by ship's CODEOWNERS fork test (#658).
 
 - **`upstream` is the only value.** Anything else is a finding; it reads as absent, so the files are judged.
 - **Read on the judged side** — the head commit, the index or the working tree — never the merge base,

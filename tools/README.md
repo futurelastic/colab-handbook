@@ -151,8 +151,12 @@ and ranking it higher would silently move where trunk is fetched from in a repo 
 today. Fleet-wide commands (`doctor --sync`, `release status`) skip an ambiguous repo with
 that message instead of aborting.
 
-Elsewhere in this document, `origin` means "the repo's resolved remote". `gh` picks its
-GitHub repo by its own rules (`gh repo set-default`), independently of this setting.
+Elsewhere in this document, `origin` means "the repo's resolved remote". Every `gh` call colab
+makes is pinned to that remote's GitHub repo through `GH_REPO` (#658), so a fork checkout with an
+`upstream` remote reads its own issues and CI whatever `gh repo set-default` says. The pin reads the
+configured url (`url.<x>.insteadOf` does not move it) and applies only to `github.com` or the host
+`GH_HOST` names; a call that passes `--repo`, or an environment that already sets `GH_REPO`, keeps
+its explicit choice.
 
 ## Claim lifecycle (enforced)
 
