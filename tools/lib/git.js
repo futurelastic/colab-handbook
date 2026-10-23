@@ -996,8 +996,8 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
 
   // createdAt + databaseId are additive (#155): a NON-completed pick needs both to let a caller
   // judge whether it is merely slow or structurally WEDGED (tools/lib/ci-verdict.js) — createdAt for
-  // the age backstop, databaseId to look up its job count (ghRunJobCount, below — a second call, made
-  // lazily by the caller, never here: an ordinary green check must not pay for a read it never needs).
+  // the age backstop, databaseId to look up its jobs (ghRunJobs, below — a second call, made lazily
+  // by the caller, never here: an ordinary green check must not pay for a read it never needs).
   const r = gh(['run', 'list', '--branch', branch, '-L', String(limit),
     // workflowName is additive (#338): `colab release cut`'s full-suite condition groups the rows by
     // workflow — a workflow whose only run at the sha was cancelled never ran its suite.
@@ -1341,8 +1341,9 @@ function summarizeRepoOwnedRuns(forSha, sha) {
 /**
  * Job count for one workflow run (#155) — how many jobs GitHub has attached to it. A queued run
  * with ZERO jobs has not been picked up by any runner: the measured shape of a billing lockout or a
- * dead runner pool, and the PRIMARY signal tools/lib/ci-verdict.js uses to call a non-completed run
- * WEDGED rather than merely slow. Deliberately a separate call from `ghRunForSha` (never folded into
+ * dead runner pool. The wedge read in tools/colab `classifyCiRunRaw` now takes the count from
+ * `ghRunJobs` below (#650 needs the jobs' statuses too, from the same one call); this stays for the
+ * callers that need only the count (release-finalize's displaced-run check). Deliberately a separate call from `ghRunForSha` (never folded into
  * its `--json` field list): job counts require `gh run view`, one call per run, and the ordinary
  * green-trunk ship makes zero of these — callers fetch it lazily, only for a run that is already
  * non-completed and therefore a wedge candidate.
@@ -1364,14 +1365,15 @@ function ghRunJobCount(repo, runDatabaseId) {
  * failure, run gone, unparseable body). `null` must NOT be read as "no jobs"; every consumer of
  * this fails closed on it.
  *
- * A SIBLING of `ghRunJobCount` above, deliberately not a refactor of it: that function sits on the
- * wedge-detection hot path, and rewriting it as `ghRunJobs(...).length` would be churn with real
- * regression surface for no gain here.
+ * A SIBLING of `ghRunJobCount` above, deliberately not a refactor of it — the release-finalize
+ * caller needs only the count. Since #650 this is also the wedge read: `classifyCiRunRaw` calls it
+ * (once, for a non-completed run only) instead of `ghRunJobCount`, because telling "every job
+ * completed, the forge never concluded the run" from #155's shapes needs the jobs' statuses and
+ * timestamps, and `gh run view --json jobs` costs the same one call either way.
  *
- * Costs one `gh run view` per run, so callers fetch it LAZILY — tools/lib/ci-cure.js's cure rule
- * (condition 2b, #297, and the #321 carve-out) is the only caller today, and `colab ship` reaches
- * it only for a branch that is already blocked by a red trunk and has passed containment and a
- * green run of its own. Every other ship path makes zero of these calls.
+ * Costs one `gh run view` per run, so callers fetch it LAZILY — the wedge read above, the cure rule
+ * (tools/lib/ci-cure.js, condition 2b, #297, and the #321 carve-out), and the release paths. An
+ * ordinary green or plain-failed trunk read makes zero of these calls.
  *
  * Step-level detail is the whole point: GitHub reports a job whose steps were all SKIPPED as
  * `conclusion: success`, so run- and job-level conclusions are blind to exactly the fast-exit the
