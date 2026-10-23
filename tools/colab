@@ -16275,8 +16275,17 @@ function cmdCiWait(argv) {
     if (runId) {
       summary = { status: r.json.status, conclusion: r.json.conclusion || null, url: r.json.html_url || null };
     } else {
-      const rows = Array.isArray(r.json.workflow_runs) ? r.json.workflow_runs.map(ciWait.restRow).filter((x) => x.headSha === opts.sha) : null;
+      let rows = Array.isArray(r.json.workflow_runs) ? r.json.workflow_runs.map(ciWait.restRow).filter((x) => x.headSha === opts.sha) : null;
       if (!rows) return { kind: 'error', status: r.status, detail: 'response has no workflow_runs' };
+      // #654: an empty FILTERED answer is re-read from the bounded unfiltered listing, as #651 does
+      // for ship's reader — the filter index was measured empty for hours over finished green runs,
+      // and a wait that believed it timed out on a sha ship already read GREEN. Only on an empty 200:
+      // a 304 keeps the last state (#495) and #505's forced re-read brings the fallback back around.
+      // A re-read that finds nothing, or cannot be read, leaves the empty set: pending, as before.
+      if (!rows.length) {
+        const fb = git.ghRunsAtShaUnfiltered(repoAbs, opts.sha, opts.branch || null);
+        if (fb.rows && fb.rows.length) rows = fb.rows;
+      }
       // #503: the same verifying-runs policy ship reads — a wait on trunk's head ends when the CI
       // that verifies the code ends, not when the post-CI release run does.
       summary = git.summarizeRunsForCommit(rows, opts.sha, { verifying: verifyPolicy });
@@ -16304,11 +16313,12 @@ function cmdCiWait(argv) {
     status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
     ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),
     ...(Array.isArray(s.dispatchCounted) && s.dispatchCounted.length ? { dispatchCounted: s.dispatchCounted } : {}),
+    ...(s.readVia ? { readVia: s.readVia } : {}), // #654: the verdict names how it was read
   };
   if (opts.json) print(JSON.stringify(out, null, 2));
   else {
     print(`${res.outcome} ${target} — waited ${ciWait.fmtDuration(res.waitedMs)}, ${res.polls} poll(s), ${res.notModified} of them 304` +
-      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}${verifyRuns.dispatchCountedNote(s.dispatchCounted)}`);
+      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}${verifyRuns.dispatchCountedNote(s.dispatchCounted)}${readViaNote(s)}`);
   }
   return code;
 }
