@@ -4797,7 +4797,8 @@ CI grant merges into a repo whose own test suite is known-failing:
      "Red" here (#155) is the SAME verdict \`ship\`'s trunk-CI-green check uses — an ordinary
      still-running run is NOT red (nothing for a grant to exempt; \`ship\` would clear it on its own),
      but a WEDGED run (queued with zero jobs, or stuck past a generous age backstop — the shape a
-     billing lockout or dead runner pool leaves) reclassifies to red, because \`ship\` cannot clear
+     billing lockout or dead runner pool leaves; or every job completed and the forge never concluded
+     the run, which cancel and rerun cannot move, #650) reclassifies to red, because \`ship\` cannot clear
      that on its own either and this is the sanctioned door for exactly that case. Before #155 the
      two commands computed this independently and disagreed: a grant could be minted for a state
      \`ship\` would never consult it for, reading live in \`--list\` while doing nothing.
@@ -11836,12 +11837,15 @@ function classifyCiRunRaw(repoAbs, run, at) {
   }
   // Non-completed, non-none: running/queued/etc. Ordinarily SELF_CLEARING — but #155's wedged
   // shape (queued, zero jobs, unmoving for hours) can never clear on its own, so check for it.
-  const jobCount = run.databaseId != null ? git.ghRunJobCount(repoAbs, run.databaseId) : null;
+  // #650: one `gh run view --json jobs` — the same single call the job count used to cost — so the
+  // jobs' statuses can tell a run the forge never concluded (every job done) from #155's shapes.
+  const jobs = run.databaseId != null ? git.ghRunJobs(repoAbs, run.databaseId) : null;
+  const jobCount = Array.isArray(jobs) ? jobs.length : null;
   // #559: wedge age and zero-jobs floor follow the repo's measured CI (cached profile; bootstrap = 6h / 2m).
   const th = ciProfileFor(repoAbs).th;
-  const wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount }, { wedgeAgeSec: th.wedgeAgeSec, zeroJobsFloorSec: th.zeroJobsFloorSec });
+  const wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount, jobs }, { wedgeAgeSec: th.wedgeAgeSec, zeroJobsFloorSec: th.zeroJobsFloorSec });
   if (wedge.wedged) {
-    return { ok: false, class: HUMAN_GATED, detail: `run for ${at}: status=${run.status} — WEDGED (${wedge.reason}); a human must look, not retry` };
+    return { ok: false, class: HUMAN_GATED, wedge: wedge.shape, detail: `run for ${at}: status=${run.status} — WEDGED (${wedge.reason}); ${ciVerdict.wedgeExit(wedge)}` };
   }
   return { ok: false, class: SELF_CLEARING, detail: `run for ${at}: status=${run.status} — still running, retry later` };
 }
@@ -15932,7 +15936,8 @@ The first output word is one verdict:
   GREEN       every judged workflow's newest run at the sha succeeded — ship's row would pass
   RED         a judged run completed and did not succeed — trunk is red
   PENDING     a judged run is still in flight (or the sha is minutes old with no run yet)
-  WEDGED      a run that will never move on its own (zero jobs / hours unmoving, #155)
+  WEDGED      a run that will never move on its own (zero jobs / hours unmoving, #155; every job
+              completed but the forge never concluded the run, #650 — the detail names the exits)
   NONE        no repo-owned run exists at the sha — CI not wired or never started
   UNREADABLE  gh unusable or the read failed — never "green"
 
@@ -15951,7 +15956,8 @@ checkout (COLAB_TRUNK_CI_TTL=<sec> overrides, 0 disables; --fresh skips the cach
 To WAIT for CI, use \`colab ci-wait\` — never a loop around this command.
 
   --fresh  ignore a cached verdict (still refreshes the cache)
-  --json   { verdict, sha, ok, class, detail, trunk[, cited: [<run url>…] on a #493 skip][, cachedAgeSec] }
+  --json   { verdict, sha, ok, class, detail, trunk[, wedge: zero-jobs|unconcluded|age on a WEDGED (#650)]
+           [, cited: [<run url>…] on a #493 skip][, cachedAgeSec] }
 Exit 0 whenever a verdict was read (whatever it is); 2 on UNREADABLE.`;
 
 /** Map readCiVerdict's result to the closed trunk-ci vocabulary. Pure — exported for tests. */
@@ -15992,6 +15998,7 @@ function cmdTrunkCi(argv) {
     let detail = r.verdict.detail;
     if (verdict === 'UNREADABLE' && gh && !git.ghState().ok) detail += ` (${ghUnusableWhy(repoAbs)})`;
     out = { verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail,
+      ...(r.verdict.wedge ? { wedge: r.verdict.wedge } : {}),
       ...(r.verdict.treeGreen ? { cited: r.verdict.treeGreen } : {}),
       ...(r.run && Array.isArray(r.run.setAside) && r.run.setAside.length ? { setAside: r.run.setAside } : {}),
       ...(r.run && Array.isArray(r.run.dispatchCounted) && r.run.dispatchCounted.length ? { dispatchCounted: r.run.dispatchCounted } : {}) };
