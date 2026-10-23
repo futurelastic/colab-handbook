@@ -11790,7 +11790,16 @@ function treeGreenVerdict(repoAbs, run, verdict) {
  */
 function classifyCiRun(repoAbs, run, at) {
   const v = classifyCiRunRaw(repoAbs, run, at);
-  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) + verifyRuns.dispatchCountedNote(run && run.dispatchCounted) };
+  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) + verifyRuns.dispatchCountedNote(run && run.dispatchCounted) + readViaNote(run) };
+}
+
+/**
+ * #651: the runs were read from the unfiltered `actions/runs` listing because the forge's filtered
+ * queries (`head_sha=` / `branch=`) answered nothing. The verdict is judged as usual. The note says
+ * how it was read, so nobody takes an empty filter index for missing CI. '' otherwise.
+ */
+function readViaNote(run) {
+  return run && run.readVia === 'unfiltered-listing' ? ' — read via unfiltered listing (forge filter index empty, #651)' : '';
 }
 
 /**
@@ -15949,8 +15958,10 @@ passed an identical tree (#493) names that run in its detail ("relied on <url>")
 head is local and its tree differs from trunk's, the read is RED: trunk is untested.
 
 Cost (#495): one REST read of the runs at the sha (\`actions/runs?head_sha=\`), plus one
-check-runs read on a GREEN. No auth probe in front of it — the read is the probe, and an
-UNREADABLE explains which credential/remote condition failed. The verdict is cached per
+check-runs read on a GREEN. An EMPTY filtered answer is re-read from the unfiltered listing
+(#651: the forge's filter index was measured empty for hours while the runs existed) — at most 3
+pages, usually 1 — and a verdict found that way says "read via unfiltered listing". No auth
+probe in front of it — the read is the probe, and an UNREADABLE explains which credential/remote condition failed. The verdict is cached per
 trunk+sha for ${TRUNK_CI_TTL_DEFAULT_SEC}s in the repo's git dir, shared by every session on the
 checkout (COLAB_TRUNK_CI_TTL=<sec> overrides, 0 disables; --fresh skips the cache for one read).
 To WAIT for CI, use \`colab ci-wait\` — never a loop around this command.

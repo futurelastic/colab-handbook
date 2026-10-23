@@ -1059,6 +1059,14 @@ function fullSha(repo, sha) {
  * Every workflow run at `sha` in ONE REST call (#495) — `actions/runs?head_sha=<sha>[&branch=<b>]`,
  * rows in `gh run list --json` shape. Returns `{ rows }` on success, `{ rateLimited: true }` on a
  * rate limit, `{}` on any other failure (the caller decides whether to fall back).
+ *
+ * #651: an EMPTY filtered answer is not believed on its own. The forge's filter index was measured
+ * returning `total_count: 0` for both `head_sha=` and `branch=` about 10 hours after the runs
+ * finished, while the unfiltered listing held them (green). Read that way, a green trunk is "CI is
+ * not wired" (HUMAN_GATED). So an empty answer is re-read from the unfiltered listing, filtered
+ * here by the same two keys (UNFILTERED_RUN_PAGES pages at most). Rows found that way carry
+ * `readVia: 'unfiltered-listing'`, so the verdict can say how it was read. Nothing found either:
+ * the empty set stands, and the read still fails closed.
  */
 function ghRunsAtShaRest(repo, sha, branch) {
   sha = fullSha(repo, sha); // #529: the API's head_sha is 40-hex; an abbreviated one matches no row
@@ -1068,7 +1076,51 @@ function ghRunsAtShaRest(repo, sha, branch) {
   const r = ghApiConditional(repo, `repos/{owner}/{repo}/actions/runs?${q}`);
   if (r.kind === 'rate-limited') return { rateLimited: true, detail: r.detail };
   if (r.kind !== 'ok' || !r.json || !Array.isArray(r.json.workflow_runs)) return {};
-  return { rows: r.json.workflow_runs.map(ciWait.restRow).filter((x) => x.headSha === sha) };
+  const rows = r.json.workflow_runs.map(ciWait.restRow).filter((x) => x.headSha === sha);
+  if (rows.length) return { rows };
+  const fb = ghRunsAtShaUnfiltered(repo, sha, branch);
+  if (fb.rateLimited) return fb;
+  return { rows: fb.rows && fb.rows.length ? fb.rows : rows };
+}
+
+/** #651: how many pages (100 runs each, newest first) the unfiltered re-read may spend. */
+const UNFILTERED_RUN_PAGES = 3;
+/** #651: a run is never created before its commit. This margin absorbs committer-clock skew. */
+const UNFILTERED_SKEW_MS = 60 * 60 * 1000;
+
+/**
+ * #651: the runs at `sha` (and on `branch`, when given) read from the UNFILTERED `actions/runs`
+ * listing, filtered here by the same keys the server filter would have used. Bounded: at most
+ * UNFILTERED_RUN_PAGES pages. It stops early on a short page, and on a page whose oldest run was
+ * created before the commit, with UNFILTERED_SKEW_MS of margin. A sha with no run yet usually
+ * costs one extra read, because page 1 already reaches back past the commit. Returns `{ rows }`
+ * (possibly empty), `{ rateLimited: true }`, or `{}` when no page could be read.
+ */
+function ghRunsAtShaUnfiltered(repo, sha, branch) {
+  const ciWait = require('./ci-wait');
+  const born = commitTimeMs(repo, sha);
+  const floor = born == null ? null : born - UNFILTERED_SKEW_MS;
+  const found = [];
+  let readAny = false;
+  for (let page = 1; page <= UNFILTERED_RUN_PAGES; page++) {
+    const r = ghApiConditional(repo, `repos/{owner}/{repo}/actions/runs?per_page=100&page=${page}`);
+    if (r.kind === 'rate-limited') return { rateLimited: true, detail: r.detail };
+    if (r.kind !== 'ok' || !r.json || !Array.isArray(r.json.workflow_runs)) break;
+    readAny = true;
+    const raw = r.json.workflow_runs;
+    for (const x of raw) {
+      if (!x || x.head_sha !== sha) continue;
+      if (branch && x.head_branch !== branch) continue;
+      found.push({ ...ciWait.restRow(x), readVia: 'unfiltered-listing' });
+    }
+    if (raw.length < 100) break;
+    const oldest = raw.reduce((m, x) => {
+      const t = x && x.created_at ? Date.parse(x.created_at) : NaN;
+      return Number.isFinite(t) && (m === null || t < m) ? t : m;
+    }, null);
+    if (floor != null && oldest != null && oldest < floor) break;
+  }
+  return readAny ? { rows: found } : {};
 }
 
 /** Is a `gh` binary on PATH (#495)? No API call — cached per process. The credential is proven by
@@ -1211,6 +1263,8 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
     ...(superseded.length ? { superseded: excludedRunSummary(superseded) } : {}),
     ...(setAside.length ? { setAside: excludedRunSummary(setAside) } : {}),
     ...(dispatchCounted.length ? { dispatchCounted: excludedRunSummary(dispatchCounted) } : {}),
+    // #651: the rows came from the unfiltered listing because the forge's filter index was empty.
+    ...(allForSha.some((x) => x && x.readVia === 'unfiltered-listing') ? { readVia: 'unfiltered-listing' } : {}),
   };
   const r = summarizeRepoOwnedRuns(heads, sha);
   return { ...r, ...extra };
