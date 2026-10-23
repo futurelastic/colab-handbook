@@ -14,12 +14,19 @@
  *   - an existing version with a different SHA256SUMS refuses and changes nothing (immutable);
  *   - an older final never moves latest.json back;
  *   - a candidate tag, a missing required file, a bad / reserved / `_` slug and a bad manifest refuse;
- *   - an unresolvable site name fails with a message naming the runner, not a stack trace.
+ *   - an unresolvable site name fails with a message naming the runner, not a stack trace;
+ *   - `requires` (#653): a malformed entry refuses; publish refuses a slug with no final, a final older than `min`
+ *     and a cycle through the site's manifests before rsync is called; the list is stamped into the installers;
+ *   - the reference installers in docs/downloads.md (#653), extracted from the doc and run against a stand-in
+ *     site over HTTP: dependencies first, each once, a satisfied one left alone, a cycle / a missing / a failing
+ *     dependency stops before the app, INSTALL_SKIP_REQUIRES=1 installs only the app. The PowerShell one runs where
+ *     `pwsh` is on PATH (CI's Linux runners carry it).
  */
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
+const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -73,13 +80,13 @@ function fixture({ yml = YML, manifest = MANIFEST, version = '1.2.0', extra = {}
   return { base, repo, assets, site };
 }
 
-/** fetch over the site directory: BASE/probe/<p> → <site>/<p>. */
+/** fetch over the site directory: BASE/<app>/<p> → <site>/../<app>/<p> (the site holds every app's folder). */
 function siteFetch(site, seen = []) {
   return async (url) => {
     seen.push(url);
-    const rel = url.slice(`${BASE}/probe/`.length);
-    const f = path.join(site, rel);
-    if (!url.startsWith(`${BASE}/probe/`) || !fs.existsSync(f) || fs.statSync(f).isDirectory())
+    const rel = url.slice(`${BASE}/`.length);
+    const f = path.join(path.dirname(site), rel);
+    if (!url.startsWith(`${BASE}/`) || rel.split('/').includes('..') || !fs.existsSync(f) || fs.statSync(f).isDirectory())
       return new Response('not found', { status: 404 });
     return new Response(fs.readFileSync(f), { status: 200 });
   };
@@ -226,4 +233,290 @@ test('the CLI: check and names read project.yml; an optional file is listed', as
   const bad = cli('check');
   assert.strictEqual(bad.status, 1);
   assert.match(bad.stderr, /manifest\.json: .*summary/);
+});
+
+// ── requires (#653) ──────────────────────────────────────────────────────────────────────────────
+
+/** Puts another app on the fixture's site: its latest.json (a final at `version`) and manifest.json. */
+function siteApp(fx, slug, { version = '1.0.0', requires } = {}) {
+  const dir = path.join(path.dirname(fx.site), slug);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'latest.json'), JSON.stringify({ version, files: {} }));
+  const manifest = { name: slug, summary: 'x', install: { linux: { steps: ['x'] } }, ...(requires ? { requires } : {}) };
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+}
+
+function withRequires(requires, installer = "#!/bin/sh\nBASE='@DOWNLOADS_URL@'\nREQUIRES='@DOWNLOADS_REQUIRES@'\n") {
+  const fx = fixture({ manifest: { ...MANIFEST, requires } });
+  fs.writeFileSync(path.join(fx.repo, 'scripts', 'install.sh'), installer);
+  return fx;
+}
+
+test('requires: a malformed entry, a duplicate, the app itself and an installer with no stamp point refuse', async () => {
+  const m = await load();
+  assert.doesNotThrow(() => m.validateManifest({ ...MANIFEST, requires: [{ slug: 'svc', min: '2.1.0' }] }));
+  assert.throws(
+    () => m.validateManifest({ ...MANIFEST, requires: [{ slug: 'Svc', min: '2' }, { slug: 'a', min: '1.0.0', at: 1 }, 'b', { slug: 'a', min: '1.0.0' }] }),
+    (e) => /requires\[0\]\.slug/.test(e.message) && /requires\[0\]\.min/.test(e.message) && /requires\[1\]\.at: unknown/.test(e.message)
+      && /requires\[2\]: an object/.test(e.message) && /requires\[3\]\.slug: a is listed twice/.test(e.message),
+  );
+  assert.throws(() => m.validateManifest({ ...MANIFEST, requires: 'svc' }), /requires: a list/);
+  assert.throws(() => m.loadRepo(withRequires([{ slug: 'probe', min: '1.0.0' }]).repo), /requires names probe itself/);
+  assert.throws(() => m.loadRepo(withRequires([{ slug: 'svc', min: '1.0.0' }], "#!/bin/sh\nBASE='@DOWNLOADS_URL@'\n").repo),
+    /scripts\/install\.sh has no @DOWNLOADS_REQUIRES@/);
+  // no requires: the old installer (no second placeholder) still loads, and stamps nothing
+  assert.doesNotThrow(() => m.loadRepo(fixture().repo));
+});
+
+test('requires: stamped into the installers in order; `check` names them', async () => {
+  const m = await load();
+  const fx = withRequires([{ slug: 'svc', min: '2.1.0' }, { slug: 'layer', min: '0.3.0' }]);
+  const { config, manifest } = m.loadRepo(fx.repo);
+  const outDir = tmp('pd-out-');
+  await m.stage({ tag: 'v1.2.0', assetsDir: fx.assets, outDir, baseUrl: BASE, root: fx.repo, config, manifest });
+  assert.match(fs.readFileSync(path.join(outDir, 'install.sh'), 'utf8'), /REQUIRES='svc:2\.1\.0 layer:0\.3\.0'/);
+  const c = spawnSync(process.execPath, [SCRIPT, 'check', '--root', fx.repo], { encoding: 'utf8' });
+  assert.strictEqual(c.status, 0, c.stderr);
+  assert.match(c.stdout, /requires svc:2\.1\.0 layer:0\.3\.0/);
+  // an app with no requires stamps an empty list
+  const plain = fixture();
+  fs.writeFileSync(path.join(plain.repo, 'scripts', 'install.sh'), "BASE='@DOWNLOADS_URL@'\nREQUIRES='@DOWNLOADS_REQUIRES@'\n");
+  const p = m.loadRepo(plain.repo);
+  const out2 = tmp('pd-out-');
+  await m.stage({ tag: 'v1.2.0', assetsDir: plain.assets, outDir: out2, baseUrl: BASE, root: plain.repo, ...p });
+  assert.match(fs.readFileSync(path.join(out2, 'install.sh'), 'utf8'), /REQUIRES=''/);
+});
+
+test('requires: the site must carry every slug at a final >= min, and no cycle', async () => {
+  const m = await load();
+  const fx = fixture();
+  const check = (requires) => m.checkRequires({ app: 'probe', manifest: { requires }, baseUrl: BASE, fetchImpl: siteFetch(fx.site) });
+  await assert.rejects(check([{ slug: 'svc', min: '1.0.0' }]), /svc \(required by probe\) has no final on the site/);
+  siteApp(fx, 'svc', { version: '2.0.0', requires: [{ slug: 'layer', min: '0.3.0' }] });
+  await assert.rejects(check([{ slug: 'svc', min: '2.1.0' }]), /probe needs svc >= 2\.1\.0, and the site's newest final of it is 2\.0\.0/);
+  await assert.rejects(check([{ slug: 'svc', min: '1.0.0' }]), /layer \(required by probe → svc\) has no final/);
+  siteApp(fx, 'layer', { version: '0.3.0' });
+  // a diamond is not a cycle, and each app is visited once
+  siteApp(fx, 'cli', { version: '1.0.0', requires: [{ slug: 'layer', min: '0.1.0' }] });
+  assert.deepStrictEqual(await check([{ slug: 'svc', min: '1.0.0' }, { slug: 'cli', min: '1.0.0' }]), ['svc', 'layer', 'cli']);
+  // back to this app, and round a loop that does not include it
+  siteApp(fx, 'layer', { version: '0.3.0', requires: [{ slug: 'probe', min: '1.0.0' }] });
+  await assert.rejects(check([{ slug: 'svc', min: '1.0.0' }]), /a cycle — probe → svc → layer → probe/);
+  siteApp(fx, 'layer', { version: '0.3.0', requires: [{ slug: 'svc', min: '1.0.0' }] });
+  await assert.rejects(check([{ slug: 'svc', min: '1.0.0' }]), /a cycle — probe → svc → layer → svc/);
+});
+
+test('requires: publish refuses before rsync is called, a dry run too', { skip: !HAS_RSYNC && 'rsync not on PATH' }, async () => {
+  const fx = withRequires([{ slug: 'svc', min: '1.0.0' }]);
+  for (const dryRun of [true, false]) {
+    const calls = {};
+    const m = await load();
+    const { config, manifest } = m.loadRepo(fx.repo);
+    const outDir = tmp('pd-out-');
+    await m.stage({ tag: 'v1.2.0', assetsDir: fx.assets, outDir, baseUrl: BASE, root: fx.repo, config, manifest });
+    const rsync = recordingRsync(fx.base, calls);
+    await assert.rejects(
+      m.publish({ outDir, app: 'probe', dest: `${fx.site}/`, baseUrl: BASE, dryRun, rsync, fetchImpl: siteFetch(fx.site), log: () => {} }),
+      /svc \(required by probe\) has no final on the site/,
+    );
+    assert.deepStrictEqual(calls.read(), [], `dryRun=${dryRun}: rsync never called`);
+    assert.deepStrictEqual(fs.readdirSync(fx.site), [], 'and the site is untouched');
+  }
+  siteApp(fx, 'svc', { version: '1.0.0' });
+  const ok = await run(fx);
+  assert.deepStrictEqual(ok.result.requires, ['svc']);
+  assert.match(fs.readFileSync(path.join(fx.site, 'install.sh'), 'utf8'), /REQUIRES='svc:1\.0\.0'/);
+});
+
+// ── the reference installers in docs/downloads.md ───────────────────────────────────────────────
+
+const DOC = fs.readFileSync(path.join(ROOT, 'docs', 'downloads.md'), 'utf8');
+
+/** The doc's fenced block in `lang` that starts with `first`, exactly once — the doc is the one source. */
+function docBlock(lang, first) {
+  const blocks = [...DOC.matchAll(new RegExp('```' + lang + '\\n([\\s\\S]*?)\\n```', 'g'))].map((x) => x[1]).filter((b) => b.startsWith(first));
+  assert.strictEqual(blocks.length, 1, `docs/downloads.md carries one ${lang} reference installer`);
+  return blocks[0];
+}
+
+/** Replaces exactly one match — so a doc edit that moves an EDIT point fails here, loudly. */
+function once(text, re, by) {
+  assert.strictEqual((text.match(new RegExp(re.source, re.flags.replace('g', '') + 'g')) || []).length, 1, `one ${re}`);
+  return text.replace(re, by);
+}
+
+const INSTALLERS = {
+  sh: {
+    file: 'install.sh',
+    block: () => docBlock('sh', '#!/bin/sh'),
+    app: /^APP=myapp /m,
+    fns: [/^installed_version\(\) \{.*\n[\s\S]*?^\}\n/m, /^install_app\(\) \{.*\n[\s\S]*?^\}\n/m],
+    make: (slug, version, fail, noVersion) => [
+      `APP=${slug} `,
+      noVersion ? 'installed_version() { :; }\n' : 'installed_version() { cat "$PREFIX/$APP.version" 2>/dev/null || true; }\n',
+      fail
+        ? 'install_app() { echo "checksum mismatch on $APP" >&2; exit 1; }\n'
+        : `install_app() { echo ${version} > "$PREFIX/$APP.version"; echo "$APP" >> "$PREFIX/order"; }\n`,
+    ],
+    cmd: (file) => ['sh', [file]],
+  },
+  ps1: {
+    file: 'install.ps1',
+    block: () => docBlock('powershell', '# Installs myapp'),
+    app: /^\$App = 'myapp' /m,
+    fns: [/^function Get-InstalledVersion \{.*\n[\s\S]*?^\}\n/m, /^function Install-App \{.*\n[\s\S]*?^\}\n/m],
+    make: (slug, version, fail, noVersion) => [
+      `$App = '${slug}' `,
+      noVersion ? 'function Get-InstalledVersion { $null }\n' : 'function Get-InstalledVersion { $f = Join-Path $env:PREFIX "$App.version"; if (Test-Path $f) { [version](Get-Content -Raw $f).Trim() } }\n',
+      fail
+        ? 'function Install-App { throw "checksum mismatch on $App" }\n'
+        : `function Install-App { Set-Content -Path (Join-Path $env:PREFIX "$App.version") -Value '${version}'; Add-Content -Path (Join-Path $env:PREFIX order) -Value $App }\n`,
+    ],
+    cmd: (file) => ['pwsh', ['-NoProfile', '-NonInteractive', '-File', file]],
+  },
+};
+
+const HAS_PWSH = spawnSync('sh', ['-c', 'command -v pwsh'], { encoding: 'utf8' }).status === 0;
+
+/** A stand-in site over HTTP (a real fetch, as curl / Invoke-WebRequest make it) serving `dir`. */
+async function serve(dir) {
+  const server = http.createServer((req, res) => {
+    const rel = decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, '');
+    const f = path.join(dir, rel);
+    if (rel.split('/').includes('..') || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end('not found'); }
+    res.writeHead(200);
+    res.end(fs.readFileSync(f));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => server.close(r)) };
+}
+
+/**
+ * Async, so the stand-in site keeps answering while the installer runs. Bounded: an installer whose cycle guard is
+ * broken recurses forever, and that must fail here, not hang the run. The installer leads its own process group so
+ * the timeout reaps every nested installer with it.
+ */
+function runInstaller(cmd, args, env, ms = 60000) {
+  return new Promise((resolveRun) => {
+    const child = spawn(cmd, args, { detached: true, env: { PATH: process.env.PATH, HOME: process.env.HOME || os.tmpdir(), TMPDIR: os.tmpdir(), ...env } });
+    let out = '';
+    const timer = setTimeout(() => { out += `\n[timed out after ${ms} ms]`; try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, ms);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    // pwsh colours an error and wraps it at the console width (`     | …` continuation lines): read it as one line
+    const plain = () => out.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r?\n\s*\|\s*/g, ' ');
+    child.on('close', (status) => { clearTimeout(timer); resolveRun({ status, out: plain() }); });
+  });
+}
+
+for (const [kind, I] of Object.entries(INSTALLERS)) {
+  test(`the reference ${kind} installer: requires first, once each, satisfied ones left alone; cycle, missing and failure stop before the app; opt-out`,
+    { skip: kind === 'ps1' && !HAS_PWSH && 'pwsh not on PATH' }, async () => {
+      const m = await load();
+      const base = tmp('pd-inst-');
+      const siteDir = path.join(base, 'site');
+      const site = await serve(siteDir);
+      /** Publishes app `slug` to the stand-in site: its installer, the requires stamped as the publish does. */
+      const app = (slug, { version = '1.0.0', requires = [], fail = false, noVersion = false } = {}) => {
+        const [appLine, versionFn, installFn] = I.make(slug, version, fail, noVersion);
+        let text = once(I.block(), I.app, appLine);
+        text = once(text, I.fns[0], versionFn);
+        text = once(text, I.fns[1], installFn);
+        text = text.split(m.PLACEHOLDER).join('https://dl.example.invalid').split(m.REQUIRES_PLACEHOLDER).join(m.requiresStamp({ requires }));
+        fs.mkdirSync(path.join(siteDir, slug), { recursive: true });
+        fs.writeFileSync(path.join(siteDir, slug, I.file), text);
+      };
+      const prefix = () => { const p = tmp('pd-prefix-'); return p; };
+      const order = (p) => (fs.existsSync(path.join(p, 'order')) ? fs.readFileSync(path.join(p, 'order'), 'utf8').trim().split(/\r?\n/).filter(Boolean) : []);
+      const install = (slug, p, env = {}) => {
+        const [cmd, args] = I.cmd(path.join(siteDir, slug, I.file));
+        return runInstaller(cmd, args, { DOWNLOADS_SITE: site.url, PREFIX: p, ...env });
+      };
+      try {
+        app('a', { version: '3.0.0', requires: [{ slug: 'b', min: '1.0.0' }, { slug: 'c', min: '2.0.0' }] });
+        app('b', { version: '1.0.0', requires: [{ slug: 'c', min: '1.0.0' }] });
+        app('c', { version: '2.0.0' });
+
+        // nothing installed: c (through b), b, then a — and c only once, though both a and b require it
+        const p1 = prefix();
+        let r = await install('a', p1);
+        assert.strictEqual(r.status, 0, r.out);
+        assert.deepStrictEqual(order(p1), ['c', 'b', 'a'], r.out);
+
+        // once per run even where no version check could tell: k has none, so only the run's list keeps it to one install
+        app('g', { requires: [{ slug: 'h', min: '1.0.0' }, { slug: 'k', min: '1.0.0' }] });
+        app('h', { requires: [{ slug: 'k', min: '1.0.0' }] });
+        app('k', { noVersion: true });
+        const p0 = prefix();
+        r = await install('g', p0);
+        assert.strictEqual(r.status, 0, r.out);
+        assert.deepStrictEqual(order(p0), ['k', 'h', 'g'], r.out);
+
+        // b already at its min, c older than a's min: only c is installed again, then a
+        const p2 = prefix();
+        fs.writeFileSync(path.join(p2, 'b.version'), '1.0.0\n');
+        fs.writeFileSync(path.join(p2, 'c.version'), '1.5.0\n');
+        r = await install('a', p2);
+        assert.strictEqual(r.status, 0, r.out);
+        assert.deepStrictEqual(order(p2), ['c', 'a'], r.out);
+        assert.match(r.out, /b 1\.0\.0 is installed \(>= 1\.0\.0\)/);
+
+        // the opt-out installs the app alone
+        const p3 = prefix();
+        r = await install('a', p3, { INSTALL_SKIP_REQUIRES: '1' });
+        assert.strictEqual(r.status, 0, r.out);
+        assert.deepStrictEqual(order(p3), ['a'], r.out);
+
+        // a cycle stops before anything is installed
+        app('x', { requires: [{ slug: 'y', min: '1.0.0' }] });
+        app('y', { requires: [{ slug: 'x', min: '1.0.0' }] });
+        const p4 = prefix();
+        r = await install('x', p4);
+        assert.notStrictEqual(r.status, 0, r.out);
+        assert.match(r.out, /a cycle: x y x/);
+        assert.deepStrictEqual(order(p4), [], r.out);
+
+        // a dependency not on the site, and one whose install fails: named, and the app is not installed
+        app('m', { requires: [{ slug: 'c', min: '1.0.0' }, { slug: 'nope', min: '1.0.0' }] });
+        const p5 = prefix();
+        r = await install('m', p5);
+        assert.notStrictEqual(r.status, 0, r.out);
+        assert.match(r.out, /m: cannot install nope: .*\/nope\/install\.(sh|ps1) is not on the site; m was not installed/);
+        assert.deepStrictEqual(order(p5), ['c'], 'the dependency before it stays installed; m is not');
+        app('f', { fail: true });
+        app('n', { requires: [{ slug: 'f', min: '1.0.0' }] });
+        const p6 = prefix();
+        r = await install('n', p6);
+        assert.notStrictEqual(r.status, 0, r.out);
+        assert.match(r.out, /checksum mismatch on f/);
+        assert.match(r.out, /n: installing f failed \(its reason is above\); n was not installed/);
+        assert.deepStrictEqual(order(p6), [], r.out);
+      } finally {
+        await site.close();
+      }
+    });
+}
+
+test('the reference PowerShell installer, run as `irm | iex`, leaves the session\'s environment as it found it', { skip: !HAS_PWSH && 'pwsh not on PATH' }, async () => {
+  const m = await load();
+  const base = tmp('pd-iex-');
+  const I = INSTALLERS.ps1;
+  const site = await serve(base);
+  try {
+    for (const [slug, requires] of [['a', [{ slug: 'b', min: '1.0.0' }]], ['b', []]]) {
+      const [appLine, versionFn, installFn] = I.make(slug, '1.0.0', false);
+      const text = once(once(once(I.block(), I.app, appLine), I.fns[0], versionFn), I.fns[1], installFn)
+        .split(m.REQUIRES_PLACEHOLDER).join(m.requiresStamp({ requires }));
+      fs.mkdirSync(path.join(base, slug));
+      fs.writeFileSync(path.join(base, slug, I.file), text);
+    }
+    const p = tmp('pd-prefix-');
+    const probe = "foreach ($k in 'INSTALL_REQUIRES_CHAIN','INSTALL_REQUIRES_DONE','INSTALL_MIN') { Write-Output \"$k=[$([Environment]::GetEnvironmentVariable($k))]\" }; Write-Output \"SITE=[$env:DOWNLOADS_SITE]\"";
+    const r = await runInstaller('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `irm ${site.url}/a/install.ps1 | iex; ${probe}`], { DOWNLOADS_SITE: site.url, PREFIX: p });
+    assert.strictEqual(r.status, 0, r.out);
+    assert.deepStrictEqual(fs.readFileSync(path.join(p, 'order'), 'utf8').trim().split(/\r?\n/), ['b', 'a']);
+    assert.match(r.out, /INSTALL_REQUIRES_CHAIN=\[\]\s+INSTALL_REQUIRES_DONE=\[\]\s+INSTALL_MIN=\[\]\s+SITE=\[http:\/\/127\.0\.0\.1:\d+\]/);
+  } finally {
+    await site.close();
+  }
 });

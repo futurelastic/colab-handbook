@@ -983,9 +983,9 @@ downloads:
 Says that this repository publishes its **finals' files to a self-hosted downloads site**, and
 which. Read by the [`publish-downloads`](templates/publish-downloads.mjs) template, which refuses —
 before uploading anything — an `app` that is not `[a-z0-9][a-z0-9-]*`, starts with `_` or is a name
-the site reserves, a file name with a path in it, a listed file missing from the Release, and an
-invalid manifest. Absent means the repo publishes nothing there; the audit reads no rule from it.
-The site, the order and the manifest's fields: [`docs/downloads.md`](docs/downloads.md).
+the site reserves, a file name with a path in it, a listed file missing from the Release, an invalid
+manifest, and a `requires` the site cannot install. Absent means the repo publishes nothing there;
+the audit reads no rule from it. The site, the order, the manifest: [`docs/downloads.md`](docs/downloads.md).
 
 ### `ci` — deliberately not a field
 

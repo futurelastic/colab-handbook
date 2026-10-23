@@ -17,7 +17,8 @@
 # WHAT IT DOES for a final tag vX.Y.Z whose files are on its GitHub Release: uploads them with rsync over SSH
 # in the order that keeps a half-finished run harmless — the version folder (with a combined SHA256SUMS last
 # inside it, written only after every file read back over HTTPS against it), then the installers with the
-# site address stamped in, then manifest.json, then latest.json LAST — and reads it all back. A published
+# site address and the manifest's `requires` stamped in (each required app checked on the site first, #653),
+# then manifest.json, then latest.json LAST — and reads it all back. A published
 # version is immutable: nothing is ever replaced, and a build whose SHA256SUMS differs from the published
 # one is refused. A re-run of a complete version verifies and sends nothing. NEVER a candidate (-rc.N).
 #
