@@ -1155,6 +1155,11 @@ function ghRunForCommit(repo, branch, sha, limit = 10, opts = {}) {
  * Every run at `sha` read by commit, not by branch recency (#339): `colab release finalize` checks
  * a candidate that may be days and many trunk runs old, which a `--branch main -L 10` window no
  * longer reaches. Same row shape as ghRunsForCommit; null on failure.
+ *
+ * #654: `--commit` reads the same forge filter index #651 measured empty, so an EMPTY answer gets
+ * the same re-read from the bounded unfiltered listing (any branch — this read never had a branch
+ * key). Rows found that way carry `readVia: 'unfiltered-listing'`, which summarizeRunsForCommit
+ * passes on to the verdict. Nothing there either (or the re-read is unreadable): the empty set stands.
  */
 function ghRunsAtCommit(repo, sha, limit = 100) {
   if (!sha) return null;
@@ -1165,7 +1170,12 @@ function ghRunsAtCommit(repo, sha, limit = 100) {
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
   if (!Array.isArray(runs)) return null;
-  return runs.filter((x) => x && x.headSha === sha);
+  const rows = runs.filter((x) => x && x.headSha === sha);
+  if (rows.length) return rows;
+  const full = fullSha(repo, sha);
+  if (full !== sha) return rows; // an abbreviated sha would match no fallback row against `sha` anyway
+  const fb = ghRunsAtShaUnfiltered(repo, full, null);
+  return fb.rows && fb.rows.length ? fb.rows.slice(0, limit) : rows;
 }
 
 /**
@@ -1513,7 +1523,7 @@ module.exports = {
   claimRemote, remoteHeads, parseRemoteHeads, CLAIM_REF_PREFIX, claimRef, pushClaimRef, deleteClaimRef,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
-  ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
+  ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghRunsAtShaUnfiltered, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
   ghRunJobCount, ghRunJobs, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,

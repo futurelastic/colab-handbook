@@ -111,7 +111,11 @@ test('#651 a run at the sha on ANOTHER branch is not trunk\'s run — the client
   const fx = fixture();
   fx.setPage(1, [run(fx.sha, 'CI', 'success', 7, 'feat/x-1')]);
   const t = trunkCi(fx);
-  assert.strictEqual(t.body.verdict, 'NONE', JSON.stringify(t.body));
+  // The branch-keyed read drops it. #654: the by-commit second opinion (#413) has no branch key by
+  // design, and now reads through the same fallback — so it finds the run, exactly as `gh run list
+  // --commit` does on a healthy index. The verdict names both routes.
+  assert.match(t.body.detail, /\(by commit — the branch-filtered read was empty\)/, JSON.stringify(t.body));
+  assert.strictEqual(t.body.verdict, 'GREEN', JSON.stringify(t.body));
   fs.rmSync(fx.root, { recursive: true, force: true });
 });
 
