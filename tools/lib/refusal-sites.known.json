@@ -172,7 +172,6 @@
   "tools/colab:user-error:Refusing: … is the trunk itself — it cannot be a batch member": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:could not fetch …: … — a batch is never built from stale refs": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:could not read … on …": "pre-#532: refusal with no next command yet",
-  "tools/colab:user-error:could not clear the declined … — delete it by hand, then run this comman": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:could not check out … to build the batch: …": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:could not push …: … — nothing landed": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:the main checkout is not on a clean … (\"…\"…) — the batch is green and wa": "pre-#532: refusal with no next command yet",

@@ -11104,8 +11104,11 @@ It never waits: each call reads the remote, takes ONE step and exits —
      NOT move (a local pre-push hook, a remote rejection): the push's own output is echoed, and
      re-running hits the same refusal until its cause is fixed (#509)
 One batch per base: a batch at this base carrying OTHER members is waited on (exit 3) while its run
-is pending or green, but a declined one — its combined run red — is deleted and the batch you asked
-for is built in its place, so the survivors of a decline can batch without landing serially first (#391).
+is pending, or green within ${shipBatch.LANE_GRACE_SEC / 60}m of settling (the serial doors' lane grace, below), but a declined one — its
+combined run red — is deleted and the batch you asked for is built in its place, so the survivors of a
+decline can batch without landing serially first (#391). A green one still unlanded past that grace lost
+its lander and is deleted and rebuilt the same way; a green one whose settle time cannot be read is
+still waited on — only a provably abandoned batch is deleted (#659).
 A call that goes serial on trunk CI not green gives up on its members, so it deletes every batch at
 trunk's tip whose members it ALL names (its run cancelled if still going) — nobody would ever land
 it, and it would hold this base for every later call; a batch also carrying another member stays (#656).
@@ -15483,15 +15486,23 @@ function cmdShipBatch(opts) {
     const inBatch = shipBatch.parseMemberTrailers(log.ok ? log.stdout.split('\0') : []).reverse();
     const foreign = inBatch.filter((m) => !members.includes(m.branch));
     // #391: a DECLINED batch (combined run red) is not in flight — clear it and build the one asked for.
-    const foreignStep = foreign.length ? shipBatch.foreignBatchStep(shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, atBase.parsed.ref, atBase.sha))) : null;
+    // #659: nor is a green one past the lane grace (laneHold's rule) — its lander is gone.
+    let foreignStep = null;
+    if (foreign.length) {
+      const runs = git.ghRunsForRef(repoAbs, atBase.parsed.ref, atBase.sha);
+      foreignStep = shipBatch.foreignBatchStep(shipBatch.combinedVerdict(runs), { settledAtMs: shipBatch.settledAt(runs), nowMs: Date.now() });
+    }
     if (foreignStep && foreignStep.step === 'wait') {
-      print(`⏸ ship-batch: another batch is in flight at this base — ${atBase.parsed.ref} carries ${inBatch.map((m) => m.branch).join(', ')}.`);
+      print(`⏸ ship-batch: another batch is in flight at this base — ${atBase.parsed.ref} carries ${inBatch.map((m) => m.branch).join(', ')}${foreignStep.why ? ` (${foreignStep.why})` : ''}.`);
       print('  Wait for it to land or be declined, then run this command again.');
       return 3;
     }
     if (foreignStep) {
-      print(`  ${atBase.parsed.ref} (${inBatch.map((m) => m.branch).join(', ')}) was declined — its combined run is red (${foreignStep.why}); nothing landed from it. Deleting it and building the requested batch.`);
-      if (!opts.dry && !deleteRef(atBase.parsed.ref)) throw new UserError(`could not clear the declined ${atBase.parsed.ref} — delete it by hand, then run this command again`);
+      const carried = inBatch.map((m) => m.branch).join(', ');
+      print(foreignStep.reason === 'abandoned'
+        ? `  ${atBase.parsed.ref} (${carried}) was abandoned — its ${foreignStep.why}; nothing landed from it. Deleting it and building the requested batch.`
+        : `  ${atBase.parsed.ref} (${carried}) was declined — its combined run is red (${foreignStep.why}); nothing landed from it. Deleting it and building the requested batch.`);
+      if (!opts.dry && !deleteRef(atBase.parsed.ref)) throw new UserError(`could not clear the ${foreignStep.reason === 'abandoned' ? 'abandoned' : 'declined'} ${atBase.parsed.ref} — delete it by hand (\`git push ${remote} --delete ${atBase.parsed.ref}\`), then run this command again`);
     }
     if (!foreignStep) {
       const heads = inBatch.map((m) => ({ ...m, now: git.branchRefs(repoAbs, m.branch, remote).remoteSha }));

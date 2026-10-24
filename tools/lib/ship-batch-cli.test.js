@@ -982,6 +982,37 @@ test('#581: a just-built batch with no run yet holds; an abandoned or declined o
   assert.match(red.detail, /declined/);
 });
 
+test('#659: a green foreign batch past the lane grace is cleared and the requested batch built; inside it, still in flight', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx).code, 3);
+  const staleSha = fx.originSha(ref);
+
+  // green 5m ago: its lander may still land it — the door holds, exactly as the serial doors do
+  fx.setStatus(ref, `completed success 1 ${isoAgo(5)}`);
+  const held = batch(fx, ['fix/b-12', 'fix/c-13']);
+  assert.strictEqual(held.code, 3, held.out + held.err);
+  assert.match(held.out, /another batch is in flight at this base .*green 5m ago/);
+  assert.strictEqual(fx.originSha(ref), staleSha, 'inside the grace the green batch is left alone');
+
+  // green 20m ago and still at trunk's tip: its lander died after green — cleared and rebuilt
+  fx.setStatus(ref, `completed success 1 ${isoAgo(20)}`);
+  const r = batch(fx, ['fix/b-12', 'fix/c-13']);
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  assert.doesNotMatch(r.out, /in flight at this base/);
+  assert.match(r.out, /was abandoned — its combined run green 20m ago and still not landed/);
+  assert.match(r.out, /BATCH-PENDING/);
+  assert.deepStrictEqual(fx.batchRefs(), [ref]);
+  assert.notStrictEqual(fx.originSha(ref), staleSha, 'the ref now holds the requested batch');
+  const carried = fx.g(fx.origin, 'log', '--format=%s', `${T}..${ref}`);
+  assert.match(carried, /b-12/);
+  assert.match(carried, /c-13/);
+  assert.doesNotMatch(carried, /a-11/);
+  assert.strictEqual(fx.originSha('main'), T, 'nothing landed');
+});
+
 test('#581: inert where ship-batch is not enabled — no row, and no batch ref is even read', () => {
   const fx = fixture({ yml: YML('') });
   member(fx, 'fix/d-14');

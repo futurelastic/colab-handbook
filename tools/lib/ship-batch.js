@@ -462,12 +462,30 @@ function nextStep({ enabled, wired, trunkCi, eligibleCount = 0, existing = null,
  * for. Is it still in flight, or already declined? Only a pending/green (or not-yet-run) batch is in
  * flight and may make the new request wait; a red one — first attempt or after its re-run — has
  * been declined (`red-rerun-or-serial` keeps its ref so the one re-run stays possible), and keeping
- * it would block every later batch at this base until trunk moved. So:
- *   clear  its combined run is red → delete the ref, then build the requested batch
- *   wait   anything else (pending, none, green, unreadable) → exit 3, exactly as before
+ * it would block every later batch at this base until trunk moved.
+ *
+ * #659: a GREEN one is in flight only for the grace the serial doors give it (laneHold): its lander
+ * lands it on its next call, so a green ref still at trunk's tip `graceSec` after its run settled has
+ * lost its lander (died after green, before the fast-forward) and would pause every batch at this
+ * base until trunk moved for some other reason — while the serial doors already release it. So:
+ *   clear  red → `reason: 'red'`; green, settled ≥ graceSec ago → `reason: 'abandoned'`
+ *          → delete the ref, then build the requested batch
+ *   wait   anything else → exit 3: pending, none, green within the grace — and green whose settle
+ *          time could not be read. That last one deliberately differs from laneHold, which releases
+ *          it: deleting another caller's green run is not undoable, so the batch door clears only a
+ *          provably abandoned ref (#391's pinned case, kept on purpose — recorded on #659).
+ * `settledAtMs` is settledAt() of the ref's runs; `nowMs` the clock.
  */
-function foreignBatchStep(verdict) {
-  return verdict && verdict.state === 'red' ? { step: 'clear', why: verdict.why } : { step: 'wait' };
+function foreignBatchStep(verdict, { settledAtMs = null, nowMs = null, graceSec = LANE_GRACE_SEC } = {}) {
+  if (verdict && verdict.state === 'red') return { step: 'clear', reason: 'red', why: verdict.why };
+  if (verdict && verdict.state === 'green' && Number.isFinite(settledAtMs) && Number.isFinite(nowMs)) {
+    const mins = Math.max(0, Math.round((nowMs - settledAtMs) / 60000));
+    if ((nowMs - settledAtMs) >= graceSec * 1000) {
+      return { step: 'clear', reason: 'abandoned', why: `combined run green ${mins}m ago and still not landed (grace ${graceSec}s) — treated as abandoned` };
+    }
+    return { step: 'wait', why: `combined run green ${mins}m ago — its lander lands it on its next call; past ${Math.round(graceSec / 60)}m unlanded it is cleared` };
+  }
+  return { step: 'wait' };
 }
 
 /**
@@ -475,7 +493,8 @@ function foreignBatchStep(verdict) {
  * green) is giving up on its members — they go to `colab ship --branch`, one at a time. A ref it
  * staged on an earlier call is then landed by nobody: no caller names that set again, and the ref
  * still reads "in flight" to the next `--batch` at the same base (foreignBatchStep waits on a green
- * ref forever) and to the serial doors (laneHold). Measured: one repo paused 14 h on such a ref.
+ * ref for LANE_GRACE_SEC since #659 — forever before it) and to the serial doors (laneHold).
+ * Measured: one repo paused 14 h on such a ref.
  *
  * Which refs this call abandons: those whose carried members are ALL named by this call. A ref that
  * also carries a member this call does not name belongs, at least in part, to another caller — it
