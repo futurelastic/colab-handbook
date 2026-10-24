@@ -250,6 +250,20 @@ test('adaptiveSize (#557): grow after green, shrink after red, start small, fixe
   assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 6, red: true } }), 4);
 });
 
+test('givenUpRefs (#656): a ref is abandoned only when this call names EVERY member it carries', () => {
+  const refs = [
+    { ref: 'ship-batch/aaaaaaa', members: ['fix/a-1', 'fix/b-2'] },
+    { ref: 'ship-batch/bbbbbbb', members: ['fix/a-1', 'fix/c-3'] },
+    { ref: 'ship-batch/ccccccc', members: [] },
+  ];
+  assert.deepStrictEqual(sb.givenUpRefs({ refs, members: ['fix/a-1', 'fix/b-2'] }), ['ship-batch/aaaaaaa']);
+  assert.deepStrictEqual(sb.givenUpRefs({ refs, members: ['fix/b-2', 'fix/a-1', 'fix/c-3'] }), ['ship-batch/aaaaaaa', 'ship-batch/bbbbbbb']);
+  assert.deepStrictEqual(sb.givenUpRefs({ refs, members: ['fix/a-1'] }), [], 'a ref also carrying another caller\'s member stays');
+  assert.deepStrictEqual(sb.givenUpRefs({ refs: [refs[2]], members: ['fix/a-1'] }), [], 'unreadable members are never a reason to delete');
+  assert.deepStrictEqual(sb.givenUpRefs({}), []);
+  assert.deepStrictEqual(sb.givenUpRefs({ refs: null, members: null }), []);
+});
+
 test('foreignBatchStep (#391): only a red batch is declined and cleared; everything else waits', () => {
   assert.strictEqual(sb.foreignBatchStep({ state: 'red', attempt: 1, why: 'x' }).step, 'clear');
   assert.strictEqual(sb.foreignBatchStep({ state: 'red', attempt: 2, why: 'x' }).step, 'clear');

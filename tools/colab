@@ -11106,6 +11106,9 @@ It never waits: each call reads the remote, takes ONE step and exits —
 One batch per base: a batch at this base carrying OTHER members is waited on (exit 3) while its run
 is pending or green, but a declined one — its combined run red — is deleted and the batch you asked
 for is built in its place, so the survivors of a decline can batch without landing serially first (#391).
+A call that goes serial on trunk CI not green gives up on its members, so it deletes every batch at
+trunk's tip whose members it ALL names (its run cancelled if still going) — nobody would ever land
+it, and it would hold this base for every later call; a batch also carrying another member stays (#656).
 The batch also holds the trunk LANE (#581): while a ship-batch/<trunk-sha7> ref at trunk's tip has its
 combined run in flight — or green within ${shipBatch.LANE_GRACE_SEC / 60}m, so its lander can land it — a serial
 \`colab ship --branch\` into trunk pauses with exit 3 (⏸ BATCH-IN-FLIGHT; its --dry --json row
@@ -15322,11 +15325,54 @@ function cmdShipBatch(opts) {
   const gh = isGhUsable(repoAbs);
   if (!gh) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — a batch cannot read its combined run`);
 
+  // #415: every write on the resume path goes through here or shipBatchLand — under --dry, neither writes.
+  const deleteRef = (ref) => {
+    if (opts.dry) { print(`  [dry] would delete ${remote}/${ref}`); return true; }
+    const d = git.git(['push', remote, '--delete', ref], repoAbs);
+    if (!d.ok) warn(`could not delete ${remote}/${ref}: ${git.gitFailureLine(d.stderr)} — delete it by hand`);
+    return d.ok;
+  };
+  // A ref nothing can land any more may still have its run going: cancel it rather than let it finish.
+  const cancelRuns = (ref, sha) => {
+    for (const r of (git.ghRunsForRef(repoAbs, ref, sha) || []).filter((x) => x.status !== 'completed' && x.databaseId)) {
+      if (opts.dry) { print(`  [dry] would cancel run ${r.databaseId} on ${ref}`); continue; }
+      const cx = git.ghRunCancel(repoAbs, r.databaseId);
+      if (!cx.ok) warn(`could not cancel run ${r.databaseId} on ${ref} — it will finish on a ref that is gone`);
+    }
+  };
+
   // ---- (b) trunk CI, read with NO doors: the cure/grant doors apply per member, never to a batch ----
   const tci = shipCiCheck(repoAbs, gh, trunk, trunk, null, null);
   const trunkCi = tci.ok ? 'green' : (tci.class === SELF_CLEARING ? 'pending' : 'red');
   if (trunkCi === 'red') {
+    // #656: going serial here gives up on these members, so a ref this command staged for them on an
+    // earlier call is landed by nobody — and it would read "in flight" to the next --batch at this base
+    // and to every serial door, until trunk moved (which the lock itself was preventing). Delete each
+    // ref rooted at trunk's tip whose members are ALL named here; one that also carries another
+    // caller's member stays (#581). Still fails closed: nothing lands, the members go serial.
+    releaseGivenUpBatches();
     return serial(`trunk CI not green (${tci.detail}) — a batch never passes the cure/grant doors; each member meets them on its own`);
+  }
+  function releaseGivenUpBatches() {
+    const ls = git.git(['ls-remote', remote, `refs/heads/${trunk}`, 'refs/heads/ship-batch/*'], repoAbs);
+    if (!ls.ok) { warn(`could not read ${remote}'s ship-batch refs — a batch staged for ${members.join(', ')} (if any) stays; delete it by hand`); return; }
+    const rows = ls.stdout.split('\n').map((l) => l.split('\t')).filter(([sha, ref]) => sha && ref).map(([sha, ref]) => [sha.trim(), ref.trim()]);
+    const tip = ((rows.find(([, ref]) => ref === `refs/heads/${trunk}`) || [])[0]) || '';
+    const refs = rows.map(([sha, ref]) => ({ sha, parsed: shipBatch.parseBatchRef(ref) })).filter((x) => x.parsed);
+    if (!tip || !refs.length) return;
+    const chains = shipBatch.batchChains({ refs: refs.map((x) => ({ ref: x.parsed.ref, base7: x.parsed.base7, sha: x.sha })), trunkNow: tip });
+    const rooted = refs.filter((x) => chains.get(x.parsed.ref).rooted).map((x) => {
+      // Each ref's OWN members: its trailers name it (a chain child's commits sit above its parent's).
+      const lg = git.git(['log', '--format=%B%x00', `${tip}..${x.sha}`], repoAbs);
+      const own = shipBatch.parseMemberTrailers(lg.ok ? lg.stdout.split('\0') : []).filter((m) => m.ref === x.parsed.ref).reverse();
+      return { ref: x.parsed.ref, sha: x.sha, members: own.map((m) => m.branch) };
+    });
+    for (const ref of shipBatch.givenUpRefs({ refs: rooted, members })) {
+      const b = rooted.find((x) => x.ref === ref);
+      print(`  ${ref} carries ${b.members.join(', ')} — every one going serial now, so nothing would ever land it; ${opts.dry ? 'would delete it [DRY RUN]' : 'deleting it'} (#656)`);
+      cancelRuns(ref, b.sha);
+      deleteRef(ref);
+    }
   }
   if (trunkCi === 'pending') {
     print(`⏸ ship-batch: trunk CI is still running (${tci.detail}) — wait on it (bounded, B1a), then run this command again.`);
@@ -15342,13 +15388,6 @@ function cmdShipBatch(opts) {
   const batchRefs = (lsBatch.ok ? lsBatch.stdout.split('\n') : []).map((l) => l.split('\t'))
     .map(([sha, ref]) => ({ sha: (sha || '').trim(), parsed: shipBatch.parseBatchRef((ref || '').trim()) }))
     .filter((x) => x.sha && x.parsed);
-  // #415: every write on the resume path goes through here or shipBatchLand — under --dry, neither writes.
-  const deleteRef = (ref) => {
-    if (opts.dry) { print(`  [dry] would delete ${remote}/${ref}`); return true; }
-    const d = git.git(['push', remote, '--delete', ref], repoAbs);
-    if (!d.ok) warn(`could not delete ${remote}/${ref}: ${git.gitFailureLine(d.stderr)} — delete it by hand`);
-    return d.ok;
-  };
   // #605: the sweep is chain-aware. A ref built `--onto` another batch's head is kept while its chain
   // ends at a batch on trunk's tip (lib/ship-batch.js batchChains, read from ls-remote alone); a ref
   // whose parent is gone, or whose root trunk has moved past, is deleted. Without any chained ref this
@@ -15367,11 +15406,7 @@ function cmdShipBatch(opts) {
     const offTrunk = !baseFull.ok || !git.git(['merge-base', '--is-ancestor', baseFull.stdout.trim(), trunkNow], repoAbs).ok;
     if (offTrunk) {
       print(`  ${b.parsed.ref} is not rooted at ${trunk}'s tip — ${c.why}; nothing landed from it; deleting it`);
-      for (const r of (git.ghRunsForRef(repoAbs, b.parsed.ref, b.sha) || []).filter((x) => x.status !== 'completed' && x.databaseId)) {
-        if (opts.dry) { print(`  [dry] would cancel run ${r.databaseId} on ${b.parsed.ref}`); continue; }
-        const cx = git.ghRunCancel(repoAbs, r.databaseId);
-        if (!cx.ok) warn(`could not cancel run ${r.databaseId} on ${b.parsed.ref} — it will finish on a ref that is gone`);
-      }
+      cancelRuns(b.parsed.ref, b.sha);
     } else {
       print(`  trunk moved since ${b.parsed.ref} was built (${b.parsed.base7} → ${shortSha(trunkNow)}) — nothing landed; rebuilding`);
     }

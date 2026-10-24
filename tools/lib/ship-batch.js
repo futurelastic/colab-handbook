@@ -471,6 +471,29 @@ function foreignBatchStep(verdict) {
 }
 
 /**
+ * #656: a `--batch` call that goes SERIAL before it reaches the existing-batch step (trunk CI not
+ * green) is giving up on its members — they go to `colab ship --branch`, one at a time. A ref it
+ * staged on an earlier call is then landed by nobody: no caller names that set again, and the ref
+ * still reads "in flight" to the next `--batch` at the same base (foreignBatchStep waits on a green
+ * ref forever) and to the serial doors (laneHold). Measured: one repo paused 14 h on such a ref.
+ *
+ * Which refs this call abandons: those whose carried members are ALL named by this call. A ref that
+ * also carries a member this call does not name belongs, at least in part, to another caller — it
+ * stays, exactly as #581 keeps it. A ref whose members could not be read (empty list) stays too:
+ * never deleted on a guess.
+ *
+ * In:  refs `[{ ref, members: [branch…] }]` (the batch refs rooted at trunk's tip, each with the
+ *      members its own Ship-Batch: trailers carry), members (the branches this call names).
+ * Out: the refs to delete, in input order.
+ */
+function givenUpRefs({ refs, members } = {}) {
+  const named = new Set(Array.isArray(members) ? members : []);
+  return (Array.isArray(refs) ? refs : [])
+    .filter((r) => r && r.ref && Array.isArray(r.members) && r.members.length && r.members.every((b) => named.has(b)))
+    .map((r) => r.ref);
+}
+
+/**
  * Does a green run on the batch ref count as trunk-green for the SAME sha (trunk fast-forwarded to
  * the batch head, so the sha is identical)? Only when the same workflows ran there — a workflow that
  * fires on a trunk push but not on `ship-batch/**` never graded that sha, and its absence is not a
@@ -678,7 +701,7 @@ module.exports = {
   MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY, WAIT_KEY, STEPS_KEY, SIZE_TRAILER_KEY, DROP_TRAILER_KEY, DROP_CLASSES,
   parseShipBatch, parseShipBatchWait, parseShipBatchSteps, sizeTrailer, parseSizeTrailer, adaptiveSize, splitHalves, partnerWait, readySince, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
   droppedTrailer, parseDroppedTrailers, appendTrailers,
-  branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
+  branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep, givenUpRefs,
   batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,
   LANE_GRACE_SEC, laneHold, settledAt, MAX_CHAIN_DEPTH, batchChains, chainedLandStep,
 };

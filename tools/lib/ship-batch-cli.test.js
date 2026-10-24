@@ -418,6 +418,89 @@ test('#391: a pending or green batch with other members still refuses as in flig
   }
 });
 
+/** #656: trunk's head an hour old, so "no run for <trunk>@<sha>" is past the 10m grace — the measured NONE, red. */
+function ageTrunk(fx) {
+  process.env.GIT_COMMITTER_DATE = new Date(Date.now() - 3600_000).toISOString();
+  try {
+    fs.writeFileSync(path.join(fx.work, 'aged.txt'), 'aged\n');
+    fx.g(fx.work, 'add', '-A');
+    fx.g(fx.work, 'commit', '-q', '-m', 'chore: an hour-old trunk head');
+    fx.g(fx.work, 'push', '-q', 'origin', 'main');
+  } finally { delete process.env.GIT_COMMITTER_DATE; }
+}
+
+test('#656: a batch that goes SERIAL on trunk CI deletes the ref it staged — a later --batch of a subset is not "in flight"', () => {
+  const fx = fixture();
+  ageTrunk(fx);
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  const pair = ['fix/a-11', 'fix/b-12'];
+  const r1 = batch(fx, pair);
+  assert.strictEqual(r1.code, 3, r1.out + r1.err);
+  assert.match(r1.out, /BATCH-PENDING/);
+  fx.setStatus(ref, 'completed success 1');
+
+  // the next call cannot read trunk's run (the measured NONE) → SERIAL, still failing closed
+  fx.setStatus('main', 'none');
+  const r2 = batch(fx, pair);
+  assert.strictEqual(r2.code, 4, r2.out + r2.err);
+  assert.match(r2.out, /trunk CI not green/);
+  assert.match(r2.out, /→ SERIAL: colab ship --branch fix\/a-11 · colab ship --branch fix\/b-12$/m);
+  assert.match(r2.out, new RegExp(`${ref} carries fix/a-11, fix/b-12 — every one going serial now.*deleting it \\(#656\\)`));
+  assert.deepStrictEqual(fx.batchRefs(), [], 'the ref no caller will land is gone');
+  assert.strictEqual(fx.originSha('main'), T, 'nothing landed');
+
+  // trunk reads green again: a batch of one member at the SAME base builds, it does not pause on the old pair
+  fx.setStatus('main', 'completed success 1');
+  const r3 = batch(fx, ['fix/a-11']);
+  assert.strictEqual(r3.code, 3, r3.out + r3.err);
+  assert.doesNotMatch(r3.out, /in flight/);
+  assert.match(r3.out, /BATCH-PENDING/);
+  assert.deepStrictEqual(fx.batchRefs(), [ref]);
+  assert.strictEqual(fx.g(fx.origin, 'log', '--format=%s', `${T}..${ref}`), 'fix: fix/a-11');
+});
+
+test('#656: going SERIAL leaves a batch that also carries another caller\'s member, and cancels the run of one it deletes', () => {
+  // a pending ref carrying a member this call does not name is someone else's in flight (#581)
+  {
+    const fx = fixture();
+    ageTrunk(fx);
+    for (const b of MEMBERS) member(fx, b);
+    const T = fx.originSha('main');
+    const ref = `ship-batch/${T.slice(0, 7)}`;
+    assert.strictEqual(batch(fx, ['fix/a-11', 'fix/b-12']).code, 3);
+    const sha = fx.originSha(ref);
+    fx.setStatus(ref, 'in_progress null 1');
+    fx.setStatus('main', 'none');
+    const r = batch(fx, ['fix/a-11']);
+    assert.strictEqual(r.code, 4, r.out + r.err);
+    assert.doesNotMatch(r.out, /#656/);
+    assert.strictEqual(fx.originSha(ref), sha, 'the other caller\'s batch is left alone');
+    assert.doesNotMatch(ghLog(fx), /run cancel/);
+  }
+  // the call's own pending batch: deleted, and its in-flight run cancelled; --dry deletes nothing
+  {
+    const fx = fixture();
+    ageTrunk(fx);
+    for (const b of MEMBERS) member(fx, b);
+    const T = fx.originSha('main');
+    const ref = `ship-batch/${T.slice(0, 7)}`;
+    assert.strictEqual(batch(fx, ['fix/a-11']).code, 3);
+    fx.setStatus(ref, 'in_progress null 1');
+    fx.setStatus('main', 'none');
+    const dry = batch(fx, ['fix/a-11', 'fix/b-12'], ['--dry']);
+    assert.strictEqual(dry.code, 4, dry.out + dry.err);
+    assert.match(dry.out, /would delete it \[DRY RUN\]/);
+    assert.match(dry.out, /\[dry\] would cancel run 9001/);
+    assert.deepStrictEqual(fx.batchRefs(), [ref], '--dry deletes nothing');
+    const r = batch(fx, ['fix/a-11', 'fix/b-12']);
+    assert.strictEqual(r.code, 4, r.out + r.err);
+    assert.deepStrictEqual(fx.batchRefs(), []);
+    assert.match(ghLog(fx), /run cancel 9001/);
+  }
+});
+
 test('#373 oracle 3: trunk moves during the combined run → no fast-forward; the batch is rebuilt', () => {
   const fx = fixture();
   for (const b of MEMBERS) member(fx, b);
