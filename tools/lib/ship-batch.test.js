@@ -272,6 +272,32 @@ test('foreignBatchStep (#391): only a red batch is declined and cleared; everyth
   assert.strictEqual(sb.foreignBatchStep(sb.combinedVerdict(null)).step, 'wait', 'an unreadable run list never clears');
 });
 
+test('foreignBatchStep (#659): a green batch past the lane grace is abandoned and cleared; inside it, it waits', () => {
+  const now = Date.parse('2026-10-24T12:00:00Z');
+  const green = { state: 'green' };
+  const ago = (s) => now - s * 1000;
+  const old = sb.foreignBatchStep(green, { settledAtMs: ago(sb.LANE_GRACE_SEC + 60), nowMs: now });
+  assert.strictEqual(old.step, 'clear');
+  assert.strictEqual(old.reason, 'abandoned');
+  assert.match(old.why, /16m ago and still not landed .*abandoned/);
+  assert.strictEqual(sb.foreignBatchStep(green, { settledAtMs: ago(sb.LANE_GRACE_SEC), nowMs: now }).step, 'clear', 'the grace boundary itself releases, as laneHold does');
+  const fresh = sb.foreignBatchStep(green, { settledAtMs: ago(sb.LANE_GRACE_SEC - 1), nowMs: now });
+  assert.strictEqual(fresh.step, 'wait');
+  assert.match(fresh.why, /its lander lands it/);
+  assert.strictEqual(sb.foreignBatchStep(green, { settledAtMs: ago(120), nowMs: now, graceSec: 60 }).step, 'clear', 'graceSec is honoured');
+  // an unreadable settle time (or clock) never clears a green batch — #391's case, kept deliberately
+  assert.strictEqual(sb.foreignBatchStep(green, { settledAtMs: null, nowMs: now }).step, 'wait');
+  assert.strictEqual(sb.foreignBatchStep(green, { settledAtMs: ago(9999), nowMs: null }).step, 'wait');
+  // only green is aged: pending/none stay in flight however old their timestamps
+  for (const state of ['pending', 'none']) assert.strictEqual(sb.foreignBatchStep({ state }, { settledAtMs: ago(9999), nowMs: now }).step, 'wait');
+  const red = sb.foreignBatchStep({ state: 'red', why: 'x' }, { settledAtMs: ago(1), nowMs: now });
+  assert.deepStrictEqual([red.step, red.reason], ['clear', 'red']);
+  // the lane door agrees on both sides of the grace for the same facts
+  const lane = (settledAtMs) => sb.laneHold({ batches: [{ ref: 'ship-batch/aaaaaaa', base7: 'aaaaaaa', verdict: green, settledAtMs }], trunkNow: 'aaaaaaa1', nowMs: now }).held;
+  assert.strictEqual(lane(ago(sb.LANE_GRACE_SEC + 60)), false);
+  assert.strictEqual(lane(ago(60)), true);
+});
+
 test('batchGreenCoversTrunk: only green, same workflows, enough rows, and no real trunk red', () => {
   const g = (id) => ({ status: 'completed', conclusion: 'success', databaseId: id });
   const args = { trunkRows: [{ status: 'in_progress' }], batchRows: [g(1)], trunkFires: ['ci.yml'], batchFires: ['ci.yml'] };

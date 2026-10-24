@@ -364,6 +364,11 @@ the heavy lane must also be green at the batch head; a heavy red re-runs or spli
    batch's base** (for a chain, once the parent landed at that sha — step 11), by a plain
    non-forced push (a moved trunk fails it; the batch is then rebuilt on the new head). Each member's evidence names the combined run. While that run is in
    flight (or green, within a grace), the batch **holds the trunk lane**: serial ships pause (#581).
+   **One batch per base**: a `--batch` naming other members waits (exit `3`) on a batch at its
+   base by the same bound — pending, or green within that grace. A red one is declined (#391),
+   and a green one still unlanded past the grace has lost its lander; either is deleted and the
+   requested batch built in its place. Green with an unreadable settle time still waits: only a
+   provably abandoned batch is deleted (#659).
 5. **A green batch run stands in for trunk's own run at that same sha** — while trunk's
    run is still in flight — only when **the same workflows** ran there: the workflow files
    firing on a trunk push and on a `ship-batch/**` push must be the same set. Otherwise
