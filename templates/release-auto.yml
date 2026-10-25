@@ -268,6 +268,46 @@ env:
         sleep "$delay"; attempt=$((attempt + 1)); delay=$((delay * 2))
       done
     }
+  # THE HEAVY LANE IS DISPATCHED WITH THE INPUTS IT DECLARES (#661). The template's heavy workflow
+  # declares a `ref` dispatch input, but you own your copy and may not: `-f ref=` to a workflow
+  # without that input is a hard `HTTP 422: Unexpected inputs provided`, and the release never starts
+  # its own heavy lane. `heavy_dispatch <tag>` reads the file AT THE TAG (the working tree's copy when
+  # the tag cannot be read), lists only its `on: workflow_dispatch: inputs:` keys — a `workflow_call`
+  # `ref` does not count — and passes `-f ref=<tag>` only when `ref` is one of them; `--ref <tag>`
+  # alone checks out the same commit. The same rule as colab's own hint (workflowDispatchInputs, #660).
+  # Steps that use it `eval` this block after RETRY_TRANSIENT and set HEAVY_WORKFLOW.
+  HEAVY_DISPATCH: |
+    heavy_dispatch_inputs() {
+      awk -v sq="'" '
+        function ind(l) { match(l, /^[ \t]*/); return RLENGTH }
+        function meaningful(l) { return l ~ /[^ \t]/ && l !~ /^[ \t]*#/ }
+        BEGIN { on = "^(on|\"on\"|" sq "on" sq ")[ \t]*:[ \t]*(#.*)?$"; st = 0; n = 0 }
+        st == 0 { if ($0 ~ on) st = 1; next }
+        /^[^ \t]/ { exit }
+        st == 1 { if ($0 ~ /^[ \t]*workflow_dispatch[ \t]*:/) { wd = ind($0); st = 2 }; next }
+        !meaningful($0) { next }
+        st == 2 { if (ind($0) <= wd) exit; if ($0 ~ /^[ \t]*inputs[ \t]*:[ \t]*(#.*)?$/) { ii = ind($0); st = 3 }; next }
+        st == 3 { if (ind($0) <= ii) exit; n++; line[n] = $0; next }
+        END {
+          if (!n) exit
+          min = -1
+          for (i = 1; i <= n; i++) if (min < 0 || ind(line[i]) < min) min = ind(line[i])
+          for (i = 1; i <= n; i++) if (ind(line[i]) == min) {
+            k = line[i]; sub(/^[ \t]*/, "", k)
+            if (match(k, /^[A-Za-z_][A-Za-z0-9_-]*[ \t]*:/)) { k = substr(k, 1, RLENGTH); sub(/[ \t]*:$/, "", k); print k }
+          }
+        }'
+    }
+    heavy_dispatch() {
+      local tag="$1" file=".github/workflows/$HEAVY_WORKFLOW" text
+      text="$(git show "$tag:$file" 2>/dev/null)" || text="$(cat "$file" 2>/dev/null)" || text=""
+      # Unreadable → the template's shape is assumed (colab's takesRefInput reads it the same way).
+      if [ -z "$text" ] || printf '%s\n' "$text" | heavy_dispatch_inputs | grep -qx ref; then
+        retry_transient gh workflow run "$HEAVY_WORKFLOW" --ref "$tag" -f ref="$tag"
+      else
+        retry_transient gh workflow run "$HEAVY_WORKFLOW" --ref "$tag"
+      fi
+    }
 
 jobs:
   release:
@@ -560,9 +600,10 @@ jobs:
         run: |
           set -uo pipefail
           eval "$RETRY_TRANSIENT"
+          eval "$HEAVY_DISPATCH"
           if [ ! -f ".github/workflows/$HEAVY_WORKFLOW" ]; then
             echo "No .github/workflows/$HEAVY_WORKFLOW — no heavy lane to start."
-          elif retry_transient gh workflow run "$HEAVY_WORKFLOW" --ref "$TAG" -f ref="$TAG"; then
+          elif heavy_dispatch "$TAG"; then
             echo "Dispatched $HEAVY_WORKFLOW at $TAG — a final needs its green run at this commit." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "::warning::could not dispatch $HEAVY_WORKFLOW at $TAG — the finalize step dispatches it again"
@@ -581,6 +622,7 @@ jobs:
         run: |
           set -uo pipefail
           eval "$RETRY_TRANSIENT"
+          eval "$HEAVY_DISPATCH"
           if [ ! -f ".github/workflows/$HEAVY_WORKFLOW" ]; then
             echo "No .github/workflows/$HEAVY_WORKFLOW — no heavy lane gates the final."
             exit 0
@@ -609,7 +651,7 @@ jobs:
             echo "::warning::$TAG not finalized: the heavy lane is red at $SHA ($(jq -r '.[0].url' <<< "$RUNS")) — re-run it green, or cut a new candidate"
           elif [ "${DRY_RUN:-false}" = "true" ]; then
             echo "Dry run — would start $HEAVY_WORKFLOW at $TAG (no run at $SHA yet)." | tee -a "$GITHUB_STEP_SUMMARY"
-          elif retry_transient gh workflow run "$HEAVY_WORKFLOW" --ref "$TAG" -f ref="$TAG"; then
+          elif heavy_dispatch "$TAG"; then
             echo "No heavy run at $TAG yet — dispatched $HEAVY_WORKFLOW; a later run finalizes on its green." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "::warning::$TAG not finalized: no heavy run at $SHA and $HEAVY_WORKFLOW could not be dispatched"
