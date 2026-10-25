@@ -254,13 +254,19 @@ function envBlock(name) {
   for (let i = at + 1; i < lines.length && (lines[i] === '' || lines[i].startsWith('    ')); i++) body.push(lines[i].slice(4));
   return body.join('\n').trimEnd() + '\n';
 }
-const RETRY = { RETRY_TRANSIENT: envBlock('RETRY_TRANSIENT'), RETRY_ATTEMPTS: '1', RETRY_DELAY: '0' };
+const RETRY = { RETRY_TRANSIENT: envBlock('RETRY_TRANSIENT'), HEAVY_DISPATCH: envBlock('HEAVY_DISPATCH'), RETRY_ATTEMPTS: '1', RETRY_DELAY: '0' };
+/** #661: an adopter's own heavy lane whose only dispatch input is a boolean — `ref` only on workflow_call. */
+const HEAVY_NO_REF = 'name: CI (heavy)\non:\n  workflow_dispatch:\n    inputs:\n      force:\n        type: boolean\n        default: false\n  workflow_call:\n    inputs:\n      ref:\n        type: string\n        required: true\njobs: {}\n';
 
-/** A repo dir with (or without) the heavy workflow, and a stub colab printing a dry finalize verdict. */
+/**
+ * A repo dir with (or without) the heavy workflow, and a stub colab printing a dry finalize verdict.
+ * `heavy: true` is the template's own ci-node-heavy.yml (declares a `ref` dispatch input); a string is
+ * the file's text.
+ */
 function autoRepo({ heavy = true, candidate = { tag: 'v1.2.0-rc.1', sha: SHA } } = {}) {
   const dir = tmpdir('release-auto-heavy-');
   fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
-  if (heavy) fs.writeFileSync(path.join(dir, '.github', 'workflows', 'ci-heavy.yml'), 'name: CI (heavy)\n');
+  if (heavy) fs.writeFileSync(path.join(dir, '.github', 'workflows', 'ci-heavy.yml'), heavy === true ? read('ci-node-heavy.yml') : heavy);
   const colab = path.join(dir, 'colab-stub.js');
   fs.writeFileSync(colab, `process.stdout.write(${JSON.stringify(JSON.stringify({ state: 'testing', candidate }))});\n`);
   return { dir, env: { ...RETRY, COLAB: colab, HEAVY_WORKFLOW: 'ci-heavy.yml' } };
@@ -332,6 +338,57 @@ test('release-auto: a new candidate starts the heavy lane at its tag, when the r
   const r2 = runWithGh(START, { cwd: none.dir, env: { ...none.env, TAG: 'v1.2.0-rc.2' } });
   assert.strictEqual(r2.status, 0);
   assert.strictEqual(r2.calls.length, 0);
+});
+
+test('#661 release-auto: a heavy lane with no `ref` dispatch input is dispatched with --ref alone, at both steps', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const { dir, env } = autoRepo({ heavy: HEAVY_NO_REF });
+  const start = runWithGh(START, { cwd: dir, env: { ...env, TAG: 'v1.2.0-rc.2' }, rules: [[/^workflow run /, '']] });
+  assert.strictEqual(start.status, 0, start.stderr);
+  assert.deepStrictEqual(dispatched(start.calls), ['workflow run ci-heavy.yml --ref v1.2.0-rc.2']);
+  assert.match(start.stdout, /Dispatched ci-heavy\.yml at v1\.2\.0-rc\.2/);
+  const gate = runWithGh(GATE, { cwd: dir, env, rules: [[/^run list /, '[]'], [/^workflow run /, '']] });
+  assert.strictEqual(gate.status, 0, gate.stderr);
+  assert.deepStrictEqual(gate.outputs, { ok: 'false' });
+  assert.deepStrictEqual(dispatched(gate.calls), ['workflow run ci-heavy.yml --ref v1.2.0-rc.1']);
+});
+
+test('#661 release-auto: the inputs are read from the workflow AT THE TAG, not the checked-out tree', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const { execFileSync } = require('child_process');
+  const { dir, env } = autoRepo({ heavy: HEAVY_NO_REF });
+  const g = (...args) => execFileSync('git', args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  g('init', '-q', '-b', 'main', '.');
+  g('-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '.github');
+  g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'heavy without ref');
+  g('tag', 'v1.2.0-rc.3');
+  // The working tree has since gained the input; the tag has not — the tag's file decides.
+  fs.writeFileSync(path.join(dir, '.github', 'workflows', 'ci-heavy.yml'), read('ci-node-heavy.yml'));
+  const r = runWithGh(START, { cwd: dir, env: { ...env, TAG: 'v1.2.0-rc.3' }, rules: [[/^workflow run /, '']] });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(dispatched(r.calls), ['workflow run ci-heavy.yml --ref v1.2.0-rc.3']);
+});
+
+test('#661 heavy_dispatch_inputs reads a workflow exactly as colab\'s workflowDispatchInputs does', () => {
+  const { workflowDispatchInputs } = require('./workflow-triggers.js');
+  const fixtures = [
+    HEAVY_NO_REF,
+    'on:\n  push:\n  workflow_dispatch:\njobs: {}\n',
+    'on:\n  push:\njobs: {}\n',
+    'on: [push, workflow_dispatch]\n',
+    'on:\n  workflow_dispatch:\n    # c\n    inputs:\n      a:\n        type: string\n      b_2:\n        default: x\n  schedule:\n    - cron: "1 * * * *"\n',
+    '"on":\n  workflow_dispatch:\n    inputs: # note\n\n      ref:\n        default: ""\n      force:\n        type: boolean\njobs: {}\n',
+    "'on':\n  workflow_call:\n    inputs:\n      ref:\n        type: string\n  workflow_dispatch:\n    inputs:\n      x-y:\n        type: string\n",
+    'name: x\non:\n  workflow_dispatch:\n    inputs:\n      ref:\n# a column-0 comment ends the on: block\n      later:\n',
+    '',
+  ];
+  for (const dirName of ['templates', path.join('.github', 'workflows')]) {
+    for (const f of fs.readdirSync(path.join(REPO_ROOT, dirName)).filter((n) => /\.ya?ml$/.test(n))) fixtures.push(fs.readFileSync(path.join(REPO_ROOT, dirName, f), 'utf8'));
+  }
+  const script = `${envBlock('HEAVY_DISPATCH')}\nheavy_dispatch_inputs`;
+  for (const text of fixtures) {
+    const r = spawnSync('bash', ['-c', script], { input: text, encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(r.stdout.split('\n').filter(Boolean), workflowDispatchInputs(text), text.slice(0, 120));
+  }
 });
 
 // ---- the light lane: the docs-only guard is gone (#607) --------------------------------------
