@@ -357,6 +357,7 @@ test('#661 release-auto: the inputs are read from the workflow AT THE TAG, not t
   const { dir, env } = autoRepo({ heavy: HEAVY_NO_REF });
   const g = (...args) => execFileSync('git', args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
   g('init', '-q', '-b', 'main', '.');
+  g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
   g('-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '.github');
   g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'heavy without ref');
   g('tag', 'v1.2.0-rc.3');
