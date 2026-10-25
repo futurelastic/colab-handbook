@@ -135,6 +135,27 @@ function waveVerdict(light, heavy) {
 }
 
 /**
+ * #660: does the heavy workflow take a `ref` dispatch input? `inputs` is the list of names its
+ * `on: workflow_dispatch: inputs:` declares at the ref being dispatched (workflow-triggers.js
+ * workflowDispatchInputs). The template declares `ref`, but a repo owns its copy and may not: passing
+ * `-f ref=` to a workflow without that input is a hard `HTTP 422: Unexpected inputs provided`. Not an
+ * array → the file was not read, so the template's shape is assumed (the pre-#660 behaviour).
+ */
+function takesRefInput(inputs) {
+  return !Array.isArray(inputs) || inputs.includes('ref');
+}
+
+/**
+ * #660: the command that starts the heavy lane on `ref` — `-f ref=<input>` only where the workflow
+ * declares that input (`input` defaults to `ref`). Without it, `--ref` alone is what checks out the
+ * code, which for a tag or a branch head is the same commit.
+ */
+function heavyStartCommand({ file, ref, input, inputs }) {
+  const base = `gh workflow run ${file} --ref ${ref}`;
+  return takesRefInput(inputs) ? `${base} -f ref=${input || ref}` : base;
+}
+
+/**
  * The final release's heavy-lane condition — under EVERY profile (#610). A repo with no heavy lane at
  * the candidate has nothing to gate (#607's templates say the same: "no heavy lane here → no gate"),
  * so it passes and says so; refusing every release of a repo that never wrote one would break every
@@ -143,11 +164,11 @@ function waveVerdict(light, heavy) {
  * candidate; by hand: the printed command).
  *   → { ok, pending, detail }
  */
-function releaseHeavyCondition({ present, file, verdict, at, ref }) {
+function releaseHeavyCondition({ present, file, verdict, at, ref, inputs }) {
   if (!present) return { ok: true, pending: false, detail: `no .github/workflows/${file} at ${at} — no heavy lane in this repo, nothing to gate` };
   const v = verdict || { state: 'unread', why: 'not read' };
   const link = v.url ? ` (${v.url})` : '';
-  const start = `gh workflow run ${file} --ref ${ref || '<the candidate tag>'} -f ref=${ref || '<the candidate tag>'}`;
+  const start = heavyStartCommand({ file, ref: ref || '<the candidate tag>', inputs });
   if (v.state === 'green') return { ok: true, pending: false, detail: `heavy lane green at ${at}${link}` };
   if (v.state === 'red') return { ok: false, pending: false, detail: `heavy lane red at ${at}${link} — a final needs it green at this exact sha: re-run it green, or cut a new candidate` };
   if (v.state === 'pending') return { ok: false, pending: true, detail: `heavy lane still running at ${at}${link} — no final until it is green` };
@@ -158,4 +179,5 @@ function releaseHeavyCondition({ present, file, verdict, at, ref }) {
 module.exports = {
   KEY, HEAVY_KEY, PROFILES, DEFAULT_PROFILE, DEFAULT_HEAVY_WORKFLOW,
   parseProfile, parseHeavyWorkflow, heavyVerdict, liveRestriction, landingGate, waveVerdict, releaseHeavyCondition,
+  takesRefInput, heavyStartCommand,
 };

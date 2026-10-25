@@ -718,6 +718,23 @@ test('#610 decide: the heavy lane at the candidate — green finalizes, red refu
   for (const c of rf.decide(facts({ heavy: heavy('red') })).checks) assert.ok(rf.CONDITIONS.includes(c.condition), c.condition);
 });
 
+test('#660 the heavy-lane hint passes -f ref= only where the workflow declares a `ref` dispatch input', () => {
+  const ip = require('./integration-profile.js');
+  const hint = (inputs) => rf.decide(facts({ heavy: ip.releaseHeavyCondition({ present: true, file: 'ci-heavy.yml', verdict: { state: 'none', why: 'none' }, at: 'v1.2.1-rc.1@ccccccc', ref: 'v1.2.1-rc.1', inputs }) }))
+    .checks.find((c) => c.condition === 'heavy-lane').detail;
+  // A repo's own copy whose only input is a boolean: --ref alone — `-f ref=` would be an HTTP 422.
+  for (const inputs of [['force'], []]) {
+    const d = hint(inputs);
+    assert.match(d, /start it: gh workflow run ci-heavy\.yml --ref v1\.2\.1-rc\.1$/, JSON.stringify(inputs));
+    assert.doesNotMatch(d, /-f ref=/, JSON.stringify(inputs));
+  }
+  // The template's shape (a `ref` input, among others) keeps it.
+  assert.match(hint(['force', 'ref']), /gh workflow run ci-heavy\.yml --ref v1\.2\.1-rc\.1 -f ref=v1\.2\.1-rc\.1$/);
+  // The dispatched input may differ from --ref (a sha on a branch); only declared inputs are passed.
+  assert.strictEqual(ip.heavyStartCommand({ file: 'h.yml', ref: 'dev', input: 'abc', inputs: ['ref'] }), 'gh workflow run h.yml --ref dev -f ref=abc');
+  assert.strictEqual(ip.heavyStartCommand({ file: 'h.yml', ref: 'dev', input: 'abc', inputs: ['force'] }), 'gh workflow run h.yml --ref dev');
+});
+
 // ---- #627: an early human final on an automatic-final route ----------------------------------------
 
 const YOUNG = () => rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 3, now: at(1.25) });

@@ -47,7 +47,7 @@ const CI_YML = 'name: CI\non:\n  push:\n    branches: ["**"]\njobs: {}\n';
 const BASE_YML = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\n';
 
 /** Trunk with CI (and, unless `heavy: false`, the heavy lane), one pushed code branch claimed for #7. */
-function fixture({ profile = 'gated', heavy = true, docs = false } = {}) {
+function fixture({ profile = 'gated', heavy = true, docs = false, heavyYml = HEAVY_YML } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-ship-profile-'));
   TMP.push(root);
   const origin = path.join(root, 'origin.git');
@@ -65,7 +65,7 @@ function fixture({ profile = 'gated', heavy = true, docs = false } = {}) {
   fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
   fs.writeFileSync(path.join(work, '.github', 'project.yml'), BASE_YML + (profile ? `integration-profile: ${profile}\n` : ''));
   fs.writeFileSync(path.join(work, '.github', 'workflows', 'ci.yml'), CI_YML);
-  if (heavy) fs.writeFileSync(path.join(work, '.github', 'workflows', 'ci-heavy.yml'), HEAVY_YML);
+  if (heavy) fs.writeFileSync(path.join(work, '.github', 'workflows', 'ci-heavy.yml'), heavyYml);
   fs.writeFileSync(path.join(work, 'f.txt'), 'base\n');
   g('add', '-A'); g('commit', '-q', '-m', 'chore: fixture'); g('push', '-q', 'origin', 'main');
   const trunkSha = g('rev-parse', 'HEAD');
@@ -142,6 +142,16 @@ test('gated, no heavy run yet: self-clearing in --dry --json; a real ship dispat
   assert.match(r.out, /⏸ HEAVY-PENDING feat\/thing-7/);
   assert.match(ghLog(fx), new RegExp(`workflow run ci-heavy\\.yml --ref feat/thing-7 -f ref=${fx.head}`));
   assert.strictEqual(fx.g('rev-parse', 'origin/main'), fx.trunkSha, 'trunk did not move');
+});
+
+test('#660 gated, the heavy workflow declares no `ref` input: the dispatch passes --ref alone, never -f ref=', () => {
+  // A repo owns its copy of the heavy workflow; this one's only dispatch input is a boolean. GitHub
+  // answers an undeclared input with HTTP 422, so the dispatch must be built from what the file declares.
+  const fx = fixture({ heavyYml: 'name: CI (heavy)\non:\n  workflow_dispatch:\n    inputs:\n      force:\n        type: boolean\njobs: {}\n' });
+  const r = colab(fx, ['ship', '--branch', fx.branch, '--repo', fx.work]);
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  const runs = ghLog(fx).split('\n').filter((l) => /^workflow run /.test(l));
+  assert.deepStrictEqual(runs, ['workflow run ci-heavy.yml --ref feat/thing-7']);
 });
 
 test('gated, heavy still running: a pause, no second dispatch', () => {
