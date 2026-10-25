@@ -1763,8 +1763,8 @@ function cmdReleaseCut(argv) {
   let heavy = null;
   if (fast || library) {
     const lane = heavyLaneAt(repoAbs, doc, sha);
-    heavy = integrationProfile.releaseHeavyCondition({ present: lane.present, file: lane.file, verdict: lane.verdict, at: `main@${shortSha(sha)}`, ref: 'main' });
-    if (lane.present && lane.verdict.state === 'none' && opts.auto && !opts.dry) dispatchHeavyLane(repoAbs, lane.file, 'main', sha);
+    heavy = integrationProfile.releaseHeavyCondition({ present: lane.present, file: lane.file, verdict: lane.verdict, at: `main@${shortSha(sha)}`, ref: 'main', inputs: lane.inputs });
+    if (lane.present && lane.verdict.state === 'none' && opts.auto && !opts.dry) dispatchHeavyLane(repoAbs, lane.file, 'main', sha, lane.inputs);
   }
 
   // #622: a cut below main's head — refused (a no-op under --auto) when a release tag already names a
@@ -2084,7 +2084,7 @@ function readRegressionEdges(repoAbs, num) {
  */
 function releaseHeavyFact(repoAbs, doc, cand) {
   const lane = heavyLaneAt(repoAbs, doc, cand.sha);
-  return integrationProfile.releaseHeavyCondition({ present: lane.present, file: lane.file, verdict: lane.verdict, at: `${cand.tag}@${shortSha(cand.sha)}`, ref: cand.tag });
+  return integrationProfile.releaseHeavyCondition({ present: lane.present, file: lane.file, verdict: lane.verdict, at: `${cand.tag}@${shortSha(cand.sha)}`, ref: cand.tag, inputs: lane.inputs });
 }
 
 function cmdReleaseFinalize(argv) {
@@ -14402,7 +14402,7 @@ function cmdShip(argv) {
   // ---- (b6) #610: gated — the heavy lane must be green at the branch head before trunk moves ----
   if (heavyGate && !heavyGate.ok) {
     print(`⏸ HEAVY-PENDING ${sess.branch} — ${heavyGate.detail}. Nothing landed.`);
-    if (heavyGate.action === 'dispatch' && gh) dispatchHeavyLane(repoAbs, heavyGate.file, sess.branch, heavyGate.sha);
+    if (heavyGate.action === 'dispatch' && gh) dispatchHeavyLane(repoAbs, heavyGate.file, sess.branch, heavyGate.sha, heavyGate.inputs);
     else print('  Wait on the heavy run (bounded, B1a), then run this command again.');
     return 3;
   }
@@ -15189,7 +15189,7 @@ function shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciResult = null) {
 function heavyLaneAt(repoAbs, doc, sha) {
   const file = integrationProfile.parseHeavyWorkflow(doc).file;
   const rel = `.github/workflows/${file}`;
-  let present = false, name = rel;
+  let present = false, name = rel, inputs = null;
   if (sha) {
     if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) git.git(['fetch', '--quiet', git.remoteFor(repoAbs) || 'origin', sha], repoAbs);
     const show = git.git(['show', `${sha}:${rel}`], repoAbs);
@@ -15197,11 +15197,12 @@ function heavyLaneAt(repoAbs, doc, sha) {
       present = true;
       const t = verifyRuns.workflowTriggers(show.stdout);
       if (t && t.name) name = t.name; // GitHub names a workflow with no `name:` by its file path
+      inputs = workflowTriggers.workflowDispatchInputs(show.stdout); // #660: which -f flags it accepts
     }
   }
   const rows = present ? git.ghRunsAtCommit(repoAbs, sha) : [];
   const heavyRows = Array.isArray(rows) ? rows.filter((r) => (r.workflowName || '') === name) : null;
-  return { file, name, present, verdict: integrationProfile.heavyVerdict(heavyRows) };
+  return { file, name, present, inputs, verdict: integrationProfile.heavyVerdict(heavyRows) };
 }
 
 /**
@@ -15221,14 +15222,18 @@ function shipHeavyGate(repoAbs, doc, branch, { docsOnlyApplies = false, batchMem
   }
   const lane = heavyLaneAt(repoAbs, doc, sha);
   const gate = integrationProfile.landingGate({ profile, heavyPresent: lane.present, verdict: lane.verdict, file: lane.file, at });
-  return { ...gate, sha, file: lane.file, name: lane.name };
+  return { ...gate, sha, file: lane.file, name: lane.name, inputs: lane.inputs };
 }
 
-/** #610: start the heavy lane at `sha` on `ref` — the real path only, never --dry. Never waits. */
-function dispatchHeavyLane(repoAbs, file, ref, sha) {
-  const d = git.ghWorkflowDispatch(repoAbs, file, ref, { ref: sha });
+/**
+ * #610: start the heavy lane at `sha` on `ref` — the real path only, never --dry. Never waits.
+ * #660: `-f ref=<sha>` only where the workflow declares a `ref` dispatch input (`inputs`, read at the
+ * sha by heavyLaneAt); a repo's own copy may not, and GitHub answers an undeclared input with a 422.
+ */
+function dispatchHeavyLane(repoAbs, file, ref, sha, inputs) {
+  const d = git.ghWorkflowDispatch(repoAbs, file, ref, integrationProfile.takesRefInput(inputs) ? { ref: sha } : {});
   if (d.ok) print(`  ↻ dispatched ${file} on ${ref} at ${shortSha(sha)} (#610) — wait with \`gh run watch\` (bounded, B1a), then run this command again.`);
-  else warn(`  ${file} could NOT be dispatched (${d.detail}) — run it yourself: gh workflow run ${file} --ref ${ref} -f ref=${sha}`);
+  else warn(`  ${file} could NOT be dispatched (${d.detail}) — run it yourself: ${integrationProfile.heavyStartCommand({ file, ref, input: sha, inputs })}`);
   return d.ok;
 }
 
@@ -15549,7 +15554,7 @@ function cmdShipBatch(opts) {
   }
   if (step.step === 'wait-run') {
     print(`⏸ BATCH-PENDING ${existing.ref}@${shortSha(existing.sha)} — combined run ${verdict && verdict.runIds.length ? verdict.runIds.join(', ') + ' ' : ''}${verdict ? verdict.why : ''}.`);
-    if (verdict && verdict.heavyMissing && heavyWave && !opts.dry) dispatchHeavyLane(repoAbs, heavyWave.file, existing.ref, existing.sha); // #610
+    if (verdict && verdict.heavyMissing && heavyWave && !opts.dry) dispatchHeavyLane(repoAbs, heavyWave.file, existing.ref, existing.sha, heavyWave.inputs); // #610
     print(`  Wait on it (bounded, B1a: gh run watch <id>), then run this command again. Nothing landed.`);
     return 3;
   }
@@ -17339,7 +17344,7 @@ function cmdPromote(argv) {
     if (!lane) { heavyOk = false; detail = `${remote}/${trunk} could not be read`; }
     else if (!lane.present) { heavyOk = false; detail = `no .github/workflows/${lane.file} at ${at} — integration-profile: promote gates the promotion on the heavy lane, and there is none`; }
     else if (lane.verdict.state === 'green') detail = `heavy lane green at ${at}${lane.verdict.url ? ` (${lane.verdict.url})` : ''}`;
-    else { heavyOk = false; detail = `heavy lane ${lane.verdict.state} at ${at} (${lane.verdict.why})${lane.verdict.state === 'none' ? ` — start it: gh workflow run ${lane.file} --ref ${trunk} -f ref=${tip}` : ''}`; }
+    else { heavyOk = false; detail = `heavy lane ${lane.verdict.state} at ${at} (${lane.verdict.why})${lane.verdict.state === 'none' ? ` — start it: ${integrationProfile.heavyStartCommand({ file: lane.file, ref: trunk, input: tip, inputs: lane.inputs })}` : ''}`; }
     checks.push([heavyOk ? '✓' : '✗', 'heavy lane green (integration-profile: promote, #610)', detail]);
   }
 
