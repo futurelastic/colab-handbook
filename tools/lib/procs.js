@@ -79,20 +79,58 @@ function commandOf(pid) {
   return cmd.length > 70 ? cmd.slice(0, 69) + '…' : cmd;
 }
 
+/** `ps -o ppid=` for one pid, or null when ps cannot say. The default `ppidOf` of `ancestorPids`. */
+function ppidOfPs(pid) {
+  const r = run('ps', ['-o', 'ppid=', '-p', String(pid)]);
+  if (!r.ok || !r.stdout) return null;
+  const ppid = parseInt(r.stdout.trim(), 10);
+  return ppid && !Number.isNaN(ppid) ? ppid : null;
+}
+
+/**
+ * Every ancestor of `of` (default: this process), as a Set of pid STRINGS — the shell that ran this
+ * command, the agent CLI that ran the shell, and so on up to (not including) init. #668: these are
+ * the processes a teardown must never stop. Bounded by `hops` (a `ppid` cycle from bad `ps` output
+ * cannot spin) and never throws: `ps` missing or a pid gone mid-walk ends the walk with what it has.
+ * `ppidOf` is injectable so the walk is testable without a real process tree.
+ */
+function ancestorPids(of = process.pid, hops = 64, ppidOf = ppidOfPs) {
+  const out = new Set();
+  let pid = Number(of);
+  for (let i = 0; i < hops; i++) {
+    if (!pid || Number.isNaN(pid) || pid <= 1) break;
+    let ppid = null;
+    try { ppid = ppidOf(pid); } catch (_) { ppid = null; }
+    ppid = Number(ppid);
+    if (!ppid || Number.isNaN(ppid) || ppid <= 1 || out.has(String(ppid))) break;
+    out.add(String(ppid));
+    pid = ppid;
+  }
+  return out;
+}
+
 /**
  * Processes whose cwd is inside `dir`, enriched with command and listening ports.
  * Returns [] on any platform or environment where lsof cannot answer — never throws.
+ *
+ * #668: this process and every ancestor of it are tagged `caller: true` rather than left out. They
+ * are not processes the directory OWNS — they are whoever is running this command, and a shell
+ * whose cwd happens to be inside the worktree it is tearing down matched the cwd test and got
+ * SIGTERMed mid-teardown (taking the rest of `colab ship` down with its pipe). Tagged, not dropped,
+ * so the caller can still say "your shell is in here — cd out".
  */
-function processesInDir(dir) {
+function processesInDir(dir, { callers } = {}) {
   if (!dir || process.platform === 'win32') return [];
   const r = run('lsof', ['-a', '-d', 'cwd', '-F', 'pn']);
   // lsof exits non-zero when *some* descriptors are unreadable, which is normal for an
   // unprivileged sweep — so trust the output whenever there is any, not the exit code.
   if (!r.stdout) return [];
-  const self = String(process.pid);
-  return parseLsofCwd(r.stdout, dir)
-    .filter((p) => p.pid !== self)
-    .map((p) => ({ ...p, ports: listeningPorts(p.pid), command: commandOf(p.pid) }));
+  const found = parseLsofCwd(r.stdout, dir);
+  if (!found.length) return [];
+  const mine = callers || new Set([String(process.pid), ...ancestorPids()]);
+  return found.map((p) => (mine.has(p.pid)
+    ? { ...p, caller: true, ports: [], command: commandOf(p.pid) }
+    : { ...p, ports: listeningPorts(p.pid), command: commandOf(p.pid) }));
 }
 
 /**
@@ -182,4 +220,4 @@ function isAncestor(candidate, of = process.pid, hops = 10) {
   return false;
 }
 
-module.exports = { isInside, parseLsofCwd, listeningPorts, commandOf, cwdOf, processesInDir, listeners, portIsBound, alive, terminate, isAncestor };
+module.exports = { isInside, parseLsofCwd, listeningPorts, commandOf, cwdOf, processesInDir, ancestorPids, listeners, portIsBound, alive, terminate, isAncestor };
