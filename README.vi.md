@@ -308,6 +308,7 @@ path*. Chạy không người trông thì nói bằng flag:
 |---|---|---|---|
 | Claude Code (`claude`) | `~/.claude/skills` | `/code-start` | Không cần gì. Bản cài cấp user này **thắng** `.claude/skills/<name>` cùng tên của repo (thứ tự ưu tiên là enterprise > personal > project), nên muốn dùng bản của repo thì đổi tên nó. |
 | OpenAI Codex (`codex`) | `~/.agents/skills` | `$code-start` | Sandbox mặc định không có mạng nên `gh` lỗi: đặt `[sandbox_workspace_write] network_access = true` trong `~/.codex/config.toml`. Số liệu lấy từ tài liệu của Codex; chưa được xác minh bằng một lần chạy trên máy sạch. |
+| opencode (`opencode`) | `~/.config/opencode/skills` | nhờ agent: "use the code-start skill" | opencode không chạy các dòng `` !`command` `` của skill, nên agent tự đọc `.colab/skills/<name>.md`. Khi đặt `OPENCODE_DISABLE_CLAUDE_CODE=1` thì nó không đọc `.claude/skills` nào cả. Nếu có `XDG_CONFIG_HOME` thì thư mục chuyển vào dưới đó: cài vào đó bằng `--skills-dir`. Đã xác minh bằng một lần chạy opencode 1.18.3. |
 | agent khác | `--skills-dir <path>` | theo cách của agent | Shell của agent cần có mạng cho `gh`. Thư mục được ghi nhớ trong `~/.colab/skills-dirs`. |
 
 Chạy lại không flag và không có terminal thì giữ mọi agent runtime đã thấy được link
@@ -318,7 +319,7 @@ mỗi agent runtime một file — thư mục đó là nguồn của bảng trê
 | Flag | Làm gì |
 |---|---|
 | *(không có)* | Symlink `skills/` vào thư mục cấp user của từng agent runtime đã chọn, để mở repo nào cũng có. Ở terminal thì hỏi; không thì giữ những gì đã link (xem [*Chọn agent runtime*](#chọn-agent-runtime)). |
-| `--engine <id>[,<id>]` | Cài cho các agent runtime này (`claude`, `codex` — các file trong `engines/`), không hỏi. |
+| `--engine <id>[,<id>]` | Cài cho các agent runtime này (`claude`, `codex`, `opencode` — các file trong `engines/`), không hỏi. |
 | `--skills-dir <path>` | Cài thêm vào thư mục này, cho agent mà `engines/` chưa biết. |
 | `--tools` | CLI `colab` cài hai lần: một **symlink** ở `~/.local/bin/colab` cho các phiên làm việc của bạn (in sẵn dòng `PATH` nếu cần), và một **bản đóng băng** có đóng dấu ở `~/.colab/bin/colab` cho các service luôn-bật. Đồng thời tạo `~/.colab/state.json` rỗng nếu chưa có. |
 | `--hooks` | Trỏ git của clone này vào `.githooks/`: quét secret bằng gitleaks, và quét danh tính với danh sách từ khoá do bạn giữ NGOÀI mọi repo (xem [`templates/README.md`](templates/README.md)). |
