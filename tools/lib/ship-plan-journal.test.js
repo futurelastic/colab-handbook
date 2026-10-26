@@ -46,6 +46,10 @@ function fixture() {
   const work = path.join(root, 'work');
   const home = path.join(root, 'colab-home');
   fs.mkdirSync(home);
+  // #663: a user home DISTINCT from the colab home, so a journal written off `os.homedir()`
+  // instead of COLAB_HOME lands somewhere this test can see (and fail on) — never the real ~.
+  const userHome = path.join(root, 'user-home');
+  fs.mkdirSync(userHome);
   const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { encoding: 'utf8' });
@@ -92,14 +96,13 @@ function fixture() {
     'exit 1',
   ].join('\n') + '\n', { mode: 0o755 });
 
-  return { root, origin, work, home, bin, g };
+  return { root, origin, work, home, userHome, bin, g };
 }
 
-// `shipJournalPlanFiles` builds its journal path from `os.homedir()` DIRECTLY, not from
-// `COLAB_HOME` the way state.json is — pre-existing (unrelated to #193/#201, ported verbatim from
-// the code this hoists), and out of this fix's scope to change. Left as is, a real ship in this
-// test would write to the machine's ACTUAL `~/.colab/plan-journal.jsonl`. Overriding `HOME` in the
-// subprocess env (Node's `os.homedir()` reads it on POSIX) keeps every write inside the fixture.
+// #663: `shipJournalPlanFiles` writes the journal into the colab home (COLAB_HOME, like
+// state.json) — it used to build the path off `os.homedir()` directly. `HOME` is still pointed at
+// a fixture dir (Node's `os.homedir()` reads it on POSIX), a DIFFERENT one from COLAB_HOME, so a
+// regression to the old path writes inside the fixture, where `strayJournal` catches it.
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
@@ -113,7 +116,7 @@ function colab(fx, args, extraEnv = {}) {
     // --session for its whole lifetime (code-start step 0); this fixture now models that instead
     // of the untested "nobody ever identifies themselves" edge case.
     env: {
-      ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, HOME: fx.home, COLAB_HOME: fx.home,
+      ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, HOME: fx.userHome, COLAB_HOME: fx.home,
       COLAB_SESSION: 'sess-plan-journal-test', COLAB_SESSION_NAME: '',
       // #488: pin the scratch dirs to their defaults so a developer's own override cannot leak in
       COLAB_PLANS_DIR: '', COLAB_BRIEFS_DIR: '', ...extraEnv,
@@ -140,11 +143,12 @@ function branchWithCommit(fx, branch) {
   fx.g(fx.work, 'checkout', '-q', 'main');
 }
 
+// Where the pre-#663 code wrote the journal: `os.homedir()/.colab`, ignoring COLAB_HOME.
+function strayJournal(fx) { return path.join(fx.userHome, '.colab', 'plan-journal.jsonl'); }
+
 function journalLines(fx) {
-  // `os.homedir()` under our HOME override, so `~/.colab/...` resolves inside the fixture — see the
-  // comment on `colab()` above. NOT `fx.home` directly: that is state.json's home (COLAB_HOME),
-  // a DIFFERENT directory shape from the hardcoded-off-HOME plan journal.
-  const p = path.join(fx.home, '.colab', 'plan-journal.jsonl');
+  // The colab home (COLAB_HOME), next to state.json (#663).
+  const p = path.join(fx.home, 'plan-journal.jsonl');
   if (!fs.existsSync(p)) return [];
   return fs.readFileSync(p, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
@@ -168,6 +172,18 @@ test('#193: evidence-close (zero-diff) journals and deletes its plan file — th
   assert.strictEqual(lines.length, 1);
   assert.strictEqual(lines[0].issue, 40);
   assert.strictEqual(lines[0].verdict, 'pass');
+});
+
+test('#663: the journal lands in COLAB_HOME, never in os.homedir()/.colab', () => {
+  const fx = fixture();
+  fx.g(fx.work, 'branch', 'docs/decision-41');
+  colab(fx, ['claim', '41', '--branch', 'docs/decision-41', '--repo', fx.work]);
+  writePlan(fx, 'issue-41.md');
+
+  const r = colab(fx, ['ship', '--branch', 'docs/decision-41', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.deepStrictEqual(journalLines(fx).map((l) => l.issue), [41], 'journal line in COLAB_HOME');
+  assert.strictEqual(fs.existsSync(strayJournal(fx)), false, 'nothing written under HOME/.colab');
 });
 
 test('evidence-close with NO plan file is still a silent no-op — rung-0 behaviour unchanged', () => {
@@ -256,11 +272,11 @@ test('a failed journal write leaves the plan file on disk, never deletes it with
   fx.g(fx.work, 'checkout', '-q', 'main');
   colab(fx, ['claim', '61', '--branch', 'fix/single-61', '--repo', fx.work]);
   writePlan(fx, 'issue-61.md');
-  // A FILE (not a directory) sitting where `~/.colab/` needs to be — `mkdirSync(..., {recursive})`
-  // throws on it, so the journal write fails before it ever opens the append stream. The ship
-  // itself still succeeds (this is a deferred, non-fatal write failure, same posture as every other
-  // post-merge write in B4); only the plan-file side effect is under test here.
-  fs.writeFileSync(path.join(fx.home, '.colab'), 'blocking file, not a directory\n');
+  // A DIRECTORY sitting where the journal file needs to be (in COLAB_HOME, #663) — the append
+  // throws EISDIR on it, so the journal write fails. The ship itself still succeeds (this is a
+  // deferred, non-fatal write failure, same posture as every other post-merge write in B4); only
+  // the plan-file side effect is under test here.
+  fs.mkdirSync(path.join(fx.home, 'plan-journal.jsonl'));
 
   const r = colab(fx, ['ship', '--branch', 'fix/single-61', '--repo', fx.work]);
   assert.strictEqual(r.code, 0, r.out + r.err);

@@ -58,7 +58,8 @@ else printf '%s\n' "$(printf '%s\n' "$OUT2" | grep '^I ' | sort)" \
 fi
 
 python3 -c 'import json,os,sys                                    # 4. claim digest (local, 0 calls)
-r=os.path.realpath(sys.argv[1]); s=json.load(open(os.path.expanduser("~/.colab/state.json")))
+h=os.environ.get("COLAB_HOME") or os.path.expanduser("~/.colab")  # the colab home (#663)
+r=os.path.realpath(sys.argv[1]); s=json.load(open(os.path.join(h,"state.json")))
 print(sorted(k for k,v in s.get("claims",{}).items() if os.path.realpath(v["repo"])==r),
       sorted(n for n,w in s.get("worktrees",{}).items() if os.path.realpath(w["repo"])==r))' "$REPO"
 

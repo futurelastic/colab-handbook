@@ -70,10 +70,10 @@ leave one standing silently:
 ### Delete the plan file and journal its usage, in the same breath (#94)
 
 **`colab ship` does this for you** — per issue in the harvested set (B1b), it appends
-one line to `~/.colab/plan-journal.jsonl` (rung/cause read from the plan file's own
-front matter, verdict always `pass` — a `reject` never reaches this far) and only then
-deletes the plan file, chained so a failed journal write leaves it in place. This used
-to be a step only this shell snippet performed (#115: verified zero matches for
+one line to `plan-journal.jsonl` in the colab home (`$COLAB_HOME`, default `~/.colab`),
+rung/cause read from the plan file's own front matter and verdict always `pass` (a `reject`
+never reaches this far), and only then deletes the plan file, chained so a failed journal
+write leaves it in place. This used to be a step only this shell snippet performed (#115: verified zero matches for
 `plan-journal`/`plans/issue-` in `tools/colab` before that fix), so a ship driven
 through the tool alone left the plan file on disk with no journal line — that gap is
 closed; nothing here to do on that path.
@@ -96,6 +96,7 @@ has it (#113):
 MAIN_REPO="${MAIN_REPO:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}"
 case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
 ISSUES="<harvested issue numbers, space-separated>"
+JOURNAL="${COLAB_HOME:-$HOME/.colab}/plan-journal.jsonl"   # the colab home, as `colab` resolves it (#663)
 GRADE_VERDICT=pass   # only a `pass` reaches B4 by construction (B1c stops a reject before
                       # this step); use the same token B2b's marker emits, never a bare word
 for PLAN in "$PLANS_DIR"/issue-*.md "$MAIN_REPO"/.claude/plans/issue-*.md; do   # #488: configured, then legacy
@@ -110,7 +111,7 @@ for PLAN in "$PLANS_DIR"/issue-*.md "$MAIN_REPO"/.claude/plans/issue-*.md; do   
                                   # wider group's file this ship only carries part of
   RUNG=$(sed -n 's/^rung: *//p' "$PLAN" | head -1)
   CAUSE=$(sed -n 's/^cause: *//p' "$PLAN" | head -1)
-  mkdir -p "$(dirname ~/.colab/plan-journal.jsonl)"
+  mkdir -p "$(dirname "$JOURNAL")"
   python3 -c '
 import json, sys, datetime
 nums, rung, cause, verdict, out = sys.argv[1:6]
@@ -120,14 +121,15 @@ with open(out, "a") as f:
         f.write(json.dumps({
             "ts": ts, "issue": int(n), "rung": rung, "cause": cause, "verdict": verdict,
         }) + "\n")
-' "$NUMS" "${RUNG:-1}" "${CAUSE:-none}" "$GRADE_VERDICT" ~/.colab/plan-journal.jsonl \
+' "$NUMS" "${RUNG:-1}" "${CAUSE:-none}" "$GRADE_VERDICT" "$JOURNAL" \
     && rm -f "$PLAN"
 done
 ```
 
-- **Machine-local, never the tracker.** `~/.colab/plan-journal.jsonl` never leaves this
-  machine and is never committed — it is not a second source of truth about the feature,
-  only a record of how the planning mechanism itself is being used.
+- **Machine-local, never the tracker.** The plan journal (`plan-journal.jsonl` in the colab
+  home, `$COLAB_HOME`, default `~/.colab`) never leaves this machine and is never committed —
+  it is not a second source of truth about the feature, only a record of how the planning
+  mechanism itself is being used.
 - **One line per issue in the file's own number set**, not one per branch and not one
   per file — a group branch can carry several issues behind one shared plan file, and
   rung/cause are read from that file once and reused for every line it contributes,

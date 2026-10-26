@@ -86,7 +86,8 @@ colab claim $N --worktree <name> \
   cosmetic label, not a traceable row. It is a degraded state, not an equal choice.
 - **Got the id later, or already created the worktree anonymous?**
   `colab worktree tag <name> --session <id> [--session-name <s>]` repairs the worktree
-  *and* the claims hanging off it. No hand-editing of `~/.colab/state.json`.
+  *and* the claims hanging off it. No hand-editing of `state.json` in the colab home
+  (`$COLAB_HOME`, default `~/.colab`).
 - **No `colab` installed?** Nothing breaks — the fields simply do not exist, and
   claiming still works through `gh`.
 

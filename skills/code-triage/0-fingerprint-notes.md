@@ -5,10 +5,10 @@ condition; this file holds the step's full text — the commands, edge cases and
 behind them — moved here verbatim (#524).
 
 
-- **Where the cache lives, and why not `~/.colab/`.** `--git-common-dir` resolves to the
-  main checkout's `.git` even from inside a worktree, so every worktree of the repo shares
+- **Where the cache lives, and why not the colab home (`$COLAB_HOME`, default `~/.colab`).**
+  `--git-common-dir` resolves to the main checkout's `.git` even from inside a worktree, so every worktree of the repo shares
   one cache and the cache dies with the clone — the correct lifetime for a cache *of* that
-  clone. It is deliberately **not** folded into `~/.colab/state.json`: that file is a
+  clone. It is deliberately **not** folded into the colab home's `state.json`: that file is a
   published contract with readers outside this repo (`tools/lib/state.js` says so in its
   header), and a private cache wedged into it becomes a field other tools must parse.
 - **Anchor input 4 on the main checkout, not `$PWD`.** `colab` records every claim and
@@ -17,7 +17,7 @@ behind them — moved here verbatim (#524).
   indistinguishable from "no claims *found*". `dirname` of the common git dir is that path
   from anywhere in the repo, worktrees included. (`code-sweep` §1 filters the same state
   and needs the same anchor for the same reason.)
-- **Input 4 digests this repo's slice, not the file's mtime.** `~/.colab/state.json` is
+- **Input 4 digests this repo's slice, not the file's mtime.** The colab home's `state.json` is
   machine-global, and `colab` rewrites it atomically on every command — so its mtime moves
   when an unrelated repo allocates a port, and a triage that re-ran fully on that would
   short-circuit almost never. Reading the file is local and free; read it precisely. (Same

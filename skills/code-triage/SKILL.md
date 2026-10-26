@@ -42,8 +42,8 @@ reaches your list.**
 
 **Rule:** fingerprint five inputs in three network calls — trunk sha; a backlog digest of open
 issues' `number,state,labels,title,body` (`N2` receipt); a two-way dependency digest with each
-blocker's `BY` line (`COV` receipt); this repo's slice of `~/.colab/state.json`, anchored on
-the main checkout; issue-carrying remote branches with an ahead flag (`B5` receipt) — cached
+blocker's `BY` line (`COV` receipt); this repo's slice of `state.json` in the colab home
+(`$COLAB_HOME`, default `~/.colab`), anchored on the main checkout; issue-carrying remote branches with an ahead flag (`B5` receipt) — cached
 in `$CACHE` (`<git-common-dir>/colab-triage.json`). No receipt, a truncated read, or the
 empty digest `e3b0c44298fc1c14` is never a match. On **every** pass, short-circuited too:
 re-check stored wakes (`$CACHE.wakes`), and check for a red trunk nobody owns (an accepted
