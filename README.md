@@ -309,6 +309,7 @@ path* last. Unattended, say it with a flag:
 |---|---|---|---|
 | Claude Code (`claude`) | `~/.claude/skills` | `/code-start` | Nothing. This user-level install **wins** over a repo's own `.claude/skills/<name>` of the same name (precedence is enterprise > personal > project), so rename a repo variant you want used. |
 | OpenAI Codex (`codex`) | `~/.agents/skills` | `$code-start` | Its default sandbox has no network, so `gh` fails: set `[sandbox_workspace_write] network_access = true` in `~/.codex/config.toml`. Values from Codex's docs; not yet verified by a clean-machine run. |
+| opencode (`opencode`) | `~/.config/opencode/skills` | ask for it: "use the code-start skill" | opencode does not run a skill's `` !`command` `` lines, so the agent reads `.colab/skills/<name>.md` itself. With `OPENCODE_DISABLE_CLAUDE_CODE=1` it reads no `.claude/skills` at all. If `XDG_CONFIG_HOME` is set, the folder moves under it: install there with `--skills-dir`. Verified by a run of opencode 1.18.3. |
 | anything else | `--skills-dir <path>` | the agent's own way | The agent's shell needs network access for `gh`. The folder is remembered in `~/.colab/skills-dirs`. |
 
 A re-run with no flag and no terminal keeps every agent runtime it finds already
@@ -319,7 +320,7 @@ one file each — that folder is the source for the table above.
 | Flag | What it does |
 |---|---|
 | *(none)* | Symlink `skills/` into each chosen agent runtime's user-level folder, so they are available in every repo you open. Asks at a terminal; otherwise keeps what is linked (see [*Choose your agent runtime*](#choose-your-agent-runtime)). |
-| `--engine <id>[,<id>]` | Install for these agent runtimes (`claude`, `codex` — the files in `engines/`), no question asked. |
+| `--engine <id>[,<id>]` | Install for these agent runtimes (`claude`, `codex`, `opencode` — the files in `engines/`), no question asked. |
 | `--skills-dir <path>` | Also install into this folder, for an agent `engines/` does not know. |
 | `--tools` | The `colab` CLI twice: a **symlink** at `~/.local/bin/colab` for your sessions (it prints the `PATH` line if needed), and a stamped **frozen copy** at `~/.colab/bin/colab` for always-on services. Also creates an empty `~/.colab/state.json` if there is none. |
 | `--hooks` | Point this clone's git at `.githooks/`: a gitleaks secret scan and an identity scan whose vocabulary you keep outside every repo (see [`templates/README.md`](templates/README.md)). |

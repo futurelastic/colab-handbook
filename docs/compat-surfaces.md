@@ -322,6 +322,7 @@ audit/audit.mjs
 claude
 codex
 generic
+opencode
 ```
 
 ```compat template

@@ -16,7 +16,7 @@
 //                  A path segment (`skills/code-start/`, `../code-start/SKILL.md`) is not a hit.
 //   tool-call      one engine's helper/tool syntax: `Agent(`, `subagent_type`, `TodoWrite`,
 //                  `SendMessage`, `$ARGUMENTS`, "the <X> tool" for an engine's built-in tool.
-//   engine-name    a product or vendor host: Claude Code, claude.ai, Codex, Cursor, Copilot, Gemini.
+//   engine-name    a product or vendor host: Claude Code, claude.ai, Codex, Cursor, Copilot, Gemini, opencode.
 //   model-name     a model family: Opus, Sonnet, Haiku, GPT-n.
 //
 // Exit 0 clean · 1 findings · 2 nothing to scan.
@@ -31,7 +31,7 @@ export function rules(skillNames) {
   return [
     names && { id: "slash-invoke", re: new RegExp(`(^|[^\\w./~-])/(${names})(?![\\w/-])`) },
     { id: "tool-call", re: /\bAgent\(|subagent_type|\bTodoWrite\b|\bSendMessage\b|\$ARGUMENTS\b|\b(Skill|Bash|Read|Edit|Write|Grep|Glob|Agent|Task) tool\b/ },
-    { id: "engine-name", re: /Claude Code|claude\.ai|\bCodex\b|\bCursor\b|\bCopilot\b|\bGemini\b/i },
+    { id: "engine-name", re: /Claude Code|claude\.ai|\bCodex\b|\bCursor\b|\bCopilot\b|\bGemini\b|\bopencode\b/i },
     { id: "model-name", re: /\b(Opus|Sonnet|Haiku)\b|\bGPT-?\d/i },
   ].filter(Boolean);
 }

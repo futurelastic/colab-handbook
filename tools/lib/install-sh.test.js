@@ -480,7 +480,7 @@ const linkedInto = (dir) => SKILL_NAMES.filter((n) => {
 
 test('#530: every engine file declares every key, with yes/no where the format says so', () => {
   const all = engines.listEngines(ROOT);
-  assert.deepStrictEqual(all.map((e) => e.id).sort(), ['claude', 'codex', 'generic']);
+  assert.deepStrictEqual(all.map((e) => e.id).sort(), ['claude', 'codex', 'generic', 'opencode']);
   for (const e of all) {
     for (const k of ['label', 'skills_dir', 'invoke', 'instructions', 'helper_agents', 'load_time_injection', 'shell_network', 'verified']) {
       assert.ok(k in e, `engines/${e.id}.conf has no ${k}:`);
