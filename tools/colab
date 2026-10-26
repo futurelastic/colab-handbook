@@ -6127,7 +6127,12 @@ function cmdWorktreeRm(argv) {
   // Same shape as the uncommitted-work gate above, and deliberately in the CLI rather than in the
   // skills: code-wrap B4 and code-sweep §3 both tear worktrees down on separate code paths, so a
   // skill-level fix would have to be written twice into two files already drifting apart.
-  const owned = wt.path && fs.existsSync(wt.path) ? procs.processesInDir(wt.path) : [];
+  // #668: whoever is RUNNING this command (this process, its shell, the agent CLI above it) is never
+  // "owned" — `processesInDir` tags those `caller`. Stopping them was how a `colab ship` run from a
+  // shell inside the worktree SIGTERMed its own caller mid-teardown: merged, never released.
+  const inDir = wt.path && fs.existsSync(wt.path) ? procs.processesInDir(wt.path) : [];
+  const owned = inDir.filter((p) => !p.caller);
+  const callers = inDir.filter((p) => p.caller);
   if (owned.length && !opts.force) {
     warn(`Worktree "${name}" still owns ${owned.length} running process(es):`);
     for (const p of owned) {
@@ -6145,6 +6150,15 @@ function cmdWorktreeRm(argv) {
   }
 
   const attachedIssues = Object.values(st0.claims).filter((c) => c.worktree === name).map((c) => normIssueNum(c.issue));
+
+  // #668: this process's own cwd may be the directory about to go. Leave it first, so every spawn and
+  // `process.cwd()` after the removal (the rest of a `colab ship` tail runs in this same process)
+  // resolves against a directory that still exists.
+  try {
+    if (wt.path && procs.isInside(wt.path, process.cwd())) process.chdir(repoAbs);
+  } catch (_) { /* cwd already gone (an earlier interrupted removal) — chdir to the repo regardless */
+    try { process.chdir(repoAbs); } catch (_) { /* nothing left to do; every call below passes cwd */ }
+  }
 
   // pre-remove hook (abort on failure unless --force)
   const hook = runHook(repoAbs, 'pre-remove', { wtPath: wt.path, name, branch: wt.branch, ports: wt.ports, issues: attachedIssues });
@@ -6248,6 +6262,11 @@ function cmdWorktreeRm(argv) {
     `${gh ? '' : ' (local-only)'}` +
     `${trackerFailed.length ? ` — FAILED on ${trackerFailed.map((n) => '#' + n).join(', ')}: GitHub still shows in-progress there; local claim record KEPT (releasePending) — retry with: colab release <N>` : ''}`);
   if (killed.length) print(`  stopped ${killed.filter((k) => k.gone).length}/${killed.length} owned process(es): ${killed.map((k) => k.pid).join(', ')}`);
+  for (const c of callers) {
+    if (String(c.pid) === String(process.pid)) continue; // this process moved out above
+    print(`  left running pid ${c.pid} (${c.command}) — it runs this command, so it is not the worktree's to stop (#668);`);
+    print(`    its cwd was inside the removed directory: cd ${repoAbs}`);
+  }
 
   // "freed" must mean freed. Reporting a port as free while something still answers on it is what
   // turned a leaked process into a clean bill of health, and it poisons the registry in both
@@ -10893,6 +10912,14 @@ Sequence (each step gated; any failure aborts before the push — the target is 
                         record; then ask the same of ITS parent. Anything else stays open; an
                         unlabelled or unticked-item parent prints as a finding (#371)
 
+AN INTERRUPTED TAIL IS FINISHED BY RE-RUNNING THE SAME COMMAND (#668). Once B2 pushed, the worktree
+record reads \`merged\` and names the merge commit; B3 deletes that record. A re-run that finds it
+still there, with that commit on the remote target, prints "→ RESUME" and runs f–i2 only — no
+sync, no squash, no push, so no gate or precondition is re-read — and its 🚢 comment says it was a
+resume. There is no --finish flag: the re-run is the finish. Teardown never stops the process
+running it, nor that process's ancestors (the shell, the agent CLI): a caller whose cwd was inside
+the worktree is left running and named, with the \`cd\` it needs.
+
 CLAIMS ARE CROSS-CHECKED AGAINST GIT before anything closes (#87). The set ship would close comes
 from the claim registry, read AT SHIP TIME — so a claim a co-tenant session wrote onto this branch
 minutes ago is indistinguishable from one this session made. Measured: a branch carrying #71 and
@@ -11375,14 +11402,90 @@ function shipRecordRemedy(sess) {
  * here would skip every bookkeeping step after it (#389). The precondition above is what should
  * stop a bad record; this is the belt to that brace.
  */
-function markShipMerged(sess) {
+function markShipMerged(sess, merged = {}) {
   if (!sess.name) return;
   try {
-    state.mutate((st) => { if (st.worktrees[sess.name]) st.worktrees[sess.name].status = 'merged'; });
+    state.mutate((st) => {
+      const rec = st.worktrees[sess.name];
+      if (!rec) return;
+      rec.status = 'merged';
+      // #668: what landed, and where — so a re-run after an interrupted tail can finish it (see
+      // `shipResumeState`) instead of trying to squash the same work a second time.
+      if (merged.sha) { rec.mergedSha = String(merged.sha); rec.mergedTarget = merged.target || null; }
+    });
   } catch (e) {
     warnDeferred(`could not record worktree "${sess.name}" as merged (${String(e.message).split('\n')[0]}) — ` +
       'the merge IS pushed; the rest of the ship continues. Fix the record with `colab doctor`.');
   }
+}
+
+/**
+ * #668: is this session's merge ALREADY on the target, with its post-merge tail unfinished?
+ *
+ * The record that says so is the worktree's own `status: merged`, which `markShipMerged` writes only
+ * after a gated squash was pushed, and which B3's `worktree rm` deletes. So "record present and
+ * merged" means the tail stopped somewhere at or before teardown — and because B4's 🚢 comments run
+ * AFTER B3, it also means they were not posted yet (the one exception, a `--keep-worktree` ship that
+ * finished, is stamped `shipTailAt` and skips them). Measured: a ship whose teardown killed its own
+ * caller left exactly this state, and re-running ship then failed at B1 with nothing to commit.
+ *
+ * The merge commit is the recorded `mergedSha`; a record written before #668 carries none, so it is
+ * found as the newest commit on `<remote>/<target>` naming one of the session's issues in a
+ * Closes/Refs clause — only when `landed` agrees the branch's content is in the target. Returns
+ * null whenever any of that cannot be shown: the caller then ships exactly as before.
+ */
+function shipResumeState(repoAbs, st, sess, target) {
+  const rec = sess.name ? st.worktrees[sess.name] : null;
+  if (!rec || rec.status !== 'merged') return null;
+  if (rec.mergedTarget && rec.mergedTarget !== target) return null;
+  const remote = git.remoteFor(repoAbs);
+  git.git(['fetch', '-q', remote, target], repoAbs); // best-effort: a stale ref only makes this answer null
+  const onTarget = `refs/remotes/${remote}/${target}`;
+  let sha = null;
+  let how = '';
+  if (rec.mergedSha) {
+    const full = git.git(['rev-parse', '--verify', '--quiet', `${rec.mergedSha}^{commit}`], repoAbs);
+    if (full.ok && git.git(['merge-base', '--is-ancestor', full.stdout.trim(), onTarget], repoAbs).ok) {
+      sha = full.stdout.trim(); how = 'the merge recorded on the worktree';
+    }
+  } else if (sess.issues.length && landed.landedState(repoAbs, target, sess.branch).state === 'landed') {
+    const greps = sess.issues.map((n) => `--grep=([Cc]loses|[Rr]efs) #${n}([^0-9]|$)`);
+    const found = git.git(['log', '-1', '--format=%H', '-E', ...greps, onTarget], repoAbs);
+    if (found.ok && found.stdout.trim()) { sha = found.stdout.trim(); how = 'the newest commit on the target naming its issues'; }
+  }
+  if (!sha) return null;
+  const body = git.git(['log', '-1', '--format=%B', sha], repoAbs).stdout || '';
+  const named = { closes: new Set(), refs: new Set() };
+  for (const m of body.matchAll(/([Cc]loses|[Rr]efs) #(\d+)/g)) named[/^[Cc]/.test(m[1]) ? 'closes' : 'refs'].add(Number(m[2]));
+  const closeIssues = sess.issues.filter((n) => named.closes.has(Number(n)));
+  const refsIssues = sess.issues.filter((n) => !named.closes.has(Number(n)));
+  const short = git.git(['rev-parse', '--short', sha], repoAbs).stdout.trim() || sha.slice(0, 7);
+  return { sha: short, how, closeIssues, refsIssues, evidencePosted: !!rec.shipTailAt && rec.shipTailAt === sha };
+}
+
+/** #668: finish an interrupted post-merge tail — the same `shipLandedTail` a fresh ship runs, no merge. */
+function shipResumeTail({ repoAbs, sess, target, trunk, integration, opts, resume }) {
+  print(`→ RESUME: ${sess.branch} is already merged into ${target} @ ${resume.sha} (${resume.how}) — its post-merge`);
+  print('  tail did not finish. Finishing it now: no sync, no squash, no push (#668).');
+  if (opts.dry) {
+    print(`  --dry: would run B3 teardown${opts.keepWorktree ? ' (kept: --keep-worktree)' : ''}, release, ` +
+      `${resume.evidencePosted ? 'no B4 comments (already posted)' : 'B4 verify + 🚢 comments'}, plan journal, labels, containers.`);
+    return 0;
+  }
+  const gh = isGhUsable(repoAbs);
+  deferredCollector = [];
+  shipLandedTail({ repoAbs, sess, target, trunk, gh, sha: resume.sha,
+    closeIssues: resume.closeIssues, refsIssues: resume.refsIssues, refsSet: new Set(resume.refsIssues),
+    integration, opts, skipEvidence: resume.evidencePosted,
+    evidenceExtra: ' — finished by a re-run of `colab ship` after the first run\'s post-merge tail was interrupted (#668)' });
+  print('');
+  print(`✓ Finished ${sess.branch} → ${target} @ ${resume.sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
+  if (deferredCollector && deferredCollector.length) {
+    print(`  ${deferredCollector.length} post-merge write(s) need attention:`);
+    for (const msg of deferredCollector) print(`    ! ${msg}`);
+  }
+  deferredCollector = null;
+  return 0;
 }
 
 function resolveShipSession(st, repoAbs, opts) {
@@ -13943,6 +14046,13 @@ function cmdShip(argv) {
       '`integration:` or finish this merge by hand — ship will not retarget it at trunk for you.');
   }
 
+  // ---- #668: a merge that already landed only needs its tail finished — never a second squash ----
+  // Before the gate and the preconditions on purpose: those authorised the merge that is already on
+  // the target, and a half-removed worktree would fail the dirty check for a reason that is the
+  // interruption itself. Nothing below this branch merges or pushes.
+  const resume = shipResumeState(repoAbs, st, sess, target);
+  if (resume) return shipResumeTail({ repoAbs, sess, target, trunk, integration, opts, resume });
+
   // ---- (a) AUTONOMY GATE — granted by the repo file, never by the caller ----
   // #345: …or the branch's diff is documentation only, computed here from git — never asserted.
   const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)),
@@ -14850,7 +14960,7 @@ function cmdShip(argv) {
   // here rather than right after B1 (#322): between the two, the push can still fail and be rolled
   // back, and a `status: merged` record written before that point outlives a merge that never
   // happened — inviting a later sweep to tear down a branch whose work is still only on the branch.
-  markShipMerged(sess);
+  markShipMerged(sess, { sha: mergeSha, target });
 
   // ---- (e2) POST-SHIP: the target checkout's installed tree may now be stale (#304) ----
   // The merge has landed and is pushed. Nothing below may fail the ship: there is nothing left to
@@ -14993,7 +15103,7 @@ function shipCloseLandedPrs(repoAbs, sess, { target, sha, issues, skip = [] }) {
  * addition — '' on a serial ship (so its comment is byte-identical), the combined-run clause for a
  * batch member.
  */
-function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts, evidenceExtra = '', skipPrs = [] }) {
+function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts, evidenceExtra = '', skipPrs = [], skipEvidence = false }) {
   // #584: the CI-trigger PR(s) this squash left behind. FIRST, while the branch ref still resolves —
   // B3 below may delete it, and "did the PR's head land?" is answered against that tip.
   if (gh && sess.branch) {
@@ -15026,7 +15136,7 @@ function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, re
   // ---- (g/h) B4 verify + post summary per issue ----
   const groupLabelsCarried = new Set(); // union across every issue this branch carried — for (i) below
   const closedByShip = []; // the issues this ship actually closed — for (i2) below (#371)
-  if (gh) {
+  if (gh && !skipEvidence) {
     for (const num of sess.issues) {
       // #647: closed before the hand-off — history the branch name carries, not work this ship did.
       if (sess.handoffRefs && sess.handoffRefs.has(num)) continue;
@@ -15051,6 +15161,14 @@ function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, re
       const r = git.ghIssueComment(repoAbs, num, body);
       if (!r.ok) warnDeferred(`could not post ship comment on #${num}`);
     }
+  }
+
+  // #668: a KEPT worktree's record outlives B4, still reading `status: merged` — stamp what was posted,
+  // so a later re-run that resumes this tail (teardown) does not post the 🚢 comments a second time.
+  if (worktreeKept && gh && !skipEvidence && sha) {
+    const full = git.git(['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], repoAbs);
+    try { state.mutate((st) => { const r = st.worktrees[sess.name]; if (r) r.shipTailAt = full.ok ? full.stdout.trim() : String(sha); }); }
+    catch (e) { warnDeferred(`could not stamp worktree "${sess.name}" as fully shipped (${String(e.message).split('\n')[0]}) — a later re-run may post its 🚢 comment again`); }
   }
 
   // ---- (h2) B4: plan-journal + delete the plan file(s) (#94, #115, #193, #201) ----
@@ -15951,7 +16069,7 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
  * — its 🚢 comment gains only the combined-run clause.
  */
 function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refsIssues, suffix, opts, gh }) {
-  markShipMerged(sess);
+  markShipMerged(sess, { sha, target: trunk });
   pushEvent('ship', {
     repo: repoAbs, worktree: sess.name, session: sess.session,
     issue: sess.issues.length === 1 ? sess.issues[0] : undefined,

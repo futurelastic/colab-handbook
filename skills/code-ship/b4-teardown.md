@@ -42,7 +42,13 @@ obstacle to route around: remove the tree underneath a live server and it keeps
 listening on a port the registry now calls free, serving a checkout that no
 longer exists. Stop the server and re-run, or pass `--force` to have `colab`
 terminate what it owns. Ownership is decided by cwd, never by port, so `--force`
-cannot reach an unrelated process that merely holds the same port.
+cannot reach an unrelated process that merely holds the same port. Nor can it reach
+whoever is *running* the command — the process, its shell, the agent CLI above it: a
+caller whose cwd is inside the worktree is left running and named, with the `cd` it
+needs (#668; it used to be stopped, killing `colab ship` mid-teardown). A ship tail that
+is interrupted anyway is finished by re-running the same `colab ship` — it reads the
+worktree's `merged` record, prints `→ RESUME`, and runs teardown through B4 with no
+second squash.
 
 **Keep it only for a named reason,** and write the reason in your report — never
 leave one standing silently:

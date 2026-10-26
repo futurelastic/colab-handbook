@@ -17,7 +17,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { isInside, parseLsofCwd, isAncestor } = require('./procs.js');
+const { isInside, parseLsofCwd, isAncestor, ancestorPids } = require('./procs.js');
 
 const WT = '/repo/.claude/worktrees/feat-x';
 
@@ -79,4 +79,36 @@ test('isAncestor: an empty/non-numeric candidate is false, never throws', () => 
 test('isAncestor: `of` already <= 1 (init/kernel) is false immediately, never throws', () => {
   assert.strictEqual(isAncestor(process.ppid, 1), false);
   assert.strictEqual(isAncestor(process.ppid, 0), false);
+});
+
+// ancestorPids (#668) — the set worktree teardown must never stop. The walk is driven through an
+// injected `ppidOf`, so none of these touch a real process tree except the last, which only asks
+// that this test's own parent is in its own ancestor set.
+
+const chain = (links) => (pid) => (pid in links ? links[pid] : null);
+
+test('ancestorPids: walks ppid links up to (not including) init, as strings', () => {
+  const got = ancestorPids(500, 64, chain({ 500: 400, 400: 300, 300: 1 }));
+  assert.deepStrictEqual([...got], ['400', '300']);
+});
+
+test('ancestorPids: a ppid cycle from bad ps output ends the walk instead of spinning', () => {
+  const got = ancestorPids(500, 64, chain({ 500: 400, 400: 300, 300: 400 }));
+  assert.deepStrictEqual([...got], ['400', '300']);
+});
+
+test('ancestorPids: hops bounds the walk', () => {
+  const got = ancestorPids(500, 1, chain({ 500: 400, 400: 300, 300: 200 }));
+  assert.deepStrictEqual([...got], ['400']);
+});
+
+test('ancestorPids: ps failing, or throwing, ends the walk with what it has — never throws', () => {
+  assert.deepStrictEqual([...ancestorPids(500, 64, chain({ 500: 400 }))], ['400']);
+  assert.deepStrictEqual([...ancestorPids(500, 64, () => { throw new Error('ps gone'); })], []);
+  assert.deepStrictEqual([...ancestorPids(1, 64, chain({ 1: 0 }))], []);
+});
+
+test('ancestorPids: the real default walk includes this process\'s parent', () => {
+  if (process.platform === 'win32') return;
+  assert.ok(ancestorPids().has(String(process.ppid)));
 });
