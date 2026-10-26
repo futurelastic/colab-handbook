@@ -74,6 +74,8 @@ function fixture(script) {
     `const fs = require('fs');`,
     `const script = JSON.parse(fs.readFileSync(${JSON.stringify(scriptPath)}, 'utf8'));`,
     'const argv = process.argv.slice(2);',
+    // Every call's argv, one JSON line each — lets a test read what was actually POSTED (#666).
+    `fs.appendFileSync(${JSON.stringify(path.join(bin, 'gh-calls.jsonl'))}, JSON.stringify(argv) + "\\n");`,
     "if (argv[0] === '--version') { console.log('gh version 0.0.0 (fixture)'); process.exit(0); }",
     "if (argv[0] === 'auth' && argv[1] === 'status') { console.error('Logged in (fixture)'); process.exit(0); }",
     'const key = argv.slice(0, 2).join(" ");',
@@ -84,7 +86,11 @@ function fixture(script) {
     'process.exit(entry.code || 0);',
   ].join('\n') + '\n', { mode: 0o755 });
 
-  return { root, origin, work, home, bin, g };
+  const calls = () => {
+    const f = path.join(bin, 'gh-calls.jsonl');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+  };
+  return { root, origin, work, home, bin, g, calls };
 }
 
 function colab(fx, args, extraEnv = {}) {
@@ -383,3 +389,68 @@ test('HELP_DECISION documents --answers for an ask id, not only a decision:optio
   assert.match(r.out, /--answers <ref>\s+\(--record only\) the open ask id/);
   assert.match(r.out, /ASK ID/);
 });
+
+// --- #666: the record header never names this machine on a public (or unreadable) repo -------
+//
+// #369 routed both headers through commentHost(): the real hostname only where the destination
+// may name it, the opaque `h:` token otherwise. Nothing pinned that for `colab decision`, and a
+// pre-#369 writer had left a private hostname on every recorded decision of a public repo. These
+// cases read the body actually handed to `gh issue comment`, and the private case is the control
+// that proves the negative assertions are not vacuous (the body DOES carry the hostname there).
+
+const MY_HOST = os.hostname();
+const hostField = (body) => (body.match(/· host `([^`]*)`/) || [])[1];
+function postedComment(fx) {
+  const c = fx.calls().filter((a) => a[0] === 'issue' && a[1] === 'comment');
+  assert.strictEqual(c.length, 1, `expected exactly one issue comment, got ${JSON.stringify(c)}`);
+  return c[0][c[0].indexOf('--body') + 1];
+}
+const RECORD_SCRIPT = (repoView) => ({
+  'issue view': OPEN_NO_LABELS,
+  'label list': { code: 1, stderr: 'fixture: no labels\n' },
+  'issue comment': { code: 0, stdout: '' },
+  'issue edit': { code: 0, stdout: '' },
+  ...(repoView ? { 'repo view': repoView } : {}),
+});
+const REOPEN_SCRIPT = (repoView) => ({
+  'issue view': { code: 0, stdout: JSON.stringify({ state: 'OPEN', labels: [{ name: 'decision-recorded' }], comments: [] }) + '\n' },
+  'label list': { code: 1, stderr: 'fixture: no labels\n' },
+  'issue comment': { code: 0, stdout: '' },
+  'issue edit': { code: 0, stdout: '' },
+  ...(repoView ? { 'repo view': repoView } : {}),
+});
+const PUBLIC = { code: 0, stdout: 'PUBLIC\n' };
+const PRIVATE = { code: 0, stdout: 'PRIVATE\n' };
+
+for (const [verb, script, header] of [
+  ['--record', RECORD_SCRIPT, /^⚖ Decision recorded — /],
+  ['--reopen', REOPEN_SCRIPT, /^↩ Decision reopened — /],
+]) {
+  test(`decision ${verb} on a PUBLIC repo: the header carries the h: token, never this machine's hostname (#666)`, () => {
+    const fx = fixture(script(PUBLIC));
+    const r = colab(fx, ['decision', '1', verb, '--ruled-by', 'boss', '--repo', fx.work]);
+    assert.strictEqual(r.code, 0, r.out + r.err);
+    const body = postedComment(fx);
+    assert.match(body, header);
+    assert.match(hostField(body) || '', /^h:[0-9a-f]{12}$/, body);
+    assert.ok(!body.toLowerCase().includes(MY_HOST.toLowerCase()), `hostname leaked into a public record:\n${body}`);
+    const short = MY_HOST.split('.')[0].toLowerCase();
+    if (short.length >= 3) assert.ok(!body.toLowerCase().includes(short), `short hostname leaked:\n${body}`);
+  });
+
+  test(`decision ${verb} when visibility is UNREADABLE and no room: is declared fails closed to the h: token (#666)`, () => {
+    const fx = fixture(script({ code: 1, stderr: 'fixture: repo view failed\n' }));
+    const r = colab(fx, ['decision', '1', verb, '--ruled-by', 'boss', '--repo', fx.work]);
+    assert.strictEqual(r.code, 0, r.out + r.err);
+    const body = postedComment(fx);
+    assert.match(hostField(body) || '', /^h:[0-9a-f]{12}$/, body);
+    assert.ok(!body.toLowerCase().includes(MY_HOST.toLowerCase()), body);
+  });
+
+  test(`decision ${verb} on a PRIVATE repo still names the host — the control for the cases above (#666)`, () => {
+    const fx = fixture(script(PRIVATE));
+    const r = colab(fx, ['decision', '1', verb, '--ruled-by', 'boss', '--repo', fx.work]);
+    assert.strictEqual(r.code, 0, r.out + r.err);
+    assert.strictEqual(hostField(postedComment(fx)), MY_HOST);
+  });
+}
