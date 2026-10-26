@@ -13172,7 +13172,7 @@ function shipJournalPlanDir(repoAbs, plansDir, issues, journalled) {
   let entries;
   try { entries = fs.readdirSync(plansDir); } catch (_) { return; } // no plans dir at all — nothing to do
   const issueSet = new Set(issues.map((n) => String(n)));
-  const journalPath = path.join(os.homedir(), '.colab', 'plan-journal.jsonl');
+  const journalPath = path.join(state.COLAB_DIR, 'plan-journal.jsonl'); // the colab home, COLAB_HOME-aware (#663)
   for (const name of entries) {
     const m = name.match(/^issue-(\d+(?:-\d+)*)\.md$/);
     if (!m) continue; // not a plan file this convention recognises

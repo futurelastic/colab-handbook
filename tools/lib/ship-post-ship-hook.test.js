@@ -93,7 +93,8 @@ function fixture() {
 function colab(fx, args) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    // HOME override: the plan-journal step writes to `~/.colab/` off os.homedir(), not COLAB_HOME.
+    // HOME override: keeps anything resolved off os.homedir() inside the fixture (the plan journal
+    // itself follows COLAB_HOME since #663).
     // A stable non-blank COLAB_SESSION (#237): claim and ship run against the same trunk checkout,
     // and two blank sessions do not count as the same place-claim holder.
     env: {

@@ -657,7 +657,8 @@ proposed shape (`dependency.changed`, payload `{state, blocker}`) for whoever ag
 ## State & config files (machine-local)
 
 Everything lives under `~/.colab/` (override the directory with the `COLAB_HOME` env var):
-`state.json` (current truth), `config.json`, `state.lock`, and — only if you opt in — `journal.jsonl`
+`state.json` (current truth), `config.json`, `state.lock`, `plan-journal.jsonl` (one line per issue
+whose plan file `colab ship` retired — code-ship B4; #663), and — only if you opt in — `journal.jsonl`
 (history; see `journal` below). Writes to the first are atomic (temp file + `rename`) and guarded by
 a `mkdir`-based lock (`state.lock`) so concurrent sessions don't lose writes; the journal is
 append-only and never participates in that lock.
