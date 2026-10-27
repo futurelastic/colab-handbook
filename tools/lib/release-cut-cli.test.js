@@ -797,8 +797,11 @@ test('#443: a failed publish is reported, never undoes the cut', () => {
 
 // ---- #446: deploy-tag-fast — a final on every green head, end to end ----------------------------
 
-const FAST_YML = 'trunk: main\nexposure: released\nproduction: https://app.example\ndeploy: tag\nstack: node\n' +
+// #671: `migrations:` declared, so the migration-grant gate can see a migration at all — without a
+// declared or default layout an empty migration list is "nothing read", and the gate fails closed.
+const FAST_YML_NO_LAYOUT = 'trunk: main\nexposure: released\nproduction: https://app.example\ndeploy: tag\nstack: node\n' +
   'release:\n  route: deploy-tag-fast\n  final-grant: 7\n  health-url: https://app.example/health\n  rollback: auto\n';
+const FAST_YML = FAST_YML_NO_LAYOUT.replace('stack: node\n', 'stack: node\nmigrations: [db/migrations/]\n');
 const GRANT_RECORD = {
   state: 'CLOSED', labels: [{ name: 'decision-recorded' }],
   comments: [{ body: '⚖ Decision recorded — ruled-by `Operator` · answers `A` · host `box` · 2026-10-02T00:00:00Z', createdAt: '2026-10-02T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } }],
@@ -849,6 +852,14 @@ test('#446 deploy-tag-fast --auto: a green head is tagged final v1.2.1 — no -r
   const again = cut(fx, ['--auto']);
   assert.strictEqual(again.code, 0, again.out + again.err);
   assert.strictEqual(again.body.noop, true);
+});
+
+test('#671 deploy-tag-fast: no migration layout declared or present -> the grant gate fails closed, nothing is tagged', () => {
+  const fx = fastFixture({ projectYml: FAST_YML_NO_LAYOUT });
+  const r = cut(fx, ['--auto']);
+  assertRefused(fx, r, 'migration-grant', /no migration was read since v1\.2\.0: no `migrations:` declared/);
+  assert.strictEqual(r.body.handoff, null, 'an empty list has nothing to grant');
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
 });
 
 test('#446 deploy-tag-fast without --auto refuses — finals come only from the workflow', () => {
