@@ -39,6 +39,30 @@ The headers of both files are the operating detail; this page is the contract.
   what would be sent.
 - **Keeping the newest finals and deleting old ones is the site's job**, not the publisher's.
 
+## Which finals reach the site — every one, a person's too (#669)
+
+The publish workflow is chained after the build jobs in the repo's release workflow. Gated on the
+final *that run* tagged, it misses every final a person tags with the CLI: an early final
+(`--early`, #627) or any final on `final: human`. No run tags those, and a later run reads the
+version as already final and skips it, so no Release, no files and no downloads would ever exist
+for it.
+
+So [`templates/release-auto.yml`](../templates/release-auto.yml)'s release job names the final
+its downloads jobs get, as the `downloads-tag` output (its header's *DOWNLOADS* block shows the
+wiring):
+
+- **The final this run tagged**, when it tagged one. The site is not read.
+- **Otherwise, on the daily run and a dispatch**, the newest final reachable from `main` when the
+  site's `<DOWNLOADS_URL>/<app>/latest.json` does not name it yet (absent, or an older version).
+  The release job also creates that final's GitHub Release, so the build jobs have one to attach
+  their files to.
+- **Nothing** when the site already names that version or a newer one (a complete version sends
+  nothing), when `project.yml` has no `downloads:` block, or when the site cannot be read. That
+  last case is a warning, never a red run, and the next daily run retries.
+
+The site is read **from the release job's runner**. A site only a private network reaches needs
+the release job on a runner inside that network, as the publish job already does.
+
 ## Opting in — `downloads:` in `project.yml`
 
 ```yaml
@@ -340,7 +364,8 @@ Per repo, never shared between repos:
 2. Write the `downloads:` block from the script's file list, and a `manifest.json`.
 3. Rename the installers' placeholder to `@DOWNLOADS_URL@`, and the repo's secrets and variable to
    the names above.
-4. Point the release workflow's last job at the copied workflow (its header shows the job), and
+4. Point the release workflow's last job at the copied workflow (its header shows the job), gate it
+   and the build jobs on `downloads-tag` ([above](#which-finals-reach-the-site--every-one-a-persons-too-669)), and
    delete the old script.
 5. Verify with a dry run of the newest final, then a real run of it: a version already on the site
    reads back as a verified no-op.

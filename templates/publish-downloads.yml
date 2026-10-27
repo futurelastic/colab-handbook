@@ -34,6 +34,11 @@
 #     (A tag pushed or a Release published with GITHUB_TOKEN starts no other workflow, so a chained call is
 #     the reliable trigger — not `on: release`.) Nothing is published from an incomplete Release: the script
 #     names what is missing and uploads nothing.
+#     Chained from release-auto.yml, gate the build jobs and this one on its `downloads-tag` output, not on
+#     the run's own finalize tag (#669): `downloads-tag` also carries a final a PERSON tagged — early
+#     (`colab release finalize --early`, #627) or on `final: human` — which no run tags, and which the daily
+#     run hands on once the site's latest.json is behind it (creating its Release, so the build jobs have one
+#     to attach files to). release-auto.yml's "DOWNLOADS" header block shows the wiring.
 #   - By hand (Actions → Run workflow) with a tag: retries a failed publish, finishes a partial one (only the
 #     missing files are sent), re-checks a complete one. `dry_run` stages and lists — it uploads nothing.
 #   The project.yml, manifest, installers and script are read from THIS run's checkout: the tag's commit when
