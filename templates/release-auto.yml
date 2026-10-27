@@ -31,6 +31,11 @@
 #                                             comment above that job
 #   the daily schedule or a dispatch, and     the same npm publish of the newest final on main
 #   npm `latest` is older than that final     — a final tagged by hand (`final: human`, #612)
+#   project.yml declares `downloads:`, and    the final this run tagged — or, on the daily
+#   this run tagged a final, or the daily     schedule / a dispatch, the newest final on main
+#   schedule / a dispatch finds the site's    (an early or `final: human` final a person
+#   latest.json older than the newest final   tagged, #669) — handed to YOUR build + downloads
+#                                             jobs as `downloads-tag`; see "DOWNLOADS" below
 #   the cut tagged a FINAL — route            deploy + health check (job `deploy`, #446) — see
 #   deploy-tag-fast only                      "DEPLOYING IN THIS RUN" below
 #   the cut tagged a FINAL — route            published like any tag (Release marked latest, npm
@@ -125,6 +130,38 @@
 # a dry run only if every step that ran in trunk's red run passed in it and every step it skipped
 # ends in `[publish]`. So a red INSIDE a `[publish]` step, or in the npm or deploy jobs (which never
 # run without a tag), cannot be cured by a dry run — that stays a human ci-grant.
+#
+# DOWNLOADS — EVERY FINAL, NOT ONLY THE ONES THIS RUN TAGGED (#669). A repo whose finals carry files
+# people install (docs/downloads.md, templates/publish-downloads.yml) builds them in jobs YOU add below
+# `release`, and chains publish-downloads.yml after them. Gate both on the release job's
+# `downloads-tag` output, never on the finalize step's own tag: a final a person tagged — early
+# (`colab release finalize --early`, #627) or on `final: human` — is tagged by the CLI, not by this
+# run, so a job gated on this run's tag never builds it, and a later run reads `already-final` and
+# skips it again. `downloads-tag` is the final this run tagged, or — on the daily run and a dispatch —
+# the newest final on main whose version the site's latest.json does not name yet (absent, or older);
+# that swept final also gets its GitHub Release here, so your build jobs have one to attach files to.
+# Empty when project.yml declares no `downloads:`, when the site already names that version or a newer
+# one (a complete version sends nothing), and when the site cannot be read from this job's runner —
+# a warning then, never a red run; the next daily run retries. The site is read at
+# vars.DOWNLOADS_URL/<downloads.app>/latest.json FROM THE RELEASE JOB'S RUNNER: a site only a private
+# network reaches needs the release job on a runner inside it (RUNNERS, below). The wiring:
+#
+#   build-macos:                                    # EDIT: one job per platform you build
+#     needs: release
+#     if: needs.release.outputs.downloads-tag != ''
+#     runs-on: macos-latest
+#     permissions: { contents: write }
+#     steps:
+#       - uses: actions/checkout@<sha>
+#         with: { ref: '${{ needs.release.outputs.downloads-tag }}' }
+#       - run: …build, then attach the files to the tag's Release (gh release upload … --clobber)
+#         env: { GH_TOKEN: '${{ github.token }}', TAG: '${{ needs.release.outputs.downloads-tag }}' }
+#   downloads:
+#     needs: [release, build-macos]
+#     if: needs.release.outputs.downloads-tag != ''
+#     uses: ./.github/workflows/publish-downloads.yml
+#     with: { tag: '${{ needs.release.outputs.downloads-tag }}' }
+#     secrets: inherit
 #
 # IT READS TAGS AND CREATES TAGS. IT NEVER WRITES A COMMIT. No step here commits; the refs
 # pushed are the tags `colab release cut` / `colab release finalize` create (annotated, their
@@ -335,6 +372,10 @@ jobs:
       # What the deploy job below needs (#446) — empty unless this run tagged a deploy-tag-fast final.
       deploy-tag: ${{ steps.cut.outputs.final }}
       health-url: ${{ steps.cut.outputs.health-url }}
+      # What YOUR build and downloads jobs gate on (#669) — empty unless project.yml declares `downloads:`
+      # and this run tagged a final, or the daily sweep found a final the site's latest.json lacks.
+      # See "DOWNLOADS" in the header.
+      downloads-tag: ${{ steps.downloads-target.outputs.tag }}
     env:
       GH_TOKEN: ${{ github.token }}
       # #474: 'true' on a dry run — a dispatch on any ref other than main, or one with dry_run set.
@@ -776,12 +817,83 @@ jobs:
             echo "package=$PACKAGE"
           } >> "$GITHUB_OUTPUT"
 
-      # Publishes every tag THIS run created. In this run, never via a tag-push workflow:
-      # see "PUBLISHING HAPPENS IN THIS RUN" in the header.
-      - name: Publish GitHub Release (same run) [publish]
-        if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '')
+      # #669: which final YOUR build + downloads jobs get (`downloads-tag`, header "DOWNLOADS"). The final
+      # this run tagged, if any; else, on the daily run and a dispatch, the newest FINAL reachable from main
+      # when the site's latest.json does not name it yet (absent → never published, older → behind) — a
+      # final a person tagged (early, #627, or `final: human`) is never tagged by a run, so without this
+      # sweep it never reached the site. The site at that version or newer, no `downloads:` block, no
+      # DOWNLOADS_URL, or an unreadable site: nothing is handed on, and the step stays green.
+      - name: Read the downloads target [publish]
+        id: downloads-target
+        if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '' || (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch')
         env:
           TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
+          SWEEP: ${{ (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch' }}
+          DOWNLOADS_URL: ${{ vars.DOWNLOADS_URL }}
+        run: |
+          set -uo pipefail
+          # The `downloads:` block's `app:` — the same key publish-downloads.mjs reads. No block, no target.
+          APP="$(awk '
+            /^downloads:[ \t]*(#.*)?$/ { inb = 1; next }
+            inb && /^[^ \t#]/ { exit }
+            inb && /^[ \t]+app:/ { v = $0; sub(/^[ \t]+app:[ \t]*/, "", v); sub(/[ \t]+#.*$/, "", v); gsub(/["\047]/, "", v); sub(/[ \t]+$/, "", v); print v; exit }
+          ' .github/project.yml 2> /dev/null)"
+          if [ -z "$APP" ]; then
+            echo "No downloads: block in .github/project.yml — no downloads target."
+            exit 0
+          fi
+          if ! [[ "$APP" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "::warning::downloads.app '$APP' is not a valid app slug — nothing is handed to the downloads jobs"
+            exit 0
+          fi
+          OWN="$(tr ' ' '\n' <<< "$TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          if [ -n "$OWN" ]; then
+            echo "tag=$OWN" >> "$GITHUB_OUTPUT"
+            echo "downloads: $OWN was tagged by this run — handing it to the build and downloads jobs" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ "${SWEEP:-false}" = "true" ] || exit 0
+          FINAL="$(git tag --merged HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          if [ -z "$FINAL" ]; then
+            echo "downloads sweep: no final on main yet — nothing to publish"
+            exit 0
+          fi
+          if [ -z "${DOWNLOADS_URL:-}" ]; then
+            echo "::warning::downloads sweep: the DOWNLOADS_URL variable is not set on this repo — cannot read the site, so $FINAL is not handed on"
+            exit 0
+          fi
+          eval "$RETRY_TRANSIENT"
+          VERSION="${FINAL#v}"
+          URL="${DOWNLOADS_URL%/}/$APP/latest.json"
+          ERR="$RUNNER_TEMP/downloads-latest.err"
+          hand_on() {
+            { echo "tag=$FINAL"; echo "swept=$FINAL"; } >> "$GITHUB_OUTPUT"
+            echo "downloads sweep: $1 — handing $FINAL to the build and downloads jobs (#669)" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          if BODY="$(retry_transient curl -fsSL "$URL" 2> "$ERR")"; then
+            SITE="$(jq -r '.version // empty' <<< "$BODY" 2> /dev/null || true)"
+            if [ -z "$SITE" ]; then
+              echo "::warning::downloads sweep: $URL names no version — $FINAL is not handed on in this run"
+            elif [ "$SITE" = "$VERSION" ]; then
+              echo "downloads sweep: the site already names $VERSION — nothing to publish"
+            elif [ "$(printf '%s\n' "$SITE" "$VERSION" | sort -V | tail -n 1)" = "$SITE" ]; then
+              echo "downloads sweep: the site names $SITE, newer than $FINAL — nothing to publish" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              hand_on "$FINAL is final on main but the site names $SITE"
+            fi
+          elif grep -q 'error: 404' "$ERR"; then
+            hand_on "$FINAL is final on main and the site has no latest.json for $APP"
+          else
+            echo "::warning::downloads sweep: could not read $URL from this runner ($(tail -n 1 "$ERR" 2> /dev/null)) — $FINAL is not handed on in this run; the next daily run retries"
+          fi
+
+      # Publishes every tag THIS run created — and a final the downloads sweep handed on (#669), which a
+      # person tagged and nothing published. In this run, never via a tag-push workflow: see "PUBLISHING
+      # HAPPENS IN THIS RUN" in the header.
+      - name: Publish GitHub Release (same run) [publish]
+        if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '' || steps.downloads-target.outputs.swept != '')
+        env:
+          TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }} ${{ steps.downloads-target.outputs.swept }}
         run: |
           set -euo pipefail
           eval "$RETRY_TRANSIENT"

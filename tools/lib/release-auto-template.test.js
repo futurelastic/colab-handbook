@@ -586,6 +586,124 @@ test('#612 wiring: the sweep runs on the daily schedule and a dispatch — never
   for (const t of [tpl, own]) assert.match(t, /REPO: \$\{\{ github\.repository \}\}/);
 });
 
+// #669: a final a person tagged — early (`--early`, #627) or on `final: human` — is tagged by the CLI,
+// never by a run, so build + downloads jobs gated on this run's tag never saw it and a later run read
+// `already-final`. The release job now names the final its downloads jobs get (`downloads-tag`), and
+// on the daily run / a dispatch sweeps the newest final on main the site's latest.json lacks.
+const DL_TARGET = 'Read the downloads target [publish]';
+// curl stub: $SITE_LATEST is the version the site's latest.json names, 404 / 503 for that answer,
+// or `blank` for a latest.json without a version.
+const SITE_STUB = 'echo "curl $*" >> "$LOG"; case "$SITE_LATEST" in (404|503) echo "curl: (22) The requested URL returned error: $SITE_LATEST" >&2; exit 22 ;; (blank) echo "{}"; exit 0 ;; esac; echo "{\\"version\\":\\"$SITE_LATEST\\",\\"files\\":{}}"';
+function downloadsRepo({ block = 'downloads:\n  app: myapp   # the folder on the site\n  files: [myapp-{v}.tgz]\n' } = {}) {
+  const dir = tmpdir('dl-repo-');
+  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  g('init', '-q', '-b', 'main', '.');
+  g('config', 'user.email', 'test@example.invalid');
+  g('config', 'user.name', 'dl test');
+  g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
+  fs.mkdirSync(path.join(dir, '.github'));
+  fs.writeFileSync(path.join(dir, '.github', 'project.yml'), `tier: B\ntrunk: main\n${block}release:\n  final: human\n`);
+  g('add', '-A');
+  g('commit', '-q', '-m', 'feat: x');
+  g('tag', 'v1.2.0');
+  g('commit', '-q', '--allow-empty', '-m', 'feat: y');
+  g('tag', 'v1.3.0-rc.1');
+  g('tag', 'v1.3.0'); // the early human final: the CLI tagged it, no run did
+  return dir;
+}
+function dlSweep({ latest, tags = ' ', sweepOn = 'true', url = 'https://dl.example.invalid/', repo = downloadsRepo() } = {}) {
+  return runStep(DL_TARGET, { cwd: repo, stubs: { curl: SITE_STUB }, env: { TAGS: tags, SWEEP: sweepOn, DOWNLOADS_URL: url, SITE_LATEST: latest } });
+}
+
+test('#669 downloads target: an early human final the site lacks is handed to the build and downloads jobs, with its Release', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const older = dlSweep({ latest: '1.2.0' });
+  assert.strictEqual(older.status, 0, older.stderr);
+  assert.deepStrictEqual(older.output, { tag: 'v1.3.0', swept: 'v1.3.0' }, 'swept = the Release step creates its missing Release');
+  assert.match(older.log, /^curl -fsSL https:\/\/dl\.example\.invalid\/myapp\/latest\.json$/m, 'the site root + /<app>, one slash');
+  assert.match(older.stdout, /v1\.3\.0 is final on main but the site names 1\.2\.0/);
+
+  const never = dlSweep({ latest: '404' });
+  assert.deepStrictEqual([never.status, never.output], [0, { tag: 'v1.3.0', swept: 'v1.3.0' }], 'an app the site has never published');
+});
+
+test('#669 downloads target: a complete version sends nothing — the site at that version, or newer', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const same = dlSweep({ latest: '1.3.0' });
+  assert.deepStrictEqual([same.status, same.output], [0, {}], 'a re-run for a complete version hands nothing on');
+  assert.doesNotMatch(same.stdout, /::warning::/);
+
+  const newer = dlSweep({ latest: '1.10.0' });
+  assert.deepStrictEqual([newer.status, newer.output], [0, {}], 'by version, not by string (1.10.0 > 1.3.0)');
+  assert.match(newer.stdout, /the site names 1\.10\.0, newer than v1\.3\.0/);
+});
+
+test('#669 downloads target: a final this run tagged goes to the downloads jobs without reading the site, and is not re-created', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  for (const sweepOn of ['true', 'false']) {
+    const r = dlSweep({ latest: '1.2.0', tags: 'v1.4.0-rc.1 v1.3.0', sweepOn });
+    assert.deepStrictEqual([r.status, r.output], [0, { tag: 'v1.3.0' }], `${sweepOn}: no swept — the Release step already has it`);
+    assert.strictEqual(r.log, '', 'the site is not asked');
+  }
+  const candidateOnly = dlSweep({ latest: '1.3.0', tags: 'v1.4.0-rc.1 ', sweepOn: 'false' });
+  assert.deepStrictEqual([candidateOnly.status, candidateOnly.output], [0, {}], 'a candidate never reaches the downloads jobs');
+});
+
+test('#669 downloads target: only a final reachable from main counts — never a candidate, never a tag off main', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const repo = downloadsRepo();
+  const g = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  g('tag', 'v1.9.0-rc.1');
+  g('checkout', '-q', '-b', 'side');
+  g('commit', '-q', '--allow-empty', '-m', 'feat: off main');
+  g('tag', 'v2.0.0');
+  g('checkout', '-q', 'main');
+  const r = dlSweep({ latest: '1.2.0', repo });
+  assert.deepStrictEqual(r.output, { tag: 'v1.3.0', swept: 'v1.3.0' });
+});
+
+test('#669 downloads target: no downloads block, no DOWNLOADS_URL, an unreadable site, or off the sweep — nothing, and green', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const none = dlSweep({ latest: '1.2.0', repo: downloadsRepo({ block: 'production: null\n' }) });
+  assert.deepStrictEqual([none.status, none.output, none.log], [0, {}, ''], 'a repo without downloads: is not touched');
+  assert.doesNotMatch(none.stdout, /::warning::/);
+
+  const ownTagNoBlock = dlSweep({ latest: '1.2.0', tags: ' v1.3.0', repo: downloadsRepo({ block: '' }) });
+  assert.deepStrictEqual(ownTagNoBlock.output, {}, 'no downloads: — not even this run\'s own final');
+
+  const bad = dlSweep({ latest: '1.2.0', repo: downloadsRepo({ block: 'downloads:\n  app: My_App\n' }) });
+  assert.deepStrictEqual([bad.status, bad.output, bad.log], [0, {}, '']);
+  assert.match(bad.stdout, /::warning::downloads\.app 'My_App' is not a valid app slug/);
+
+  const noUrl = dlSweep({ latest: '1.2.0', url: '' });
+  assert.deepStrictEqual([noUrl.status, noUrl.output, noUrl.log], [0, {}, '']);
+  assert.match(noUrl.stdout, /::warning::downloads sweep: the DOWNLOADS_URL variable is not set/);
+
+  const down = dlSweep({ latest: '503' });
+  assert.deepStrictEqual([down.status, down.output], [0, {}]);
+  assert.strictEqual((down.log.match(/^curl /gm) || []).length, 3, 'a transient site error is retried (#464)');
+  assert.match(down.stdout, /::warning::downloads sweep: could not read .*myapp\/latest\.json from this runner .*the next daily run retries/);
+
+  const blank = dlSweep({ latest: 'blank' });
+  assert.deepStrictEqual([blank.status, blank.output], [0, {}]);
+  assert.match(blank.stdout, /::warning::downloads sweep: .* names no version/);
+
+  const off = dlSweep({ latest: '1.2.0', sweepOn: 'false' });
+  assert.deepStrictEqual([off.status, off.output, off.log], [0, {}, ''], 'a CI-triggered run / the hourly retry sweeps nothing');
+});
+
+test('#669 wiring: downloads-tag is a job output; the sweep runs on the daily run and a dispatch; a swept final gets its Release', () => {
+  const lines = TEXT.split('\n');
+  const at = lines.findIndex((l) => l.trim() === `- name: ${DL_TARGET}`);
+  const head = lines.slice(at + 1, at + 8).join('\n');
+  const sweepTpl = "(github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch'";
+  assert.match(head, /id: downloads-target/);
+  assert.ok(head.includes(`if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '' || ${sweepTpl})`), head);
+  assert.ok(head.includes(`SWEEP: \${{ ${sweepTpl} }}`), 'SWEEP never on the hourly retry');
+  assert.match(head, /DOWNLOADS_URL: \$\{\{ vars\.DOWNLOADS_URL \}\}/);
+  assert.match(TEXT, /^ {6}downloads-tag: \$\{\{ steps\.downloads-target\.outputs\.tag \}\}$/m);
+  const rel = lines.findIndex((l) => l.trim() === '- name: Publish GitHub Release (same run) [publish]');
+  assert.ok(at < rel, 'the target is read before the Release step that consumes swept');
+  const relHead = lines.slice(rel + 1, rel + 4).join('\n');
+  assert.match(relHead, /steps\.downloads-target\.outputs\.swept != ''/);
+  assert.match(relHead, /TAGS: \$\{\{ steps\.cut\.outputs\.tag \}\} \$\{\{ steps\.finalize\.outputs\.tag \}\} \$\{\{ steps\.downloads-target\.outputs\.swept \}\}/);
+});
+
 test('npm job: a private repository, an unreadable visibility, or a token in the environment is refused', () => {
   const gh = (v) => (v === null ? 'exit 1' : `echo ${v}`);
   assert.strictEqual(runStep(REFUSE, { stubs: { gh: gh('false') }, env: { REPO: 'o/p' } }).status, 0);
@@ -1046,7 +1164,9 @@ test('#474 dry run: every release-job step a dry run turns off is a [publish] st
     const job = text.slice(text.indexOf('\n  release:\n'), text.search(/\n {2}npm:\n/));
     const steps = job.split(/\n {6}- /).slice(1);
     const off = steps.filter((st) => /\n {8}if: env\.DRY_RUN != 'true'/.test(st)).map((st) => st.match(/^name: (.*)/)[1]);
-    assert.deepStrictEqual(off.sort(), [`Publish GitHub Release (same run) ${PUBLISH_STEP_MARKER}`, `Read the npm target (colab release npm) ${PUBLISH_STEP_MARKER}`], label);
+    // #669: the downloads target is the template's alone — this repo publishes no downloads.
+    const downloads = label === 'template' ? [`Read the downloads target ${PUBLISH_STEP_MARKER}`] : [];
+    assert.deepStrictEqual(off.sort(), [`Publish GitHub Release (same run) ${PUBLISH_STEP_MARKER}`, ...downloads, `Read the npm target (colab release npm) ${PUBLISH_STEP_MARKER}`].sort(), label);
     const marked = steps.map((st) => (st.match(/^name: (.*)/) || [])[1]).filter((n) => n && n.endsWith(PUBLISH_STEP_MARKER));
     assert.deepStrictEqual(marked.sort(), off.sort(), `${label}: a [publish] name with no DRY_RUN guard would be a skipped step D3 admits for no reason`);
   }

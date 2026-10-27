@@ -2538,8 +2538,10 @@ state and secrets live outside the install. The verbs and the template:
 
 Files a person installs on their own machine, published to a self-hosted downloads site, are only ever a
 final's, and a published version is never replaced. A site's newest-version pointer moves only forward and
-only after the version's files and checksums read back complete. A repo opts in with `downloads:` in its
-descriptor; the contract and the shared template: [`docs/downloads.md`](docs/downloads.md).
+only after the version's files and checksums read back complete. Every final reaches it, including one a
+person tagged rather than the release run (an early or human final): the daily release run hands the newest
+final on main to the downloads jobs while the site's pointer is behind it (#669). A repo opts in with
+`downloads:` in its descriptor; the contract and the shared template: [`docs/downloads.md`](docs/downloads.md).
 
 ---
 
