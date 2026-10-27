@@ -733,6 +733,19 @@ test('#446 an ungranted migration refuses with a hand-off; a granted one passes'
   assert.strictEqual(rc.decide(fastFacts({ migrations: { ok: true, paths: ['db/1.sql'], detail: 'granted' } })).ok, true);
 });
 
+test('#671 the fast route refuses a final where no migration layout could be seen — no grant hand-off, nothing to grant', () => {
+  const rf = require('./release-finalize');
+  const blind = { ...rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: false }), paths: [] };
+  const v = rc.decide(fastFacts({ migrations: blind, trackingIssue: 40 }));
+  assert.strictEqual(v.ok, false);
+  assert.match(refusal(v, 'migration-grant').detail, /`migrations:`/);
+  assert.strictEqual(v.handoff, null, 'an empty list has nothing to grant');
+  const unread = { ...rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: null }), paths: [] };
+  assert.strictEqual(rc.decide(fastFacts({ migrations: unread })).ok, false);
+  const seen = { ...rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: true }), paths: [] };
+  assert.strictEqual(rc.decide(fastFacts({ migrations: seen })).ok, true);
+});
+
 test('#446 spacing and an already-final head are no-ops, not refusals', () => {
   const sp = rc.decide(fastFacts({ spacing: rc.spacingVerdict({ finals: [{ name: 'v1.2.0', date: '2026-10-03T11:30:00Z' }], spacingHours: 1, now: NOW }) }));
   assert.strictEqual(sp.ok, false);

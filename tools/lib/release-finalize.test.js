@@ -451,7 +451,7 @@ test('releasedComment: carries the per-version event marker hasEvent finds', () 
 
 const GRANTED = releasePolicy.evaluateRelease({ trunk: 'main', exposure: 'released', production: 'https://x.invalid', deploy: 'tag', release: { final: 'auto', 'final-grant': 77 } });
 const GRANT_OK = { ok: true, ruledBy: 'Operator', detail: 'release.final-grant #77: decision recorded, ruled by Operator' };
-const NO_MIGRATION = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0' });
+const NO_MIGRATION = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: true });
 
 test('#441 (a): deploy-tag with no grant -> a human final, as today', () => {
   const v = rf.decide(facts({ policy: HUMAN }));
@@ -491,6 +491,47 @@ test('#441 (c): a valid grant + an ungranted migration -> no automatic final; th
   assert.strictEqual(rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: granted })).state, 'finalized');
   // unread migrations never count as none
   assert.strictEqual(rf.migrationGrantVerdict({ paths: null }).ok, false);
+});
+
+// ---- #671: an empty migration list proves "none changed" only where a migration could be seen ------
+
+test('#671 (a): no layout + no paths -> ok:false, and the detail names `migrations:` and the human way out', () => {
+  const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: false });
+  assert.strictEqual(v.ok, false);
+  assert.ok(!v.unread, 'a measured absence of any layout is a finding, not an unread read');
+  assert.match(v.detail, /`migrations:`/);
+  assert.match(v.detail, /no migration was read since v1\.2\.0/);
+  assert.match(v.detail, /the final is a human act/);
+  assert.doesNotMatch(v.detail, /no migration file changed/, 'nothing read never reads as nothing changed');
+  // through decide(): the granted automatic final is taken away, the human command handed over
+  const d = rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: v }));
+  assert.strictEqual(d.state, 'candidate-ready');
+  assert.strictEqual(d.finalTag, null);
+  assert.strictEqual(d.grant, null);
+  assert.match(d.handoff, /COLAB_HUMAN=1 colab release finalize --tag v1\.2\.1-rc\.1/);
+  const m = d.checks.find((c) => c.condition === 'migration-grant');
+  assert.strictEqual(m.ok, false);
+  assert.match(m.detail, /`migrations:`.*falls back to a human act/);
+});
+
+test('#671 (b): a layout (declared or default) + no paths -> ok:true, as before', () => {
+  const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: true });
+  assert.strictEqual(v.ok, true);
+  assert.match(v.detail, /no migration file changed since v1\.2\.0/);
+  assert.strictEqual(rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: v })).state, 'finalized');
+});
+
+test('#671 (c): layout unread (null) or never passed -> ok:false, unread:true', () => {
+  for (const layout of [null, undefined]) {
+    const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout });
+    assert.strictEqual(v.ok, false, String(layout));
+    assert.strictEqual(v.unread, true, String(layout));
+    assert.match(v.detail, /could not be read for a migration layout/);
+    assert.match(v.detail, /`migrations:`/);
+  }
+  // a non-empty list is evidence on its own: the layout is not consulted
+  const seen = rf.migrationGrantVerdict({ paths: ['backend/migrations/1.sql'], grant: { issue: 12, ok: true }, since: 'v1.2.0', layout: null });
+  assert.strictEqual(seen.ok, true);
 });
 
 test('#441: a grant that no longer resolves (reopened, unread) falls back to a human final; the human bar still works', () => {

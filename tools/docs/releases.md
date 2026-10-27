@@ -132,7 +132,11 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
   (`COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch vX.Y.Z`, on the version's
   tracking issue). An unresolved grant or an ungranted migration does not refuse the release —
   it takes the automatic final away, so `finalize --auto` stops at *candidate ready* and hands
-  the operator the one command, exactly as on an ungranted repo.
+  the operator the one command, exactly as on an ungranted repo. **No migration read is not no
+  migration changed (#671):** where nothing is declared in `migrations:` and neither default
+  layout exists at the candidate (or its tree could not be read), the gate cannot see a
+  migration at all, so it fails closed the same way — declare `migrations:`, or the final stays a
+  human act. A repo with no database has no layout to declare, so its final stays one.
 - **Every automatic deploy says whose choice made it so.** The final tag's message names the
   grant and its decision issue, and who ruled it.
 
