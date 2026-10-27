@@ -1483,7 +1483,11 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, iss
   // #441: every migration file since the last final, destructive or not — an operator-granted
   // automatic final refuses an ungranted one (release-finalize.js migrationGrantVerdict).
   const migrations = changes === null ? null : changes.filter((c) => releaseCut.isMigrationPath(c.path, declared)).map((c) => c.path);
-  return { ci, suite, schema, switches, issues, migrations };
+  // #671: could a migration have been seen at all? A declared prefix is a layout; otherwise the
+  // default-layout reading above (null = unread, never "absent"). The grant gate fails closed
+  // without one, so its empty list never reads "nothing read" as "nothing changed".
+  const migrationLayout = declared.length ? true : layout;
+  return { ci, suite, schema, switches, issues, migrations, migrationLayout };
 }
 
 /**
@@ -1621,7 +1625,7 @@ function finalTags(repoAbs, onlyTags = null) {
  * since the newest final. The version is computed here only to find that tracking issue; decide()
  * computes it again from the same inputs, so the two cannot disagree.
  */
-function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: paths, remoteTags = null }) {
+function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: paths, migrationLayout = null, remoteTags = null }) {
   const grantDecl = policy.effective.finalGrant;
   const trust = trustAt(repoAbs, `${remote}/main`);
   const finalGrant = isGhUsable(repoAbs)
@@ -1641,7 +1645,7 @@ function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, au
       : { ok: false, reason: 'no tracking issue yet to carry a grant' };
     if (grant && grant.ok) grant = { ...grant, issue: tracking.number };
   }
-  const migrations = { ...releaseFinalize.migrationGrantVerdict({ paths, grant, since: lastFinal }), paths: paths || null };
+  const migrations = { ...releaseFinalize.migrationGrantVerdict({ paths, grant, since: lastFinal, layout: migrationLayout }), paths: paths || null };
   const spacing = releaseCut.spacingVerdict({ finals: finalTags(repoAbs, remoteTags), spacingHours: policy.effective.finalSpacingHours, now: new Date().toISOString() });
   return { finalGrant, holds, migrations, spacing, tracking };
 }
@@ -1734,7 +1738,7 @@ function cmdReleaseCut(argv) {
   const tags = lines(git.git(['tag', '--list'], repoAbs)).filter(onRemote);
   const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs)).filter(onRemote);
 
-  const { ci, suite, schema, switches, issues, migrations: migrationPathsSince } = measureCandidateConditions(repoAbs, {
+  const { ci, suite, schema, switches, issues, migrations: migrationPathsSince, migrationLayout } = measureCandidateConditions(repoAbs, {
     sha, lastFinal, at, readRuns: () => releaseCut.withoutOwnWorkflow(git.ghRunsForCommit(repoAbs, 'main', sha)), // #425
     verifying: verifyingPolicy(repoAbs), // #624: the ship gate's rule for which runs may veto
   });
@@ -1750,7 +1754,7 @@ function cmdReleaseCut(argv) {
   // #446: route deploy-tag-fast — the grant, the human veto, the migration gate and the spacing are
   // measured only there, so every candidate route's run is what it was.
   const fast = releaseCut.isFastRoute(policy) && !policy.findings.length;
-  const fastFacts = fast ? measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: migrationPathsSince, remoteTags }) : {};
+  const fastFacts = fast ? measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: migrationPathsSince, migrationLayout, remoteTags }) : {};
   if (fast && auto) auto.spacing = fastFacts.spacing;
   // #590: route library-fast — a final with nothing deployed. The release-hold veto is its one extra
   // read; a hand cut also needs MIGRATION.md for a manifest-declared major (--auto reads it already).
@@ -2237,7 +2241,7 @@ function cmdReleaseFinalize(argv) {
       const mg = tracking && tracking.number
         ? migrationGrant.evaluateIssue(rec, cand.version, tracking.number, labels.MIGRATION_GRANT_LABEL, { trust })
         : { ok: false, reason: 'no tracking issue yet to carry a grant' };
-      migrations = releaseFinalize.migrationGrantVerdict({ paths: conditions.migrations, grant: mg, since: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha, onlyTags: remoteTags }) });
+      migrations = releaseFinalize.migrationGrantVerdict({ paths: conditions.migrations, grant: mg, since: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha, onlyTags: remoteTags }), layout: conditions.migrationLayout });
     }
     const verdict = releaseFinalize.decide({
       policy, selection: sel, tracking, supersededHeld, period, trunk, regressions,

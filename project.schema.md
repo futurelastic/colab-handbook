@@ -585,6 +585,7 @@ Laravel `database/migrations/` and Prisma `prisma/migrations/`, both matched any
 and `colab release cut`'s `schema-additive` check read this one list (`tools/lib/migration-paths.js`); neither keeps a regex of its own.
 **Absent changes nothing** — a repo that declares nothing is gated exactly as before; where neither default layout exists
 either, `schema-additive` read nothing, so it prints **not checked** — never a green pass, never a refusal (#670).
+**[Hard — gate: colab release finalize / release cut refuse]** The [`final-grant`](#release--optional) migration gate **fails closed** there instead: the final is a human act until a layout is declared or exists (#671).
 
 Why `migrations` exists, with the measurement: [ADR
 539](docs/adr/539-schema-migrations-and-grants-rationale.md).
