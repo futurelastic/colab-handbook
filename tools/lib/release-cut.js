@@ -854,8 +854,21 @@ function laravelUpBody(text) {
  * — an edited or deleted migration counts as destructive, because rewriting history a database has
  * already run is not an add. A false positive costs a human cutting the candidate; a false negative
  * is the §6 judgement the release notes still owe (read the diff, not only this).
+ *
+ * #670: a third outcome beside ✓ and ✗ — NOT CHECKED, `{ ok: true, checked: false }`. It refuses
+ * nothing (an absent `migrations:` still changes no gate — project.schema.md `migrations`; for a
+ * DECLARED migration in an unread format, the #441 migration-grant check still holds an automatic
+ * final), but it is never printed as a green pass:
+ * a ✓ reading "other layouts are not read" was read as "no migration" by the human finalizing a
+ * release whose migrations sat in a directory this check never looked at. Two cases:
+ *   - nothing declared and no default layout at the candidate (`layout` false) — nothing was read;
+ *   - a declared migration in a format the heuristic does not read changed, and nothing it did read
+ *     is destructive (a destructive read file is still ✗).
+ * `layout` = does `database/migrations/` or `prisma/migrations/` exist in the tree at the candidate:
+ * true / false / null (the tree could not be read — never "absent"). Undefined = a caller that does
+ * not measure it, read as today: present.
  */
-function schemaVerdict(changes, since, declared) {
+function schemaVerdict(changes, since, declared, layout) {
   const inPaths = (changes || []).filter((c) => isMigrationPath(c.path, declared));
   const migrations = inPaths.filter((c) => /\.(php|sql)$/.test(c.path));
   // #383: a declared path widens what COUNTS as a migration, not what this heuristic can READ. A
@@ -867,10 +880,16 @@ function schemaVerdict(changes, since, declared) {
     ? inPaths.filter((c) => !/\.(php|sql)$/.test(c.path) && !migrationPaths.isMigrationPath(c.path, []))
     : [];
   const scope = `Laravel database/migrations + Prisma prisma/migrations${declared && declared.length ? ` + declared ${declared.join(', ')} (php/sql only)` : ''} — other layouts are not read`;
-  const unreadNote = unread.length
-    ? `; ${unread.length} declared migration file(s) in a format this check does not read — a human reads them: ${unread.map((c) => c.path).join(', ')}`
-    : '';
-  if (!migrations.length) return { ok: true, detail: `no migration file changed since ${since} (${scope})${unreadNote}` };
+  const hasDeclared = !!(declared && declared.length);
+  const notChecked = (why) => ({ ok: true, checked: false, detail: `not checked — ${why}` });
+  const unreadWhy = () => `${unread.length} declared migration file(s) changed since ${since} in a format this check does not read (php/sql only) — a human reads them before the final: ${unread.map((c) => c.path).join(', ')}`;
+  const howToDeclare = 'a repo whose migrations live elsewhere declares their directory as `migrations:` in .github/project.yml (project.schema.md `migrations`); a repo with no database has nothing to declare';
+  if (!migrations.length) {
+    if (unread.length) return notChecked(unreadWhy());
+    if (!hasDeclared && layout === false) return notChecked(`no Laravel database/migrations/ or Prisma prisma/migrations/ directory at the candidate and no \`migrations:\` declared, so no migration was read — ${howToDeclare}`);
+    if (!hasDeclared && layout === null) return notChecked(`the tree at the candidate could not be read for a migration layout, so no migration was read — ${howToDeclare}`);
+    return { ok: true, detail: `no migration file changed since ${since} (${scope})` };
+  }
   const findings = [];
   for (const c of migrations) {
     const st = String(c.status || '').charAt(0);
@@ -888,7 +907,8 @@ function schemaVerdict(changes, since, declared) {
   if (findings.length) {
     return { ok: false, detail: `destructive schema change since ${since} — a release carrying one is a human's to cut (CONVENTIONS.md §6, Switched epics rule 5): ${findings.join('; ')}` };
   }
-  return { ok: true, detail: `${migrations.length} migration file(s) added since ${since}, none destructive (${scope})${unreadNote}` };
+  if (unread.length) return notChecked(`${migrations.length} migration file(s) added since ${since}, none destructive — but ${unreadWhy()}`);
+  return { ok: true, detail: `${migrations.length} migration file(s) added since ${since}, none destructive (${scope})` };
 }
 
 // ---- §6 condition 4: switch dependencies -------------------------------------------------------
@@ -1165,7 +1185,12 @@ function decide(facts) {
 
   for (const [condition, verdict] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     if (!verdict) add(condition, false, 'not measured', true);
-    else add(condition, verdict.ok, verdict.detail, isUnread(verdict));
+    else {
+      add(condition, verdict.ok, verdict.detail, isUnread(verdict));
+      // #670: a not-checked verdict passes but is not a ✓ — the one optional field a row can carry,
+      // present only then, so every other row (and `--json` on every other run) is unchanged.
+      if (verdict.checked === false) checks[checks.length - 1].checked = false;
+    }
   }
 
   // #610: a final needs the heavy lane green at its exact sha, under every integration profile. Only
