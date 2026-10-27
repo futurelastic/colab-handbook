@@ -516,7 +516,7 @@ jobs:
           {
             echo "### colab promote --auto"
             echo
-            jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
+            jq -r '.checks[]? | "- \(if .checked == false then "·" elif .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "${DRY_RUN:-false}" = "true" ]; then
@@ -585,7 +585,7 @@ jobs:
           {
             echo "### colab release cut --auto"
             echo
-            jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
+            jq -r '.checks[]? | "- \(if .checked == false then "·" elif .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "${DRY_RUN:-false}" = "true" ]; then
@@ -721,7 +721,7 @@ jobs:
           {
             echo "### colab release finalize --auto — $STATE"
             echo
-            jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
+            jq -r '.checks[]? | "- \(if .checked == false then "·" elif .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
             echo
             if [ -n "$WHY" ]; then echo "**Why no final:** $WHY"; echo; fi
             if [ "$(jq -r '(.skipped // []) | length' "$OUT")" != "0" ]; then

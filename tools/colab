@@ -1311,7 +1311,9 @@ Refuses, naming each failed condition (all are reported, not just the first):
                        under a project.yml \`migrations:\` prefix) or an existing migration was
                        edited/deleted. Other layouts are not read — a declared migration in another
                        format is NAMED in the detail, and the release notes still owe the §6
-                       judgement on the diff
+                       judgement on the diff. When nothing was read — no default layout and no
+                       \`migrations:\` declared, or a declared migration in another format changed —
+                       the row prints · "not checked" (#670): it refuses nothing, and it is never a ✓
   switch-dependencies  a colab:switch marker is malformed, or a finished switch needs one that is not
   manifest-version     the tag does not equal the version a manifest declares (VERSION, package.json,
                        Cargo.toml [package], else [workspace.package] (#620), pyproject.toml
@@ -1470,9 +1472,14 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, iss
   // same one rule the ship gate reads (tools/lib/migration-paths.js), never a second regex.
   const declared = migrationPaths.unionPaths(projectDoc(repoAbs), projectDocAt(repoAbs, sha));
   const changes = releaseCutChanges(repoAbs, lastFinal, sha, declared);
+  // #670: does a default layout exist at the candidate — anywhere in the tree, as the defaults are
+  // matched (migration-paths.js isMigrationPath)? Without one and with nothing declared, the check
+  // read nothing: "not checked", never a ✓. null = the tree could not be read, never "absent".
+  const layoutR = git.git(['ls-tree', '-r', '-d', '--name-only', sha], repoAbs);
+  const layout = layoutR.ok ? layoutR.stdout.split('\n').some((d) => d && migrationPaths.isMigrationPath(`${d}/`, [])) : null;
   const schema = changes === null
     ? { ok: false, unread: true, detail: 'git diff failed — schema changes cannot be read' }
-    : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit', declared);
+    : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit', declared, layout);
   // #441: every migration file since the last final, destructive or not — an operator-granted
   // automatic final refuses an ungranted one (release-finalize.js migrationGrantVerdict).
   const migrations = changes === null ? null : changes.filter((c) => releaseCut.isMigrationPath(c.path, declared)).map((c) => c.path);
@@ -1862,7 +1869,7 @@ function cmdReleaseCut(argv) {
     for (const l of verdict.signals.lines) print(`    · ${l}`);
   }
   const width = Math.max(...verdict.checks.map((c) => c.condition.length));
-  for (const c of verdict.checks) print(`  ${c.ok ? '✓' : '✗'} ${c.condition.padEnd(width)}  ${c.detail}`);
+  for (const c of verdict.checks) print(`  ${c.checked === false ? '·' : c.ok ? '✓' : '✗'} ${c.condition.padEnd(width)}  ${c.detail}`);
   print('');
   if (verdict.noop) {
     print(fast
@@ -2379,7 +2386,7 @@ function cmdReleaseFinalize(argv) {
   } else {
     print(`colab release finalize${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
     const width = Math.max(...verdict.checks.map((c) => c.condition.length));
-    for (const c of verdict.checks) print(`  ${c.ok ? '✓' : (c.required ? '✗' : '·')} ${c.condition.padEnd(width)}  ${c.detail}`);
+    for (const c of verdict.checks) print(`  ${c.checked === false ? '·' : c.ok ? '✓' : (c.required ? '✗' : '·')} ${c.condition.padEnd(width)}  ${c.detail}`);
     if (walk && skipped.length) {
       print('  other open candidates:');
       for (const x of skipped) print(`    · ${x.tag}: ${x.state}${x.detail ? ` — ${x.detail}` : ''}`);

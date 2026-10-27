@@ -580,12 +580,11 @@ migrations: [backend/migrations/]   # repo-relative prefixes; absent = the two d
 ```
 
 **[Hard — gate: colab ship refuses]** Where this repo's migrations live, **beyond** the two layouts every reader already knows —
-Laravel `database/migrations/` and Prisma `prisma/migrations/`, both matched anywhere in the
-path. `colab ship`'s no-new-migrations gate
+Laravel `database/migrations/` and Prisma `prisma/migrations/`, both matched anywhere in the path. `colab ship`'s no-new-migrations gate
 ([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402))
-and `colab release cut`'s `schema-additive` check read this one list (`tools/lib/migration-paths.js`);
-neither keeps a regex of its own. **Absent changes nothing** — a repo that declares nothing is
-gated exactly as before.
+and `colab release cut`'s `schema-additive` check read this one list (`tools/lib/migration-paths.js`); neither keeps a regex of its own.
+**Absent changes nothing** — a repo that declares nothing is gated exactly as before; where neither default layout exists
+either, `schema-additive` read nothing, so it prints **not checked** — never a green pass, never a refusal (#670).
 
 Why `migrations` exists, with the measurement: [ADR
 539](docs/adr/539-schema-migrations-and-grants-rationale.md).

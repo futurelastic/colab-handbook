@@ -222,6 +222,14 @@ test('decide: a regression fixed after the start, or a red trunk on the auto row
   assert.strictEqual(rf.decide(facts({ schema: { ok: false, detail: 'drop' } })).state, 'refused');
 });
 
+test('#670: decide — a not-checked schema verdict refuses nothing, and its row carries checked: false', () => {
+  const v = rf.decide(facts({ schema: { ok: true, checked: false, detail: 'not checked — nothing read' } }));
+  assert.strictEqual(v.state, 'finalized');
+  const row = v.checks.find((c) => c.condition === 'schema-additive');
+  assert.strictEqual(row.checked, false);
+  assert.ok(!('checked' in rf.decide(facts()).checks.find((c) => c.condition === 'schema-additive')));
+});
+
 test('decide, human row: no bar -> candidate-ready with the pinned handoff; bar -> finalized; the period is informational', () => {
   const early = rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 3, now: at(1) });
   const ready = rf.decide(facts({ policy: HUMAN, period: early, trunk: { ok: false, permanent: true, pending: false, detail: 'red' } }));

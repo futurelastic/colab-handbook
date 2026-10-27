@@ -713,6 +713,7 @@ function decide(facts) {
   if (hv) add('heavy-lane', hv.ok, hv.detail);
   for (const [condition, v] of [['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     add(condition, v && v.ok, v ? v.detail : 'not measured');
+    if (v && v.checked === false) checks[checks.length - 1].checked = false; // #670: passes, never a ✓
   }
   // #424: before any final — the tag equals the manifests, the commit is on trunk, the version outranks the latest final.
   for (const c of releaseTag.preTagChecks({ tag: cand.version, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: 'main', versionSource: p.effective.versionSource === 'tag' ? 'tag' : 'manifest' })) add(c.condition, c.ok, c.detail);
@@ -802,7 +803,7 @@ function tagMessage(verdict, { candidate, period, actor }) {
     verdict.grant ? `Automatic final granted by: release.final-grant -> decision #${verdict.grant.issue}${verdict.grant.ruledBy ? `, ruled by ${verdict.grant.ruledBy}` : ''} (an operator's per-repo grant; deleting it, or final: human, revokes it)` : null,
     '',
     'Conditions (CONVENTIONS.md §6):',
-    ...verdict.checks.map((c) => `- ${c.condition}: ${c.ok ? 'ok' : (c.required ? 'FAILED' : 'informational')} — ${c.detail}`),
+    ...verdict.checks.map((c) => `- ${c.condition}: ${c.checked === false ? 'not checked' : c.ok ? 'ok' : (c.required ? 'FAILED' : 'informational')} — ${c.detail}`),
   ].filter((l) => l !== null).join('\n') + '\n';
 }
 

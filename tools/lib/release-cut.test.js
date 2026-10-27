@@ -120,6 +120,17 @@ test('every refusal is reported, not just the first', () => {
   assert.deepStrictEqual(v.refusals.map((c) => c.condition), ['ci-green', 'full-suite', 'schema-additive', 'switch-dependencies']);
 });
 
+test('#670: a not-checked schema verdict passes, and its row (only its row) carries checked: false', () => {
+  const v = rc.decide(facts({ schema: { ok: true, checked: false, detail: 'not checked — nothing read' } }));
+  assert.strictEqual(v.ok, true, 'not checked refuses nothing');
+  const row = refusal(v, 'schema-additive');
+  assert.strictEqual(row.ok, true);
+  assert.strictEqual(row.checked, false);
+  for (const c of v.checks.filter((x) => x.condition !== 'schema-additive')) assert.ok(!('checked' in c), c.condition);
+  // A real pass keeps the frozen row shape — no checked key at all.
+  assert.ok(!('checked' in refusal(rc.decide(facts()), 'schema-additive')));
+});
+
 test('the tag message records the bump, the override reason and every condition', () => {
   const v = rc.decide(facts({ suggestion: { bump: null, why: 'docs only' }, override: { bump: 'patch', reason: 'adopters read the docs' } }));
   const msg = rc.tagMessage(v, { sha: 'abc123', lastFinal: 'v1.2.0' });
