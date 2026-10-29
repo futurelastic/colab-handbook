@@ -251,7 +251,7 @@ test('hooks: enabled with no vocabulary and no gitleaks warns on BOTH rows — n
 
 // --- install.sh itself, end to end, in a throwaway HOME -----------------------------------------
 
-function runInstall(home, args) {
+function runInstall(home, args, script = INSTALL) {
   const env = {
     ...process.env,
     HOME: home,
@@ -265,7 +265,7 @@ function runInstall(home, args) {
   };
   delete env.COLAB_IDENTITY_VOCAB;
   delete env.COLAB_INSTALL_REEXEC;
-  return spawnSync('bash', [INSTALL, ...args], { encoding: 'utf8', env });
+  return spawnSync('bash', [script, ...args], { encoding: 'utf8', env });
 }
 
 test('install.sh --check on a machine with nothing installed: only ⚠ rows, exit 0, nothing written', (t) => {
@@ -576,4 +576,150 @@ test('#530: --check skills rows — broken link ✗, missing ⚠, a Claude-only 
   rows = check.checkSkills({ root: ROOT, home, colabHome });
   assert.strictEqual(rows[0].severity, check.FAIL);
   assert.match(rows[0].text, /BROKEN links to skills that no longer exist: removed-upstream/);
+});
+
+// --- #664: the per-repo route — a COPY inside a repo, for a runtime whose sessions have a private home ---
+
+/**
+ * A throwaway handbook whose skills/ holds a LINKED skill folder and a skill with a linked file, the
+ * shape a hand copy got wrong (#662: `cp -R` copied a dangling link and the skill vanished). Its
+ * install.sh and engines/ are this checkout's; tools/ links back here, so --check runs the real code.
+ */
+function copyHandbook(t) {
+  const root = tmp(t);
+  const outside = tmp(t);
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  fs.copyFileSync(INSTALL, path.join(root, 'install.sh'));
+  fs.cpSync(path.join(ROOT, 'engines'), path.join(root, 'engines'), { recursive: true });
+  fs.symlinkSync(path.join(ROOT, 'tools'), path.join(root, 'tools'));
+  fs.mkdirSync(path.join(root, 'skills', 'alpha'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: a\n---\nalpha\n');
+  fs.writeFileSync(path.join(outside, 'shared.md'), 'shared\n');
+  fs.symlinkSync(path.join(outside, 'shared.md'), path.join(root, 'skills', 'alpha', 'shared.md'));
+  fs.mkdirSync(path.join(outside, 'beta', 'refs'), { recursive: true });
+  fs.writeFileSync(path.join(outside, 'beta', 'SKILL.md'), '---\nname: beta\ndescription: b\n---\nbeta\n');
+  fs.writeFileSync(path.join(outside, 'beta', 'refs', 'one.md'), 'one\n');
+  fs.symlinkSync(path.join(outside, 'beta'), path.join(root, 'skills', 'beta'));
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'test');
+  git('config', 'core.hooksPath', path.join(root, '.nohooks'));
+  git('add', '-A'); git('commit', '-qm', 'init'); git('tag', 'v1.0.0');
+  const repo = tmp(t);
+  return { root, outside, repo, git, script: path.join(root, 'install.sh'), dest: path.join(repo, '.opencode', 'skills') };
+}
+
+/** Every entry under dir, relative, with what it is — a link anywhere in it is the bug. */
+function inventory(dir) {
+  const out = [];
+  const walk = (rel) => {
+    for (const n of fs.readdirSync(path.join(dir, rel)).sort()) {
+      const r = rel ? `${rel}/${n}` : n;
+      const st = fs.lstatSync(path.join(dir, r));
+      out.push(`${st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : 'file'} ${r}`);
+      if (st.isDirectory()) walk(r);
+    }
+  };
+  walk('');
+  return out;
+}
+
+test('#664: --repo copies every skill as FILES — a linked folder and a linked file included — and says what to commit', (t) => {
+  const h = copyHandbook(t);
+  const home = tmp(t);
+  const r = runInstall(home, ['--repo', h.repo, '--engine', 'opencode'], h.script);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.deepStrictEqual(inventory(h.dest), [
+    'file .colab-handbook-skills',
+    'dir alpha', 'file alpha/SKILL.md', 'file alpha/shared.md',
+    'dir beta', 'file beta/SKILL.md', 'dir beta/refs', 'file beta/refs/one.md',
+  ]);
+  assert.strictEqual(fs.readFileSync(path.join(h.dest, 'alpha', 'shared.md'), 'utf8'), 'shared\n');
+  for (const f of ['alpha/SKILL.md', 'alpha/shared.md', 'beta/SKILL.md', 'beta/refs/one.md', '.colab-handbook-skills']) {
+    assert.match(r.stdout, new RegExp(`^\\s+\\.opencode/skills/${f.replace(/\./g, '\\.')}$`, 'm'), `${f} not listed as written`);
+  }
+  assert.ok(!fs.existsSync(path.join(home, '.config')) && !fs.existsSync(path.join(home, '.claude')), '--repo also linked at user level');
+  assert.strictEqual(fs.readFileSync(path.join(home, '.colab', 'skills-copies'), 'utf8'), `opencode|${h.repo}\n`);
+
+  // install.sh's digest (bash + shasum) and engines.js's are one algorithm.
+  const man = engines.readCopyManifest(h.dest);
+  assert.strictEqual(man.version, 'v1.0.0');
+  assert.strictEqual(man.engine, 'opencode');
+  for (const n of ['alpha', 'beta']) {
+    assert.strictEqual(man.skills[n], engines.treeDigest(path.join(h.root, 'skills', n)), `${n}: bash and node digests differ`);
+  }
+
+  const again = runInstall(home, ['--repo', h.repo, '--engine', 'opencode'], h.script);
+  assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /✓ copy-ok: alpha/);
+  assert.doesNotMatch(again.stdout, /📄 copy|🔄 refresh/, 'a re-run with nothing changed rewrote a copy');
+  assert.strictEqual(fs.readFileSync(path.join(home, '.colab', 'skills-copies'), 'utf8').split('\n').filter(Boolean).length, 1, 'remembered twice');
+});
+
+test('#664: --check reports the copy\'s version, ✗ behind once a skill changes upstream; a re-run refreshes it and leaves a repo edit alone', (t) => {
+  const h = copyHandbook(t);
+  const home = tmp(t);
+  assert.strictEqual(runInstall(home, ['--repo', h.repo, '--engine', 'opencode'], h.script).status, 0);
+  const checkRun = () => runInstall(home, ['--check'], h.script);
+
+  let c = checkRun();
+  assert.strictEqual(c.status, 0, c.stdout + c.stderr);
+  assert.match(c.stdout, /✓ skills\s+opencode \(opencode\) .*\.opencode\/skills — copy @ v1\.0\.0: 2\/2 current/);
+  assert.match(c.stdout, /⚠ skills\s+opencode: opencode does not run a skill's/, 'the engine caveat is not reported for a copy');
+  assert.doesNotMatch(c.stdout, /not linked for any engine/, 'a machine with a copy was told it has no skills');
+
+  fs.appendFileSync(path.join(h.outside, 'beta', 'SKILL.md'), 'changed upstream\n');
+  h.git('commit', '--allow-empty', '-qm', 'change beta'); // beta's bytes live outside the clone (a link)
+  c = checkRun();
+  assert.strictEqual(c.status, 1, c.stdout);
+  assert.match(c.stdout, /✗ skills\s+opencode .* — copy @ v1\.0\.0: 1\/2 current; BEHIND the handbook: beta — re-run \.\/install\.sh --repo/);
+
+  fs.appendFileSync(path.join(h.dest, 'alpha', 'SKILL.md'), 'a local edit\n');
+  const r = runInstall(home, ['--repo', h.repo, '--engine', 'opencode'], h.script);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /🔄 refresh: beta/);
+  assert.match(r.stdout, /⚠ skip: alpha was edited in the repo/);
+  assert.match(fs.readFileSync(path.join(h.dest, 'beta', 'SKILL.md'), 'utf8'), /changed upstream/);
+  assert.match(fs.readFileSync(path.join(h.dest, 'alpha', 'SKILL.md'), 'utf8'), /a local edit/, 'a re-run overwrote the repo\'s edit');
+
+  c = checkRun();
+  assert.strictEqual(c.status, 0, c.stdout);
+  assert.match(c.stdout, /⚠ skills\s+opencode .* — copy @ v1\.0\.0-1-g[0-9a-f]+: 1\/2 current; edited in the repo \(left as is; a re-run will not refresh them\): alpha/);
+
+  // A skill gone from the handbook: ✗ while its unedited copy lingers, removed by the next run.
+  fs.rmSync(path.join(h.root, 'skills', 'beta'));
+  c = checkRun();
+  assert.strictEqual(c.status, 1, c.stdout);
+  assert.match(c.stdout, /copies of skills the handbook no longer has: beta/);
+  const gone = runInstall(home, ['--repo', h.repo, '--engine', 'opencode'], h.script);
+  assert.match(gone.stdout, /🗑 removed: beta/);
+  assert.ok(!fs.existsSync(path.join(h.dest, 'beta')));
+});
+
+test('#664: --repo refuses before writing — no --engine, an engine with no project folder, --skills-dir beside it, no such folder', (t) => {
+  const home = tmp(t);
+  const repo = tmp(t);
+  const cases = [
+    [['--repo', repo], /--repo needs --engine/],
+    [['--repo', repo, '--engine', 'claude'], /engines\/claude\.conf names no project_skills_dir — .*opencode/s],
+    [['--repo', repo, '--engine', 'opencode', '--skills-dir', path.join(home, 'x')], /different routes/],
+    [['--repo', path.join(repo, 'nope'), '--engine', 'opencode'], /no folder at/],
+  ];
+  for (const [args, re] of cases) {
+    const r = runInstall(home, args);
+    assert.strictEqual(r.status, 2, `${args.join(' ')}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, re);
+  }
+  assert.deepStrictEqual(fs.readdirSync(home), [], 'a refused run wrote into HOME');
+  assert.deepStrictEqual(fs.readdirSync(repo), [], 'a refused run wrote into the repo');
+});
+
+test('#664: --repo --dry copies nothing and remembers nothing', (t) => {
+  const h = copyHandbook(t);
+  const home = tmp(t);
+  const r = runInstall(home, ['--repo', h.repo, '--engine', 'opencode', '--dry'], h.script);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /\[dry\] copy: alpha/);
+  assert.deepStrictEqual(fs.readdirSync(h.repo), []);
+  assert.ok(!fs.existsSync(path.join(home, '.colab', 'skills-copies')));
 });

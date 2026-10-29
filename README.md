@@ -317,11 +317,27 @@ linked, so an existing machine changes nothing. Finding none, it installs for
 Claude Code and says so. The per-runtime facts live in [`engines/`](engines/),
 one file each — that folder is the source for the table above.
 
+**Sessions that run in a private home** never see a user-level folder. For
+those, copy the skills into the repo itself:
+
+```sh
+./install.sh --repo ~/code/app --engine opencode   # → ~/code/app/.opencode/skills
+```
+
+Every skill is copied as plain files (a linked folder or file is
+dereferenced, never linked), with a manifest of what was copied. The command
+prints each file it wrote, so you can commit them. A re-run refreshes the
+copies the repo has not edited and leaves edited ones alone. `--check` reports
+the copy and its version, and marks it ✗ behind once a skill changes in the
+clone. Only agent runtimes whose `engines/` file names a `project_skills_dir`
+have this route; today that is opencode.
+
 | Flag | What it does |
 |---|---|
 | *(none)* | Symlink `skills/` into each chosen agent runtime's user-level folder, so they are available in every repo you open. Asks at a terminal; otherwise keeps what is linked (see [*Choose your agent runtime*](#choose-your-agent-runtime)). |
 | `--engine <id>[,<id>]` | Install for these agent runtimes (`claude`, `codex`, `opencode` — the files in `engines/`), no question asked. |
 | `--skills-dir <path>` | Also install into this folder, for an agent `engines/` does not know. |
+| `--repo <path> --engine <id>` | Instead of a user-level install, **copy** the skills into that repo's project skills folder, for sessions that run in a private home. Prints the files to commit. |
 | `--tools` | The `colab` CLI twice: a **symlink** at `~/.local/bin/colab` for your sessions (it prints the `PATH` line if needed), and a stamped **frozen copy** at `~/.colab/bin/colab` for always-on services. Also creates an empty `~/.colab/state.json` if there is none. |
 | `--hooks` | Point this clone's git at `.githooks/`: a gitleaks secret scan and an identity scan whose vocabulary you keep outside every repo (see [`templates/README.md`](templates/README.md)). |
 | `--fleet` | Seed `~/.colab/repos.txt` with format notes only, if absent. It stays machine-local because it names your private repos; `colab register` fills it. |

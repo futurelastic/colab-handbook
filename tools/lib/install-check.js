@@ -157,7 +157,9 @@ function checkFrozen({ root, colabHome }) {
 function checkSkills({ root, home, colabHome }) {
   const src = path.join(root, 'skills');
   let skills = [];
-  try { skills = fs.readdirSync(src, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch (_) { /* none */ }
+  // stat, not the Dirent: a skill folder that is itself a link is a skill too, as install.sh's `*/` glob says (#664).
+  const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch (_) { return false; } };
+  try { skills = fs.readdirSync(src).filter((n) => isDir(path.join(src, n))).sort(); } catch (_) { /* none */ }
   const all = engines.listEngines(root);
   const byId = Object.fromEntries(all.map((e) => [e.id, e]));
   const targets = all.filter((e) => e.skills_dir).map((e) => ({ e, dir: engines.expandHome(e.skills_dir, home) }));
@@ -203,10 +205,67 @@ function checkSkills({ root, home, colabHome }) {
     for (const c of e.caveat || []) rows.push({ area: 'skills', severity: WARN, text: `${e.id}: ${c}` });
     if (e.verified && /^no\b/.test(e.verified)) rows.push({ area: 'skills', severity: WARN, text: `${e.id}: engine file not verified by a run yet — ${e.verified.replace(/^no\s*[—-]?\s*/, '')}` });
   }
-  if (!rows.length) {
+  const copies = checkCopies({ root, colabHome, skills, byId });
+  if (!rows.length && !copies.length) {
     rows.push({ area: 'skills', severity: WARN, text: `not linked for any engine — ./install.sh asks which (or --engine <id> / --skills-dir <path>)` });
-  } else if (notInstalled.length) {
+  } else if (rows.length && notInstalled.length) {
     rows.push({ area: 'skills', severity: OK, text: `not installed for: ${notInstalled.join(', ')} — fine if deliberate; ./install.sh --engine <id> adds one` });
+  }
+  // An engine installed both ways states its caveats once.
+  const seen = new Set();
+  return [...rows, ...copies].filter((r) => (seen.has(r.text) ? false : (seen.add(r.text), true)));
+}
+
+/**
+ * Per-repo copies (#664), every one remembered in <COLAB_HOME>/skills-copies: the same row as a
+ * user-level install, plus the version the copy was stamped with. Per skill, three digests decide —
+ * the manifest's (what install.sh wrote), the copy's now, and this clone's skill now:
+ *   copy ≠ manifest           → edited in the repo (⚠: the repo owns its copy; a re-run leaves it alone)
+ *   clone ≠ manifest = copy   → behind (✗: installed, and the handbook has moved on — re-run)
+ *   in the clone, not copied  → missing (⚠, a skill added since — re-run), as for a link
+ *   copied, gone from clone   → behind too (✗, removed upstream — a re-run deletes it)
+ */
+function checkCopies({ root, colabHome, skills, byId }) {
+  const src = path.join(root, 'skills');
+  const rows = [];
+  for (const { engine, repo } of engines.rememberedCopies(colabHome)) {
+    const e = byId[engine] || { id: engine, caveat: [] };
+    const rel = e.project_skills_dir;
+    const rerun = `./install.sh --repo '${repo}' --engine ${engine}`;
+    if (!rel) {
+      rows.push({ area: 'skills', severity: WARN, text: `${engine} copy in ${repo}: engines/${engine}.conf names no project_skills_dir any more — remove the line from ${path.join(colabHome, 'skills-copies')} if the copy is gone` });
+      continue;
+    }
+    const dir = path.join(repo, rel);
+    const man = engines.readCopyManifest(dir);
+    if (!man) {
+      rows.push({ area: 'skills', severity: WARN, text: `${engine} (${e.label || engine}) ${dir}: no ${engines.COPY_MANIFEST} — the copy is gone, or was not written by install.sh. Re-copy: ${rerun}, or drop the line from ${path.join(colabHome, 'skills-copies')}` });
+      continue;
+    }
+    const current = []; const behind = []; const edited = []; const missing = []; const removed = [];
+    for (const name of skills) {
+      const want = man.skills[name];
+      if (!want) { missing.push(name); continue; }
+      const now = engines.treeDigest(path.join(dir, name));
+      if (now !== want) { edited.push(name); continue; }
+      if (engines.treeDigest(path.join(src, name)) !== want) behind.push(name);
+      else current.push(name);
+    }
+    for (const name of Object.keys(man.skills)) {
+      if (skills.includes(name)) continue;
+      if (engines.treeDigest(path.join(dir, name)) === man.skills[name]) removed.push(name);
+    }
+    const parts = [`${current.length}/${skills.length} current`];
+    if (behind.length) parts.push(`BEHIND the handbook: ${behind.join(', ')} — re-run ${rerun}, then commit`);
+    if (removed.length) parts.push(`copies of skills the handbook no longer has: ${removed.join(', ')} — re-run ${rerun} to remove them`);
+    if (missing.length) parts.push(`missing ${missing.join(', ')} — re-run ${rerun}`);
+    if (edited.length) parts.push(`edited in the repo (left as is; a re-run will not refresh them): ${edited.join(', ')}`);
+    rows.push({
+      area: 'skills',
+      severity: (behind.length || removed.length) ? FAIL : (missing.length || edited.length) ? WARN : OK,
+      text: `${engine} (${e.label || engine}) ${dir} — copy @ ${man.version || 'unknown'}: ${parts.join('; ')}`,
+    });
+    for (const c of e.caveat || []) rows.push({ area: 'skills', severity: WARN, text: `${e.id}: ${c}` });
   }
   return rows;
 }
@@ -352,5 +411,5 @@ if (require.main === module) {
 
 module.exports = {
   OK, WARN, FAIL,
-  dispatchedCommands, checkSkills, checkLink, checkFrozen, checkState, checkFleet, checkHooks, checkNotify, runChecks, render,
+  dispatchedCommands, checkSkills, checkCopies, checkLink, checkFrozen, checkState, checkFleet, checkHooks, checkNotify, runChecks, render,
 };
