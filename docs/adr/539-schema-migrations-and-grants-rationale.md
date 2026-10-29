@@ -14,6 +14,16 @@ grant never engaged. Measured on an adopting repo before this key existed.
 an opt-out can only make a human-only gate see *less*, and that waits for a repo that
 genuinely needs it
 
+## Why a schema file is a `migrations:` entry, not a new key (#673)
+
+A repo whose server applies its schema inline (one file running `CREATE`/`ALTER TABLE` at
+start-up) had no layout to declare, and the grant gate fails closed without one (#671), so on a
+route where a hand cut refuses, its only release was a raw tag push outside every check. An entry
+without a trailing `/` now means "this path, or anything under it". That kept the list's shape,
+and every `backend/migrations` already declared without a slash means what it meant before. The
+alternative, letting the grant alone clear a repo with no layout, would have reversed #671's
+rule that a final with nothing read is a human's act.
+
 ## Why `migration-grant` is a separate flat key
 
 `migrations:` stays a list of path prefixes because three readers depend on that shape.

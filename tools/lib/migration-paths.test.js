@@ -19,10 +19,34 @@ test('parseMigrationPaths: absent / null → defaults only, nothing declared', (
   }
 });
 
-test('parseMigrationPaths: a list is normalised to repo-relative prefixes ending in /', () => {
-  const r = mp.parseMigrationPaths({ migrations: ['backend/migrations', './svc/db/migrations/', 'a//b/'] });
-  assert.deepStrictEqual(r.paths, ['backend/migrations/', 'svc/db/migrations/', 'a/b/']);
+test('parseMigrationPaths: a list is normalised to repo-relative paths, a written trailing / kept and none added (#673)', () => {
+  const r = mp.parseMigrationPaths({ migrations: ['backend/migrations', './svc/db/migrations/', 'a//b/', 'server/db.ts'] });
+  assert.deepStrictEqual(r.paths, ['backend/migrations', 'svc/db/migrations/', 'a/b/', 'server/db.ts']);
   assert.deepStrictEqual(r.problems, []);
+});
+
+test('#673: a no-slash entry covers that exact file, or anything under it — a / entry stays a directory', () => {
+  const d = mp.parseMigrationPaths({ migrations: ['server/db.ts', 'backend/migrations', 'svc/sql/'] }).paths;
+  assert.ok(mp.isMigrationPath('server/db.ts', d), 'an inline schema file can be declared');
+  assert.ok(!mp.isMigrationPath('server/db.tsx', d), 'a path boundary, not a substring');
+  assert.ok(!mp.isMigrationPath('server/db.ts.bak', d));
+  assert.ok(mp.isMigrationPath('backend/migrations/013.sql', d), 'a no-slash directory still covers its children (pre-#673 behaviour)');
+  assert.ok(!mp.isMigrationPath('backend/migrations-old/x.sql', d));
+  assert.ok(mp.isMigrationPath('svc/sql/1.sql', d));
+  assert.ok(!mp.isMigrationPath('svc/sql', d), 'a / entry is a directory, never the bare path');
+  // Only the exact no-slash entry is a schema FILE — a file under a declared directory is a history.
+  assert.ok(mp.isDeclaredFile('server/db.ts', d));
+  assert.ok(!mp.isDeclaredFile('backend/migrations/013.sql', d));
+  assert.ok(!mp.isDeclaredFile('svc/sql/1.sql', d));
+  assert.ok(!mp.isDeclaredFile('server/db.ts', []));
+});
+
+test('#673: duplicates and restated defaults compare by directory form', () => {
+  const r = mp.parseMigrationPaths({ migrations: ['database/migrations', 'x', 'x/'] });
+  assert.deepStrictEqual(r.paths, ['x']);
+  assert.strictEqual(r.notes.length, 2);
+  assert.match(r.notes[0], /already a default/);
+  assert.match(r.notes[1], /declared twice/);
 });
 
 test('parseMigrationPaths: invalid entries are problems, never guessed into a prefix', () => {
@@ -155,4 +179,60 @@ test('schemaVerdict: a declared migration in an unread format is NAMED, never fo
   // Under the defaults alone a non-php/sql file (Prisma's lock file) stays silent, as before.
   const lock = rc.schemaVerdict([{ status: 'A', path: 'prisma/migrations/migration_lock.toml', content: 'x' }], 'v1', d);
   assert.doesNotMatch(lock.detail, /does not read — a human/);
+});
+
+// ---- #673: a declared schema FILE is read by the lines its change added --------------------------
+
+test('#673 addedLinesFromDiff: new-side line numbers from each -U0 hunk header', () => {
+  const diff = [
+    'diff --git a/server/db.ts b/server/db.ts', 'index 1..2 100644', '--- a/server/db.ts', '+++ b/server/db.ts',
+    '@@ -10,0 +11,2 @@ export function migrate() {', '+  db.exec(`ALTER TABLE users', '+    ADD COLUMN nick TEXT`);',
+    '@@ -40 +42 @@', '-  old();', '+  db.exec("DROP TABLE legacy");',
+  ].join('\n');
+  assert.deepStrictEqual(rc.addedLinesFromDiff(diff), [
+    { line: 11, text: '  db.exec(`ALTER TABLE users' },
+    { line: 12, text: '    ADD COLUMN nick TEXT`);' },
+    { line: 42, text: '  db.exec("DROP TABLE legacy");' },
+  ]);
+  assert.deepStrictEqual(rc.addedLinesFromDiff(''), []);
+});
+
+test('#673 schemaVerdict: an edited declared schema file is READ — additive passes, never "rewritten"', () => {
+  const d = ['server/db.ts'];
+  const add = rc.schemaVerdict([{ status: 'M', path: 'server/db.ts', content: null,
+    added: [{ line: 11, text: 'db.exec("ALTER TABLE users ADD COLUMN nick TEXT");' }, { line: 12, text: 'db.exec("CREATE TABLE IF NOT EXISTS t (id INT)");' }] }], 'v1', d, false);
+  assert.strictEqual(add.ok, true);
+  assert.strictEqual(add.checked, undefined, 'read, so a real pass — not "not checked"');
+  assert.match(add.detail, /declared schema file\(s\) changed \(server\/db\.ts\), the SQL they added read since v1, none destructive/);
+  assert.doesNotMatch(add.detail, /rewritten|does not read/);
+});
+
+test('#673 schemaVerdict: a destructive statement ADDED to the declared file is refused, with file:line', () => {
+  const d = ['server/db.ts'];
+  const bad = rc.schemaVerdict([{ status: 'M', path: 'server/db.ts', content: null,
+    added: [{ line: 7, text: 'const x = 1;' }, { line: 30, text: 'db.exec(`ALTER TABLE users' }, { line: 31, text: '  DROP COLUMN nick`);' }] }], 'v1', d);
+  assert.strictEqual(bad.ok, false);
+  assert.match(bad.detail, /server\/db\.ts:31: `DROP COLUMN` added/);
+  for (const stmt of ['ALTER TABLE users RENAME COLUMN a TO b', 'ALTER TABLE users ALTER COLUMN a TYPE INT']) {
+    const v = rc.schemaVerdict([{ status: 'M', path: 'server/db.ts', added: [{ line: 3, text: stmt }] }], 'v1', d);
+    assert.strictEqual(v.ok, false, stmt);
+  }
+  // an ADDED schema file with no `added` list is read whole from its content
+  const fresh = rc.schemaVerdict([{ status: 'A', path: 'server/db.ts', content: 'CREATE TABLE a (id INT);\nDROP TABLE b;' }], 'v1', d);
+  assert.strictEqual(fresh.ok, false);
+  assert.match(fresh.detail, /server\/db\.ts:2: `DROP TABLE` added/);
+});
+
+test('#673 schemaVerdict: the declared file fails closed — deleted, or its added lines unread', () => {
+  const d = ['server/db.ts'];
+  const gone = rc.schemaVerdict([{ status: 'D', path: 'server/db.ts' }], 'v1', d);
+  assert.strictEqual(gone.ok, false);
+  assert.match(gone.detail, /deleted — the declared schema file is gone/);
+  const unread = rc.schemaVerdict([{ status: 'M', path: 'server/db.ts', content: null, added: null }], 'v1', d);
+  assert.strictEqual(unread.ok, false);
+  assert.match(unread.detail, /could not be read/);
+  // a file under a declared DIRECTORY is still a history: an edit is a rewrite, as before
+  const hist = rc.schemaVerdict([{ status: 'M', path: 'server/sql/001.sql', added: [{ line: 1, text: 'CREATE TABLE a (id INT);' }] }], 'v1', ['server/sql/']);
+  assert.strictEqual(hist.ok, false);
+  assert.match(hist.detail, /an existing migration was rewritten/);
 });

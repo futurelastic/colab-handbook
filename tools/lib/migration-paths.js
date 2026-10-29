@@ -9,9 +9,16 @@
  * `migrations/` — was invisible to both: `colab ship --dry` reported `no new migrations ✓` on a
  * branch adding a production data backfill, so the human-only grant (#98) never engaged.
  *
- * `migrations:` in `.github/project.yml` names the extra places, as repo-relative prefixes:
+ * `migrations:` in `.github/project.yml` names the extra places, as repo-relative paths:
  *
- *   migrations: [backend/migrations/]
+ *   migrations: [backend/migrations/, server/db.ts]
+ *
+ * #673: an entry is a DIRECTORY when it ends in `/` (matched by prefix, as before), and otherwise a
+ * path that may be a FILE: that exact path, or anything under it. So `backend/migrations` still covers
+ * `backend/migrations/x.sql`, and `server/db.ts` covers a schema the server applies inline at start-up
+ * (`CREATE TABLE`/`ALTER TABLE` in its own code, no migrations directory) — before this, that layout
+ * could not be declared at all, and #671's fail-closed grant gate left such a repo no tooled release.
+ * A change to a declared file IS a migration; release-cut's schema-additive reads the lines it added.
  *
  * The declared list is ADDED to the two defaults, never a replacement for them: a declaration can
  * only make the gate see more. There is deliberately no opt-out of the defaults — an opt-out can
@@ -30,21 +37,32 @@ const DEFAULT_MIGRATION_PATHS = Object.freeze(['database/migrations/', 'prisma/m
 const FOREIGN_TREE_SEGMENTS = new Set(['node_modules', 'vendor']);
 
 /**
- * One declared entry → its normalised prefix (`a/b/`), or `{ problem }`. Rejected, not guessed:
- * absolute paths and `..` (not repo-relative), globs (a prefix match would silently match nothing
- * for `*`), and empties.
+ * One declared entry → its normalised path, or `{ problem }`. `./` and doubled `/` are removed; a
+ * trailing `/` is KEPT when written (a directory) and never added (#673: without one, the entry may
+ * name a file). Rejected, not guessed: absolute paths and `..` (not repo-relative), globs (a path
+ * match would silently match nothing for `*`), and empties.
  */
 function normalizeEntry(raw) {
   if (typeof raw !== 'string') return { problem: `${JSON.stringify(raw)} is not a path` };
   let p = raw.trim();
   if (p === '') return { problem: 'an empty entry is not a path' };
   if (p.startsWith('/')) return { problem: `"${p}" is absolute — declare a repo-relative prefix (e.g. "backend/migrations/")` };
-  if (/[*?[\]{}]/.test(p)) return { problem: `"${p}" is a glob — declare a plain directory prefix; entries are matched by prefix, not by pattern` };
-  p = p.replace(/^(\.\/)+/, '').replace(/\/{2,}/g, '/');
-  if (p === '' || p === '.') return { problem: `"${raw}" names the repo root — every file would be a migration` };
+  if (/[*?[\]{}]/.test(p)) return { problem: `"${p}" is a glob — declare a plain directory prefix ("backend/migrations/") or a file ("server/db.ts"); entries are matched by path, not by pattern` };
+  p = p.replace(/^(\.\/)+/, '').replace(/\/{2,}/g, '/').replace(/(\/\.)+\/?$/, '/');
+  if (p === '' || p === '.' || p === '/' || p === './') return { problem: `"${raw}" names the repo root — every file would be a migration` };
   if (p.split('/').includes('..')) return { problem: `"${p}" climbs out of the repo — declare a repo-relative prefix` };
-  if (!p.endsWith('/')) p += '/';
   return { path: p };
+}
+
+/** The directory form of an entry (`a/b` → `a/b/`) — what duplicates and defaults compare by. */
+function dirForm(p) {
+  return p.endsWith('/') ? p : `${p}/`;
+}
+
+/** Does declared entry `p` cover repo-relative `f`? A directory by prefix; a no-slash entry exactly or below it. */
+function entryCovers(p, f) {
+  if (p.endsWith('/')) return f.startsWith(p);
+  return f === p || f.startsWith(`${p}/`);
 }
 
 /**
@@ -58,7 +76,8 @@ function normalizeEntry(raw) {
  *                          lenient in the direction that makes the gate STRICTER (it still sees
  *                          the path the author obviously meant); the audit fails the shape.
  *
- * `paths` never includes the defaults — `isMigrationPath` always applies those itself.
+ * `paths` never includes the defaults — `isMigrationPath` always applies those itself. An entry
+ * keeps its trailing `/` as written (#673): `a/b/` is a directory, `a/b` a file or a directory.
  */
 function parseMigrationPaths(doc) {
   const has = !!doc && Object.prototype.hasOwnProperty.call(doc, 'migrations');
@@ -83,11 +102,11 @@ function parseMigrationPaths(doc) {
   for (const raw of entries) {
     const r = normalizeEntry(raw);
     if (r.problem) { problems.push(`migrations: ${r.problem}`); continue; }
-    if (DEFAULT_MIGRATION_PATHS.includes(r.path)) {
+    if (DEFAULT_MIGRATION_PATHS.includes(dirForm(r.path))) {
       notes.push(`migrations: "${r.path}" is already a default — it need not be declared`);
       continue;
     }
-    if (paths.includes(r.path)) { notes.push(`migrations: "${r.path}" is declared twice`); continue; }
+    if (paths.some((q) => dirForm(q) === dirForm(r.path))) { notes.push(`migrations: "${r.path}" is declared twice`); continue; }
     paths.push(r.path);
   }
   return { declared: true, paths, problems, notes, reason: paths.length ? `migrations: [${paths.join(', ')}] + defaults` : 'defaults only' };
@@ -106,8 +125,19 @@ function isMigrationPath(file, declared) {
   for (const d of DEFAULT_MIGRATION_PATHS) {
     if (f.startsWith(d) || f.includes(`/${d}`)) return true;
   }
-  for (const p of declared || []) if (f.startsWith(p)) return true;
+  for (const p of declared || []) if (entryCovers(p, f)) return true;
   return false;
+}
+
+/**
+ * #673: is `file` exactly a declared no-slash entry — a schema FILE, edited in place by nature (one
+ * `db.ts` that runs its `CREATE`/`ALTER` at start-up)? Such a file is not a migration *history*: an
+ * edit is how it grows, never "an existing migration was rewritten", so schema-additive reads the
+ * lines the edit ADDED instead. A file under a declared directory is not one (that is a history).
+ */
+function isDeclaredFile(file, declared) {
+  const f = String(file || '');
+  return (declared || []).some((p) => !p.endsWith('/') && f === p);
 }
 
 /**
@@ -131,5 +161,5 @@ function undeclaredMigrationDirs(files, declared) {
 }
 
 module.exports = {
-  DEFAULT_MIGRATION_PATHS, parseMigrationPaths, unionPaths, isMigrationPath, undeclaredMigrationDirs,
+  DEFAULT_MIGRATION_PATHS, parseMigrationPaths, unionPaths, isMigrationPath, isDeclaredFile, undeclaredMigrationDirs,
 };

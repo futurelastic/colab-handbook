@@ -856,3 +856,23 @@ test('#627 releasedComment: the early line rides along; without it the comment i
   assert.strictEqual(e, '<!-- colab:release-event released=v1.2.1 -->\nReleased in **v1.2.1** (`aaaaaaa`).\nEarly final: answered by Ops after 30h of the 72h test period.');
   assert.strictEqual(rf.hasEvent([{ body: e }], rf.releasedEvent('v1.2.1')), true);
 });
+
+// ---- #673: a schema applied inline is declarable as a FILE, and its grant clears it ------------
+
+test('#673: the no-layout refusal names the file form and the one grant command', () => {
+  const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: false });
+  assert.strictEqual(v.ok, false);
+  assert.match(v.detail, /`migrations: \[server\/db\.ts\]`/, 'an inline schema file is named as declarable');
+  assert.match(v.detail, /COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch <version>/);
+});
+
+test('#673: a changed declared schema file is a migration — refused ungranted, cleared by the grant', () => {
+  const paths = ['server/db.ts'];
+  const ungranted = rf.migrationGrantVerdict({ paths, grant: { issue: 12, ok: false, reason: 'no grant' }, since: 'v1.2.0', layout: true });
+  assert.strictEqual(ungranted.ok, false);
+  assert.match(ungranted.detail, /1 migration file\(s\) since v1\.2\.0 \(server\/db\.ts\)/);
+  assert.match(ungranted.detail, /colab migration-grant <tracking issue> --branch <version>/);
+  const granted = rf.migrationGrantVerdict({ paths, grant: { issue: 12, ok: true }, since: 'v1.2.0', layout: true });
+  assert.strictEqual(granted.ok, true);
+  assert.strictEqual(rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: granted })).state, 'finalized');
+});

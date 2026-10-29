@@ -136,7 +136,14 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
   migration changed (#671):** where nothing is declared in `migrations:` and neither default
   layout exists at the candidate (or its tree could not be read), the gate cannot see a
   migration at all, so it fails closed the same way — declare `migrations:`, or the final stays a
-  human act. A repo with no database has no layout to declare, so its final stays one.
+  human act. A repo with no database has no layout to declare, so its final stays one. **A
+  schema the server applies inline is declarable too (#673):** a repo with no migrations
+  directory — one `db.ts` that runs its `CREATE`/`ALTER TABLE` at start-up — declares the
+  **file** (`migrations: [server/db.ts]`). Every change to it is then a migration: the grant
+  above clears it, and `schema-additive` reads the SQL the change **added** (a `DROP`, `RENAME`
+  or `ALTER COLUMN` it gained is refused, with `file:line`). Before #673 such a repo had no
+  tooled release at all on `deploy-tag-fast`, where a hand cut refuses — only a raw tag push,
+  outside every check.
 - **Every automatic deploy says whose choice made it so.** The final tag's message names the
   grant and its decision issue, and who ruled it.
 
@@ -170,6 +177,10 @@ every gate that does not depend on one:
   migration since the last final** unless the version's tracking issue carries a migration grant
   — otherwise the run refuses, opens `release: vX.Y.Z` if needed, and posts the one human command
   (`COLAB_HUMAN=1 colab migration-grant <N> --branch vX.Y.Z`); the next green run after it tags.
+  Where no migration could be read at all (#671), the refusal names the declaration instead — a
+  directory, or the inline schema file (#673) — since a grant has nothing to clear until one
+  exists. The tag message's `Checked by:` line names the colab that decided (#673), so two
+  channels reading one commit differently are told apart from the tag itself.
 - **A minimum spacing between finals.** `release.final-spacing` (default and floor `1h`; longer
   narrows) — a burst of merges deploys at most once per window. Inside it a run is a no-op, and
   the first run after it tags the head, never an older commit.

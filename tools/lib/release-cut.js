@@ -870,21 +870,25 @@ function laravelUpBody(text) {
  */
 function schemaVerdict(changes, since, declared, layout) {
   const inPaths = (changes || []).filter((c) => isMigrationPath(c.path, declared));
-  const migrations = inPaths.filter((c) => /\.(php|sql)$/.test(c.path));
+  // #673: a declared schema FILE (an inline schema the server applies itself) is read by the lines
+  // its change added — never "unread", and an edit is never "an existing migration was rewritten".
+  const schemaFiles = inPaths.filter((c) => migrationPaths.isDeclaredFile(c.path, declared));
+  const history = inPaths.filter((c) => !migrationPaths.isDeclaredFile(c.path, declared));
+  const migrations = history.filter((c) => /\.(php|sql)$/.test(c.path));
   // #383: a declared path widens what COUNTS as a migration, not what this heuristic can READ. A
   // declared migration in any other format (a Node boot migration, a Go file) is named in the
   // detail, so the §6 judgement the release notes owe knows exactly which files it still has to
   // read by hand — never silently folded into "none destructive". Only for DECLARED paths: under
   // the defaults a non-php/sql file is Prisma's migration_lock.toml and the like, as it always was.
   const unread = (declared && declared.length)
-    ? inPaths.filter((c) => !/\.(php|sql)$/.test(c.path) && !migrationPaths.isMigrationPath(c.path, []))
+    ? history.filter((c) => !/\.(php|sql)$/.test(c.path) && !migrationPaths.isMigrationPath(c.path, []))
     : [];
-  const scope = `Laravel database/migrations + Prisma prisma/migrations${declared && declared.length ? ` + declared ${declared.join(', ')} (php/sql only)` : ''} — other layouts are not read`;
+  const scope = `Laravel database/migrations + Prisma prisma/migrations${declared && declared.length ? ` + declared ${declared.join(', ')} (php/sql only; a declared file: the SQL it added)` : ''} — other layouts are not read`;
   const hasDeclared = !!(declared && declared.length);
   const notChecked = (why) => ({ ok: true, checked: false, detail: `not checked — ${why}` });
   const unreadWhy = () => `${unread.length} declared migration file(s) changed since ${since} in a format this check does not read (php/sql only) — a human reads them before the final: ${unread.map((c) => c.path).join(', ')}`;
   const howToDeclare = 'a repo whose migrations live elsewhere declares their directory as `migrations:` in .github/project.yml (project.schema.md `migrations`); a repo with no database has nothing to declare';
-  if (!migrations.length) {
+  if (!migrations.length && !schemaFiles.length) {
     if (unread.length) return notChecked(unreadWhy());
     if (!hasDeclared && layout === false) return notChecked(`no Laravel database/migrations/ or Prisma prisma/migrations/ directory at the candidate and no \`migrations:\` declared, so no migration was read — ${howToDeclare}`);
     if (!hasDeclared && layout === null) return notChecked(`the tree at the candidate could not be read for a migration layout, so no migration was read — ${howToDeclare}`);
@@ -904,11 +908,55 @@ function schemaVerdict(changes, since, declared, layout) {
       if (m) findings.push(`${c.path}:${m.line}: \`${m.statement}\`${m.inUp ? ' in the Up section' : ''}`);
     }
   }
+  for (const c of schemaFiles) {
+    const f = schemaFileFinding(c);
+    if (f) findings.push(f);
+  }
   if (findings.length) {
     return { ok: false, detail: `destructive schema change since ${since} — a release carrying one is a human's to cut (CONVENTIONS.md §6, Switched epics rule 5): ${findings.join('; ')}` };
   }
-  if (unread.length) return notChecked(`${migrations.length} migration file(s) added since ${since}, none destructive — but ${unreadWhy()}`);
-  return { ok: true, detail: `${migrations.length} migration file(s) added since ${since}, none destructive (${scope})` };
+  const read = [
+    ...(migrations.length ? [`${migrations.length} migration file(s) added`] : []),
+    ...(schemaFiles.length ? [`declared schema file(s) changed (${schemaFiles.map((c) => c.path).join(', ')}), the SQL they added read`] : []),
+  ].join(' and ');
+  if (unread.length) return notChecked(`${read} since ${since}, none destructive — but ${unreadWhy()}`);
+  return { ok: true, detail: `${read} since ${since}, none destructive (${scope})` };
+}
+
+/**
+ * #673: one declared schema file's change → a destructive finding, or null. Reads ONLY what the change
+ * added (`c.added` = [{ line, text }], new-side line numbers; for an added file, its whole content):
+ * a `CREATE TABLE` the file has always held is not this release's, a `DROP COLUMN` it just gained is.
+ * Fails CLOSED — a deleted file, or added lines that could not be read, is a finding. Lines removed
+ * from the file are not read: a schema that stops creating a table drops nothing that exists.
+ */
+function schemaFileFinding(c) {
+  const st = String(c.status || '').charAt(0);
+  if (st === 'D') return `${c.path}: deleted — the declared schema file is gone`;
+  let lines = Array.isArray(c.added) ? c.added : null;
+  if (!lines && st === 'A' && typeof c.content === 'string') lines = c.content.split('\n').map((text, i) => ({ line: i + 1, text }));
+  if (!lines) return `${c.path}: the lines this change added could not be read — an unread schema change is not an additive one`;
+  const m = sqlDestructive(lines.map((l) => l.text).join('\n'));
+  if (!m) return null;
+  const at = lines[m.line - 1];
+  return `${c.path}:${at ? at.line : '?'}: \`${m.statement}\` added`;
+}
+
+/**
+ * #673: `git diff -U0` output for ONE file → the lines it added, [{ line, text }] with new-side line
+ * numbers read from each hunk header. Pure, so the shape is tested without git.
+ */
+function addedLinesFromDiff(diffText) {
+  const out = [];
+  let next = null;
+  for (const l of String(diffText || '').split('\n')) {
+    const h = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+    if (h) { next = Number(h[1]); continue; }
+    if (next === null) continue;                       // the file header, before the first hunk
+    if (l.startsWith('+')) { out.push({ line: next, text: l.slice(1) }); next += 1; }
+    else if (l.startsWith(' ')) next += 1;             // context (none at -U0, kept for safety)
+  }
+  return out;
 }
 
 // ---- §6 condition 4: switch dependencies -------------------------------------------------------
@@ -1243,7 +1291,7 @@ function versionSourceOf(policy) {
 }
 
 /** The annotated tag's message — where the chosen bump, its reason and every checked condition are recorded. */
-function tagMessage(verdict, { sha, lastFinal }) {
+function tagMessage(verdict, { sha, lastFinal, checkedBy }) {
   // #446: a fast-route final. Its subject deliberately does NOT end in "(colab release cut)", so no
   // reader of candidates (cutCandidates, finalize's CUT_SUBJECT_SUFFIX) ever mistakes it for one.
   const fast = !!verdict.final;
@@ -1253,6 +1301,8 @@ function tagMessage(verdict, { sha, lastFinal }) {
     '',
     `Commit: ${sha}`,
     `Since: ${lastFinal}`,
+    // #673: which colab decided — two channels reading one commit differently is then visible here.
+    ...(checkedBy ? [`Checked by: ${checkedBy}`] : []),
     `Bump: ${verdict.bump}${verdict.overridden ? ` (overridden from ${verdict.overridden.from || 'no bump'} — reason: ${verdict.overridden.reason})` : ''}${verdict.signals ? ' (computed by --auto)' : ''}`,
     '',
     ...(verdict.signals ? ['Signals (every input the bump read):', ...verdict.signals.lines.map((l) => `- ${l}`), ''] : []),
@@ -1281,7 +1331,7 @@ module.exports = {
   isFastRoute, isLibraryRoute, decideManifestVersion, spacingVerdict, holdsVerdict, migrationHandoff,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict, qualifiedShaVerdict,
-  fullSuiteVerdict, withoutOwnWorkflow, withoutSkippedOnlyWorkflows, verifyingRunsForCut, verifyingNote, isMigrationPath, schemaVerdict,
+  fullSuiteVerdict, withoutOwnWorkflow, withoutSkippedOnlyWorkflows, verifyingRunsForCut, verifyingNote, isMigrationPath, schemaVerdict, addedLinesFromDiff,
   parseSwitchMarkers, switchVerdict,
   promotionVerdict, decide, tagMessage, versionSourceOf,
   DOWNSTREAM_EVENTS, headCandidateVerdict, prereleaseArgs, finalReleaseArgs, handoffTrackingBody,

@@ -572,7 +572,9 @@ function migrationGrantVerdict({ paths, grant, since, layout }) {
     // #671: fail closed where nothing could have been seen — an automatically deployed final never
     // reads "nothing read" as "nothing changed". The way out is named in the detail, never implied —
     // route-neutral: release finalize prints its own human command, and route deploy-tag-fast has none.
-    const wayOut = 'declare the migration directory as `migrations:` in .github/project.yml (project.schema.md `migrations`); until then the final is a human act, not the grant\'s — and a repo with no database has no layout to declare, so its final stays one';
+    // #673: a schema applied inline by the server's own code is declarable too — as the FILE — and the
+    // detail names the grant command that clears its next change, so no one reaches for a raw tag.
+    const wayOut = 'declare where the schema lives as `migrations:` in .github/project.yml (project.schema.md `migrations`) — a migration directory (`migrations: [backend/migrations/]`) or, for a schema the server applies inline, the file itself (`migrations: [server/db.ts]`); a change under it then clears the usual way (COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch <version>). Until then the final is a human act, not the grant\'s — and a repo with no database has no layout to declare, so its final stays one';
     if (layout === false) return { ok: false, detail: `no migration was read since ${since || 'the first commit'}: no \`migrations:\` declared and no Laravel database/migrations/ or Prisma prisma/migrations/ directory at the candidate, so a migration elsewhere would be invisible — ${wayOut}` };
     if (layout !== true) return { ok: false, unread: true, detail: `the tree at the candidate could not be read for a migration layout, so an empty migration list since ${since || 'the first commit'} is not evidence that none changed — ${wayOut}` };
     return { ok: true, detail: `no migration file changed since ${since || 'the first commit'}` };
@@ -803,7 +805,7 @@ function earlyLine(early) {
 }
 
 /** The final tag's annotated message: which candidate, which period, every condition, who. */
-function tagMessage(verdict, { candidate, period, actor }) {
+function tagMessage(verdict, { candidate, period, actor, checkedBy }) {
   return [
     `${candidate.version} — release (colab release finalize)`,
     '',
@@ -812,6 +814,7 @@ function tagMessage(verdict, { candidate, period, actor }) {
     period ? (period.days === 0 ? 'Test period: none (release.test-period: 0d — the human final is the test)' : `Test period: ${period.start} -> ${period.endsAt}`) : null,
     verdict.early ? `Early final: ${earlyLine(verdict.early)}` : null,
     `Finalized by: ${actor}`,
+    checkedBy ? `Checked by: ${checkedBy}` : null,   // #673: which colab decided
     verdict.grant ? `Automatic final granted by: release.final-grant -> decision #${verdict.grant.issue}${verdict.grant.ruledBy ? `, ruled by ${verdict.grant.ruledBy}` : ''} (an operator's per-repo grant; deleting it, or final: human, revokes it)` : null,
     '',
     'Conditions (CONVENTIONS.md §6):',

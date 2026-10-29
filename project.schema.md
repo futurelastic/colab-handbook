@@ -576,7 +576,7 @@ falls back to the default and says so (a `batch-*` name: not judged).
 ### `migrations` — optional
 
 ```yaml
-migrations: [backend/migrations/]   # repo-relative prefixes; absent = the two defaults alone
+migrations: [backend/migrations/, server/db.ts]   # repo-relative directories or files; absent = the two defaults alone
 ```
 
 **[Hard — gate: colab ship refuses]** Where this repo's migrations live, **beyond** the two layouts every reader already knows —
@@ -590,14 +590,14 @@ either, `schema-additive` read nothing, so it prints **not checked** — never a
 Why `migrations` exists, with the measurement: [ADR
 539](docs/adr/539-schema-migrations-and-grants-rationale.md).
 
-- **Entries are repo-relative directory prefixes**, matched from the repo root. `./` and a
-  missing trailing `/` are normalised away; an absolute path, a `..`, a glob, or the repo root
-  itself is a finding — a prefix match would silently mean something other than what was written.
+- **Entries are repo-relative directories or files**, from the repo root: `a/` is a directory, `a` that path or anything under it — so `server/db.ts` declares a schema the server applies inline (#673, [ADR 539](docs/adr/539-schema-migrations-and-grants-rationale.md)); an absolute path, a `..`, a glob, or the repo root
+  itself is a finding — a path match would silently mean something other than what was written.
 - **[Hard — gate: colab ship refuses]** **Additive, never a replacement.** The defaults
   always apply; restating one is harmless (an advisory). There is deliberately no opt-out
   of the defaults.
 - **[Hard — gate: colab ship refuses]** **Ship reads trunk's declaration and the branch's, unioned.** A branch that adds its own
   declaration is gated by it; a branch that deletes trunk's is still gated by trunk's.
+- **A declared schema FILE is read by what its change added** — an edit is never "rewritten"; an added `DROP`/`RENAME`/`ALTER COLUMN` is refused at `file:line`, a deleted or unread file fails closed, and any change is a migration to the ship gate and the grant (#673).
 - **`release cut` reads `.php`/`.sql` under a declared prefix** with the same destructive
   heuristic as the defaults. A declared migration in any other format (`.mjs`, `.go`) is *named*
   in the check's detail — the heuristic cannot read it, so the §6 judgement owes it a human read —
@@ -1775,7 +1775,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `ship-batch-steps` strictly ascending whole numbers within `ship-batch` when set → **finding** otherwise | a misspelled list silently read as a fixed size by `colab ship` |
 | `ship-batch-steps` with `ship-batch` absent or 1 → **advisory** | steps with no batch to size |
 | `ci-wait-factor` a number ≥ 1 when set → **finding** otherwise | a misspelled multiple silently read as the default by every CI wait |
-| `migrations` a list of repo-relative prefixes when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
+| `migrations` a list of repo-relative directories or files when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |
 | `migration-grant` ∈ {`human`, `reviewer`} when set → **finding** otherwise | a misspelled policy silently read as `human` |
