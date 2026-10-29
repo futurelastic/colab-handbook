@@ -316,11 +316,26 @@ sẵn, nên máy đã cài không thay đổi gì. Không thấy agent runtime n
 Code và nói rõ điều đó. Thông tin từng agent runtime nằm trong [`engines/`](engines/),
 mỗi agent runtime một file — thư mục đó là nguồn của bảng trên.
 
+**Phiên chạy trong một home riêng** không bao giờ thấy thư mục cấp user. Với
+những phiên đó, hãy chép skill vào chính repo:
+
+```sh
+./install.sh --repo ~/code/app --engine opencode   # → ~/code/app/.opencode/skills
+```
+
+Mỗi skill được chép thành file thường (thư mục hay file là link thì được chép
+nội dung, không bao giờ để link), kèm một manifest ghi những gì đã chép. Lệnh in
+ra từng file nó đã ghi để bạn commit. Chạy lại thì làm mới các bản chép mà repo
+chưa sửa, và để nguyên bản đã sửa. `--check` báo bản chép cùng phiên bản của nó,
+và đánh ✗ (đã cũ) khi một skill trong clone thay đổi. Chỉ agent runtime nào có
+file `engines/` khai `project_skills_dir` mới có đường này; hiện nay là opencode.
+
 | Flag | Làm gì |
 |---|---|
 | *(không có)* | Symlink `skills/` vào thư mục cấp user của từng agent runtime đã chọn, để mở repo nào cũng có. Ở terminal thì hỏi; không thì giữ những gì đã link (xem [*Chọn agent runtime*](#chọn-agent-runtime)). |
 | `--engine <id>[,<id>]` | Cài cho các agent runtime này (`claude`, `codex`, `opencode` — các file trong `engines/`), không hỏi. |
 | `--skills-dir <path>` | Cài thêm vào thư mục này, cho agent mà `engines/` chưa biết. |
+| `--repo <path> --engine <id>` | Thay cho cài cấp user: **chép** skill vào thư mục skill của project trong repo đó, cho phiên chạy trong một home riêng. In ra các file cần commit. |
 | `--tools` | CLI `colab` cài hai lần: một **symlink** ở `~/.local/bin/colab` cho các phiên làm việc của bạn (in sẵn dòng `PATH` nếu cần), và một **bản đóng băng** có đóng dấu ở `~/.colab/bin/colab` cho các service luôn-bật. Đồng thời tạo `~/.colab/state.json` rỗng nếu chưa có. |
 | `--hooks` | Trỏ git của clone này vào `.githooks/`: quét secret bằng gitleaks, và quét danh tính với danh sách từ khoá do bạn giữ NGOÀI mọi repo (xem [`templates/README.md`](templates/README.md)). |
 | `--fleet` | Tạo `~/.colab/repos.txt` chỉ chứa ghi chú định dạng, nếu chưa có. Nó cố tình nằm trên máy vì nó ghi tên các repo private của bạn; `colab register` mới là thứ điền vào. |

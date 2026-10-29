@@ -5,7 +5,7 @@ An **agent runtime** is the program a coding agent runs in, which loads the skil
 directory name and the `--engine` flag predate that word and stay as they are.
 
 `install.sh` links every folder under `skills/` into the user-level skills folder of
-each agent runtime you pick. This directory holds what it needs to know about each one.
+each agent runtime you pick — or, with `--repo`, copies them into one repo's project skills folder. This directory holds what it needs to know about each one.
 **Adding an agent runtime means adding one `<id>.conf` file here**, nothing else: no code
 in `install.sh` or `--check` names an agent runtime.
 
@@ -14,6 +14,7 @@ in `install.sh` or `--check` names an agent runtime.
 ./install.sh --engine claude,codex    # unattended
 ./install.sh --skills-dir ~/my-agent/skills   # any other agent runtime: you give the folder
 ./install.sh --check                  # per agent runtime: linked, missing, broken, caveats
+./install.sh --repo ../app --engine opencode   # a COPY inside one repo, for sessions with a private home
 ```
 
 ## Format
@@ -28,6 +29,7 @@ JS (`tools/lib/engines.js`), and both must keep agreeing.
 | `label` | Human name, shown in the prompt and every report. |
 | `default` | `yes` on exactly one agent runtime: what a machine with nothing linked gets when no flag and no terminal choose. |
 | `skills_dir` | User-level skills folder. A leading `~/` is the home directory. Empty means the user supplies it (`generic`). |
+| `project_skills_dir` | *Optional.* The skills folder **inside a repo**, relative to its root, for `./install.sh --repo <path> --engine <id>` (#664): a runtime whose sessions run in a private home never sees the user-level folder. Absent means no per-repo route for that agent runtime. |
 | `invoke` | How a user calls a skill; `<name>` stands for the skill's name. |
 | `instructions` | Which repo instruction file the agent runtime reads, and how `AGENTS.md` reaches it. |
 | `helper_agents` | `yes` / `no` — can a skill spawn a helper agent? `code-plan` uses one when available and degrades without. |

@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const REPEATABLE = new Set(['note', 'caveat']);
 
@@ -49,4 +50,55 @@ function rememberedDirs(colabHome) {
   return text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
 }
 
-module.exports = { parseConf, expandHome, listEngines, rememberedDirs };
+/**
+ * Per-repo copies (#664): `install.sh --repo <path> --engine <id>` copies the skills into the agent
+ * runtime's PROJECT skills folder (`project_skills_dir:`), for a runtime whose sessions run in a
+ * private home and never see a user-level install. Each copy is remembered in
+ * <COLAB_HOME>/skills-copies as one `<engine id>|<repo path>` line, so `--check` finds it.
+ */
+function rememberedCopies(colabHome) {
+  let text = '';
+  try { text = fs.readFileSync(path.join(colabHome, 'skills-copies'), 'utf8'); } catch (_) { return []; }
+  return text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#') && l.includes('|'))
+    .map((l) => { const i = l.indexOf('|'); return { engine: l.slice(0, i), repo: l.slice(i + 1) }; });
+}
+
+/** The manifest install.sh writes beside the copies: what it copied, at which version, with what content. */
+const COPY_MANIFEST = '.colab-handbook-skills';
+
+/**
+ * A skill folder's content digest — the same algorithm as install.sh's tree_digest, and
+ * install-sh.test.js holds the two to it: sha256 over one `<sha256 of file>  <relative path>\n`
+ * line per regular file, links followed, paths sorted bytewise (LC_ALL=C sort). Null when absent.
+ */
+function treeDigest(dir) {
+  const files = [];
+  const walk = (rel) => {
+    for (const n of fs.readdirSync(path.join(dir, rel))) {
+      const r = rel ? `${rel}/${n}` : n;
+      const st = fs.statSync(path.join(dir, r)); // stat, not lstat: links are followed, as cp -RL does
+      if (st.isDirectory()) walk(r);
+      else if (st.isFile()) files.push(r);
+    }
+  };
+  try { if (!fs.statSync(dir).isDirectory()) return null; walk(''); } catch (_) { return null; }
+  files.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+  return sha(files.map((f) => `${sha(fs.readFileSync(path.join(dir, f)))}  ${f}\n`).join(''));
+}
+
+/** Parse a COPY_MANIFEST: its stamp version, engine, and `{ <skill>: <digest> }`. Null when absent. */
+function readCopyManifest(dir) {
+  let text;
+  try { text = fs.readFileSync(path.join(dir, COPY_MANIFEST), 'utf8'); } catch (_) { return null; }
+  const out = { version: null, engine: null, skills: {} };
+  for (const l of text.split(/\r?\n/)) {
+    let m;
+    if ((m = /^#\s*colab-handbook:\s*skills\s*@\s*(\S+)/.exec(l))) out.version = m[1];
+    else if ((m = /^#\s*engine:\s*(\S+)/.exec(l))) out.engine = m[1];
+    else if ((m = /^([0-9a-f]{64})  (.+)$/.exec(l))) out.skills[m[2]] = m[1];
+  }
+  return out;
+}
+
+module.exports = { parseConf, expandHome, listEngines, rememberedDirs, rememberedCopies, COPY_MANIFEST, treeDigest, readCopyManifest };

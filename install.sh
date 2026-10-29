@@ -14,6 +14,15 @@
 #   ./install.sh --skills-dir <path>
 #                         install into this folder too — any agent runtime engines/ does not know.
 #                         Remembered in <COLAB_HOME>/skills-dirs so re-runs and --check find it.
+#   ./install.sh --repo <path> --engine <id>
+#                         install INTO A REPO instead, for an agent runtime whose sessions run in a
+#                         private home and so never see a user-level install (#664): every skill is
+#                         COPIED (links dereferenced, never a link) into the runtime's project skills
+#                         folder (project_skills_dir: in engines/<id>.conf), with a manifest of what
+#                         was copied. Prints every file it wrote — commit them. A re-run refreshes the
+#                         copies the repo has not edited and leaves edited ones alone. Remembered in
+#                         <COLAB_HOME>/skills-copies so --check reports the copy, and flags it behind
+#                         once a skill changes in this clone.
 #   ./install.sh --tools  ALSO symlink tools/colab onto your PATH (~/.local/bin/colab)
 #                         AND freeze a stamped copy of the CLI at ~/.colab/bin/colab.
 #   ./install.sh --hooks  ALSO enable this clone's gitleaks pre-commit hook
@@ -85,10 +94,12 @@ FROZEN_DIR="$COLAB_DIR/bin"
 FROZEN_BIN="$FROZEN_DIR/colab"
 FROZEN_STAMP="$FROZEN_DIR/STAMP"
 SKILL_DIRS_FILE="$COLAB_DIR/skills-dirs"
+SKILL_COPIES_FILE="$COLAB_DIR/skills-copies"
+COPY_MANIFEST=".colab-handbook-skills"   # tools/lib/engines.js COPY_MANIFEST — the same name
 
 WITH_TOOLS=0; WITH_HOOKS=0; WITH_FLEET=0; DRY=0; CHECK=0; NOTIFY_URL=""; NOTIFY_FLAG=0
 REF_MODE="${COLAB_INSTALL_REF:-}"; REF_FLAG=0
-ENGINE_FLAG=""; SKILLS_DIR_FLAG=""
+ENGINE_FLAG=""; SKILLS_DIR_FLAG=""; REPO_FLAG=""
 NARGS=$#
 while [ $# -gt 0 ]; do
   a="$1"; shift
@@ -105,6 +116,10 @@ while [ $# -gt 0 ]; do
     --skills-dir)
       [ $# -gt 0 ] || { echo "--skills-dir needs a folder" >&2; exit 2; }
       SKILLS_DIR_FLAG="$1"; shift ;;
+    --repo=*) REPO_FLAG="${a#--repo=}" ;;
+    --repo)
+      [ $# -gt 0 ] || { echo "--repo needs the path of a repo" >&2; exit 2; }
+      REPO_FLAG="$1"; shift ;;
     --check) CHECK=1 ;;
     --tools) WITH_TOOLS=1 ;;
     --hooks) WITH_HOOKS=1 ;;
@@ -195,6 +210,21 @@ if [ -n "$ENGINE_FLAG" ]; then
     fi
     if [ -z "$(conf_get "$e" skills_dir)" ] && [ -z "$SKILLS_DIR_FLAG" ]; then
       echo "--engine $e has no skills folder of its own — pass it: --skills-dir <path>" >&2
+      exit 2
+    fi
+  done
+fi
+
+# --repo: a per-repo COPY for each --engine named (#664). Refuse what cannot work before anything is written.
+if [ -n "$REPO_FLAG" ]; then
+  [ -n "$ENGINE_FLAG" ] || { echo "--repo needs --engine <id>: the agent runtime decides which folder in the repo the skills go to" >&2; exit 2; }
+  [ -z "$SKILLS_DIR_FLAG" ] || { echo "--repo and --skills-dir are different routes — pass one" >&2; exit 2; }
+  [ -d "$REPO_FLAG" ] || { echo "--repo: no folder at '$REPO_FLAG'" >&2; exit 2; }
+  REPO_FLAG="$(cd "$REPO_FLAG" && pwd)"
+  for e in $(echo "$ENGINE_FLAG" | tr ',' ' '); do
+    if [ -z "$(conf_get "$e" project_skills_dir)" ]; then
+      echo "--repo: engines/$e.conf names no project_skills_dir — no per-repo folder is known for $e" >&2
+      echo "        (agent runtimes with one: $(for k in $(known_engines); do [ -n "$(conf_get "$k" project_skills_dir)" ] && printf '%s ' "$k"; done))" >&2
       exit 2
     fi
   done
@@ -445,6 +475,12 @@ reexec_installer() {
   [ "$WITH_TOOLS" = 1 ] && set -- "$@" --tools
   [ "$WITH_HOOKS" = 1 ] && set -- "$@" --hooks
   [ "$WITH_FLEET" = 1 ] && set -- "$@" --fleet
+  if [ -n "$REPO_FLAG" ] && ! grep -q -- '--repo' "$newsh"; then
+    # Without --repo, the older installer would link the skills at USER level instead — not what was asked.
+    echo "  ✗ the installer at this ref has no --repo (per-repo copies) — stopping; re-run with --trunk" >&2
+    exit 2
+  fi
+  [ -n "$REPO_FLAG" ] && set -- "$@" --repo "$REPO_FLAG"
   if [ -n "$ENGINE_FLAG$SKILLS_DIR_FLAG" ]; then
     if grep -q -- '--skills-dir' "$newsh"; then
       [ -n "$ENGINE_FLAG" ] && set -- "$@" --engine "$ENGINE_FLAG"
@@ -617,6 +653,119 @@ seed_notify() {
   fi
 }
 
+# ---------------------------------------------------------- per-repo copies (#664) --
+# A runtime whose sessions get a private HOME never sees a user-level install, and a link into this
+# clone would dangle there (and could not be committed) — so --repo COPIES, dereferencing every link.
+# The manifest beside the copies records, per skill, the digest of what was written: a re-run uses it
+# to tell "ours, unedited" (refresh) from "edited in the repo" (left alone), and --check compares it to
+# this clone's skills to say "behind". tree_digest must match tools/lib/engines.js treeDigest exactly —
+# install-sh.test.js holds the two to it.
+sha256_stdin() {
+  if have shasum; then shasum -a 256 | cut -d' ' -f1
+  elif have sha256sum; then sha256sum | cut -d' ' -f1
+  else echo "no shasum or sha256sum on PATH — cannot write the copy manifest" >&2; return 1; fi
+}
+tree_digest() {
+  ( cd "$1" && find -L . -type f | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r f; do
+      printf '%s  %s\n' "$(sha256_stdin < "$f")" "$f"
+    done ) | sha256_stdin
+}
+# The version stamped on the copy: stamp.js when node is here (one implementation of "which version"),
+# git describe otherwise — a skills-only install must not need node.
+handbook_version() {
+  v=""
+  have node && v="$(node -e 'process.stdout.write(require(process.argv[1]).freezeVersion(process.argv[2]).version)' \
+    "$DIR/tools/lib/stamp.js" "$DIR" 2>/dev/null || true)"
+  [ -n "$v" ] || v="$(git -C "$DIR" describe --tags --always 2>/dev/null || true)"
+  echo "${v:-v0}"
+}
+# manifest_digest <manifest> <skill> — the digest recorded for <skill>, or nothing.
+manifest_digest() { [ -f "$1" ] && sed -n "s/^\([0-9a-f]\{64\}\)  $2\$/\1/p" "$1" || true; }
+
+# copy_skills <engine> <repo>
+copy_skills() {
+  eng="$1"; repo="$2"
+  rel="$(conf_get "$eng" project_skills_dir)"; dest="$repo/$rel"; man="$dest/$COPY_MANIFEST"
+  echo "skills → $dest  ($(conf_get "$eng" label), copied into the repo)"
+  [ "$DRY" = 1 ] || mkdir -p "$dest"
+  entries=""; wrote=""; names=""
+  for s in "$SKILLS_SRC"/*/; do
+    [ -d "$s" ] || continue
+    name="$(basename "$s")"; src="${s%/}"; d="$dest/$name"
+    names="$names $name"
+    prev="$(manifest_digest "$man" "$name")"
+    srcd="$(tree_digest "$src")"
+    if [ -e "$d" ] || [ -L "$d" ]; then
+      if [ -z "$prev" ] || [ -L "$d" ] || [ ! -d "$d" ]; then
+        warn "skip: $name already exists in $rel and is not a copy this installer wrote → left untouched"
+        echo "          to take the handbook's: rm -rf '$d' && re-run"
+        continue
+      fi
+      cur="$(tree_digest "$d")"
+      if [ "$cur" != "$prev" ]; then
+        warn "skip: $name was edited in the repo since it was copied → left untouched"
+        echo "          to take the handbook's again: rm -rf '$d' && re-run"
+        entries="$entries$prev  $name
+"
+        continue
+      fi
+      if [ "$srcd" = "$prev" ]; then
+        echo "  ✓ copy-ok: $name"
+        entries="$entries$prev  $name
+"
+        continue
+      fi
+      if [ "$DRY" = 1 ]; then echo "  [dry] refresh: $name"; continue; fi
+      rm -rf "$d"; cp -RL "$src" "$d"; echo "  🔄 refresh: $name"
+    else
+      if [ "$DRY" = 1 ]; then echo "  [dry] copy: $name → $d"; continue; fi
+      cp -RL "$src" "$d"; echo "  📄 copy: $name"
+    fi
+    entries="$entries$(tree_digest "$d")  $name
+"
+    wrote="$wrote$( cd "$repo" && find "$rel/$name" -type f | LC_ALL=C sort )
+"
+  done
+  # A skill this installer copied that is gone from the handbook now: remove the copy if unedited.
+  if [ -f "$man" ]; then
+    for old in $(sed -n 's/^[0-9a-f]\{64\}  //p' "$man"); do
+      case " $names " in *" $old "*) continue ;; esac
+      d="$dest/$old"
+      [ -d "$d" ] || continue
+      if [ "$(tree_digest "$d")" = "$(manifest_digest "$man" "$old")" ]; then
+        if [ "$DRY" = 1 ]; then echo "  [dry] remove: $old (gone from the handbook)"; continue; fi
+        rm -rf "$d"; echo "  🗑 removed: $old (gone from the handbook) — commit the deletion"
+      else
+        warn "keep: $old is gone from the handbook but was edited in the repo → left untouched"
+        entries="$entries$(manifest_digest "$man" "$old")  $old
+"
+      fi
+    done
+  fi
+  [ "$DRY" = 1 ] && { echo; return 0; }
+  {
+    echo "# colab-handbook: skills @ $(handbook_version)"
+    echo "# engine: $eng"
+    echo "# Written by install.sh --repo (#664): one line per skill it copied, <sha256 of the folder>  <name>."
+    echo "# A re-run refreshes a copy whose content still matches its line; --check reports a copy behind the handbook."
+    printf '%s' "$entries"
+  } > "$man"
+  wrote="$wrote$rel/$COPY_MANIFEST
+"
+  echo "  wrote (commit these):"
+  printf '%s' "$wrote" | while IFS= read -r f; do [ -n "$f" ] && echo "    $f"; done
+  echo "    → git -C '$repo' add '$rel'"
+  echo "  invoke: $(conf_get "$eng" invoke)"
+  while IFS= read -r line; do [ -n "$line" ] && warn "$line"; done <<CAVEATS
+$(conf_all "$eng" caveat)
+CAVEATS
+  if ! { [ -f "$SKILL_COPIES_FILE" ] && grep -qxF "$eng|$repo" "$SKILL_COPIES_FILE"; }; then
+    mkdir -p "$COLAB_DIR"; echo "$eng|$repo" >> "$SKILL_COPIES_FILE"
+    echo "  remembered in $SKILL_COPIES_FILE (--check reports this copy)"
+  fi
+  echo
+}
+
 echo "== colab-handbook install ($([ "$DRY" = 1 ] && echo dry-run || echo apply)) =="
 
 select_ref
@@ -694,7 +843,10 @@ ask_engines() {
   echo
 }
 
-if [ -n "$ENGINE_FLAG$SKILLS_DIR_FLAG" ]; then
+if [ -n "$REPO_FLAG" ]; then
+  # --repo replaces the user-level install for this run: nothing is linked under HOME (#664).
+  for e in $(echo "$ENGINE_FLAG" | tr ',' ' '); do copy_skills "$e" "$REPO_FLAG"; done
+elif [ -n "$ENGINE_FLAG$SKILLS_DIR_FLAG" ]; then
   for e in $(echo "$ENGINE_FLAG" | tr ',' ' '); do
     [ -n "$(conf_get "$e" skills_dir)" ] && add_target "$e" "$(engine_dir "$e")"
   done
@@ -711,7 +863,7 @@ else
     echo
   fi
 fi
-[ -n "$TARGETS" ] || warn "no agent runtime chosen — no skills were installed (re-run and pick one, or pass --engine)"
+[ -n "$TARGETS$REPO_FLAG" ] || warn "no agent runtime chosen — no skills were installed (re-run and pick one, or pass --engine)"
 
 while IFS='|' read -r eng dest; do
   [ -n "$eng" ] || continue
@@ -831,6 +983,16 @@ else
   done <<TARGETS_EOF
 $TARGETS
 TARGETS_EOF
+  if [ -n "$REPO_FLAG" ]; then
+    for e in $(echo "$ENGINE_FLAG" | tr ',' ' '); do
+      d="$REPO_FLAG/$(conf_get "$e" project_skills_dir)"
+      if [ -n "$probe" ] && [ -f "$d/$probe/SKILL.md" ] && [ ! -L "$d/$probe" ]; then
+        echo "  ✓ skill '$probe' is a copy at $d/$probe"
+      else
+        warn "no copied skill under $d — see the skips above."
+      fi
+    done
+  fi
   if [ "$WITH_TOOLS" = 1 ]; then
     if have colab; then
       echo "  ✓ colab resolves at $(command -v colab)"
