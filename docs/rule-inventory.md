@@ -2814,12 +2814,13 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.migrations.01 | default |  | `migrations` lists repo-relative prefixes where migrations live beyond Laravel `database/migrations/` and Prisma `prisma/migrations/`. | Where this repo's migrations live, beyond the two layouts every reader already knows | project.schema.md | — |
 | S1.migrations.02 | hard | tools/colab::function shipMigrationGate | Ship's no-new-migrations gate and `release cut`'s schema-additive check read this one list and keep no regex of their own. | `schema-additive` check read this one list | project.schema.md | — |
 | S1.migrations.03 | default |  | Absent `migrations` changes nothing. | Absent changes nothing | project.schema.md | — |
-| S1.migrations.04 | default |  | Entries are repo-relative directory prefixes matched from the repo root. | Entries are repo-relative directory prefixes, matched from the repo root. | project.schema.md | — |
+| S1.migrations.04 | default |  | Entries are repo-relative directories or files matched from the repo root: a trailing `/` is a directory, no trailing `/` is that exact path or anything under it. | Entries are repo-relative directories or files | project.schema.md | #673 |
 | S1.migrations.05 | default |  | An absolute path, a `..`, a glob or the repo root itself is a finding. | an absolute path, a `..`, a glob, or the repo root | project.schema.md | — |
 | S1.migrations.06 | hard | tools/colab::function shipMigrationGate | `migrations` is additive, never a replacement: the defaults always apply and there is no opt-out. | Additive, never a replacement. The defaults always apply; | project.schema.md | — |
 | S1.migrations.07 | hard | tools/colab::function shipMigrationGate | Ship reads trunk's declaration and the branch's, unioned. | Ship reads trunk's declaration and the branch's, unioned. | project.schema.md | — |
 | S1.migrations.08 | default |  | `release cut` reads `.php`/`.sql` under a declared prefix; any other format is named in the check detail, never folded into none destructive. | `release cut` reads `.php`/`.sql` under a declared prefix | project.schema.md | — |
 | S1.migrations.09 | default |  | The audit reports a tracked `*/migrations/` directory no rule covers (advisory, local audits only). | The audit reports a tracked `*/migrations/` directory no rule covers | project.schema.md | — |
+| S1.migrations.10 | default |  | A declared schema file is read by the SQL its change added; an added `DROP`, `RENAME` or `ALTER COLUMN` is refused with `file:line`, and a deleted or unreadable file fails closed. | A declared schema FILE is read by what its change added | project.schema.md | #673 |
 
 ### `migration-grant`
 
@@ -3173,7 +3174,7 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S2.validity.29 | default |  | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push, or without `autonomy: auto-trunk`, is an advisory. | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push | project.schema.md | — |
 | S2.validity.52 | default |  | `ship-batch-steps` must be strictly ascending whole numbers within `ship-batch` when set, else a finding. | `ship-batch-steps` strictly ascending whole numbers within `ship-batch` when set | project.schema.md | #557 |
 | S2.validity.53 | default |  | `ship-batch-steps` with `ship-batch` absent or 1 is an advisory. | `ship-batch-steps` with `ship-batch` absent or 1 | project.schema.md | #557 |
-| S2.validity.30 | default |  | `migrations` must be a list of repo-relative prefixes when set; an absolute path, `..`, glob, the repo root or a non-list is a finding. | `migrations` a list of repo-relative prefixes when set | project.schema.md | — |
+| S2.validity.30 | default |  | `migrations` must be a list of repo-relative directories or files when set; an absolute path, `..`, glob, the repo root or a non-list is a finding. | `migrations` a list of repo-relative directories or files when set | project.schema.md | #673 |
 | S2.validity.31 | default |  | `migrations` empty, restating a default, or naming one prefix twice is an advisory. | `migrations` empty, restating a default, or naming one prefix twice | project.schema.md | — |
 | S2.validity.32 | default |  | A tracked `*/migrations/` directory outside the defaults and every declared prefix is an advisory (local only). | a tracked `*/migrations/` directory outside the defaults | project.schema.md | — |
 | S2.validity.33 | default |  | `migration-grant` must be `human` or `reviewer` when set, else a finding. | `migration-grant` ∈ {`human`, `reviewer`} when set | project.schema.md | — |

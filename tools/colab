@@ -1414,7 +1414,12 @@ function readAllIssuesForSwitches(repoAbs) {
   return Array.isArray(list) && list.length < LIMIT ? list : null;
 }
 
-/** [{status, path, content}] for every path changed between `from` (null = the empty tree) and `sha`; null on a git failure. */
+/**
+ * [{status, path, content, added?}] for every path changed between `from` (null = the empty tree) and
+ * `sha`; null on a git failure. #673: a declared schema FILE (migration-paths.js isDeclaredFile) also
+ * carries `added` — the lines the change added, with their line numbers — which is what schema-additive
+ * reads for it. A failed read leaves `added` null, which that check refuses (an unread change).
+ */
 function releaseCutChanges(repoAbs, from, sha, declared) {
   let base = from;
   if (!base) {
@@ -1432,6 +1437,11 @@ function releaseCutChanges(repoAbs, from, sha, declared) {
     if (status.startsWith('A') && releaseCut.isMigrationPath(file, declared)) {
       const show = git.git(['show', `${sha}:${file}`], repoAbs);
       content = show.ok ? show.stdout : '';
+    }
+    if (!status.startsWith('D') && migrationPaths.isDeclaredFile(file, declared)) {
+      // -U0: only the added lines and their hunk headers; --no-renames keeps one path per side.
+      const d = git.git(['diff', '-U0', '--no-renames', '--no-color', base, sha, '--', file], repoAbs);
+      return { status, path: file, content, added: d.ok ? releaseCut.addedLinesFromDiff(d.stdout) : null };
     }
     return { status, path: file, content };
   });
@@ -1801,7 +1811,7 @@ function cmdReleaseCut(argv) {
   let created = false;
   let published = null; // #443: { ok, detail } once a tag was created — null when nothing was cut
   if (verdict.ok && !opts.dry) {
-    const message = releaseCut.tagMessage(verdict, { sha, lastFinal });
+    const message = releaseCut.tagMessage(verdict, { sha, lastFinal, checkedBy: checkedByLine() });
     const t = git.git(['tag', '-a', '--cleanup=verbatim', verdict.tag, sha, '-m', message], repoAbs);
     if (!t.ok) throw new UserError(`git tag ${verdict.tag} failed: ${(t.stderr || '').split('\n')[0]}`);
     const push = git.git(['push', remote, `refs/tags/${verdict.tag}`], repoAbs);
@@ -2312,7 +2322,7 @@ function cmdReleaseFinalize(argv) {
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
       const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1${verdict.early ? ', --early' : ''})` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}${selection.older ? `, an older candidate clean on its own clock (--tag; newest open: ${selection.newest})` : ''}`;
-      const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor });
+      const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor, checkedBy: checkedByLine() });
       const t = git.git(['tag', '-a', '--cleanup=verbatim', cand.version, cand.sha, '-m', message], repoAbs);
       if (!t.ok) throw new UserError(`git tag ${cand.version} failed: ${(t.stderr || '').split('\n')[0]}`);
       const push = git.git(['push', remote, `refs/tags/${cand.version}`], repoAbs);
@@ -9672,6 +9682,17 @@ function versionLine(self) {
     : self.kind === 'npm' ? `npm package: ${self.source}`
       : `working tree: ${self.source}${self.branch ? `, branch ${self.branch}` : ''}`;
   return `colab ${self.version} (${where})`;
+}
+
+/**
+ * #673: the colab that decided, for a release tag's message — the version plus, for a working tree, the
+ * commit it runs at (its "version" is only the nearest release tag, so two dev checkouts would read
+ * alike). No filesystem path: a tag message is published with the repo it lands in.
+ */
+function checkedByLine(self = selfProvenance()) {
+  if (self.kind !== 'working-tree') return `colab ${self.version} (${self.kind === 'npm' ? 'npm package' : 'frozen copy'})`;
+  const head = stamp.gitIn(self.source, ['rev-parse', '--short=12', 'HEAD']);
+  return `colab ${self.version} (working tree${head.ok && head.out ? ` @ ${head.out}` : ''}${self.branch ? `, branch ${self.branch}` : ''})`;
 }
 
 function cmdVersion() {
