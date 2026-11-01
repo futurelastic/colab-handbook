@@ -237,7 +237,7 @@ gh issue view $N --comments                      # prior-session log
 
   ## Gotchas
 
-  Filed-by: <boss (via <session>) | agent (<what prompted it>, session <name>)>
+  Filed-by: <boss (via <session>) | agent (<agent>, <what prompted it>, session <name>)>
   ```
   **Before you file: would one session finish this?** If not, it is an epic — the
   `Plan (checklist)` heading above is an invitation, not a green light. File the

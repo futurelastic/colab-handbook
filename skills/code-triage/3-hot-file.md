@@ -56,7 +56,7 @@ Body:
   Goal — the waiting issues stop serializing on one path. The shape (split, generate,
          per-entry files, …) is the repo's to choose; this issue does not prescribe one.
   Touches: `<P>`
-  Filed-by: agent (code-triage pass at trunk <sha>)
+  Filed-by: agent (<agent>, code-triage pass at trunk <sha>, session <name>)
   Ask: backlog
 ```
 
