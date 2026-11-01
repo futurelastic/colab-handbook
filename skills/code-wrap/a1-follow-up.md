@@ -28,9 +28,14 @@ that is the breadcrumb back to the context — and, on the next line, the ask cl
 prose:
 
 ```
-Filed-by: agent (during code-wrap of #$N, session <name>)
+Filed-by: agent (<agent>, during code-wrap of #$N, session <name>)
 Ask: backlog
 ```
+
+`<agent>` is your session's own agent name, and it goes **first** inside the parentheses:
+the accept step resolves the filer from that leading name whenever it does not know the
+session, and a stamp without it parks the issue on the owner as an unresolved filer instead
+of reaching the reviewer seat.
 
 Use `permission` for a request to touch machine/prod state, `ruling` for a question
 that resolves to a human judgment and never to a diff, `deferred(<trigger>)` when

@@ -89,7 +89,8 @@ gh issue edit $N --body-file <tmpfile>   # tick the checklist, add Decisions/Got
 #### Filing a follow-up here? It is agent-filed, and it must say so
 
 **Rule:** a follow-up you decided to file gets the `agent-filed` label, a body ending
-`Filed-by: agent (during code-wrap of #$N, session <name>)` plus an `Ask:` line (`backlog` ·
+`Filed-by: agent (<agent>, during code-wrap of #$N, session <name>)` — `<agent>` is this
+session's own agent name, first, because the accept step reads the filer from it — plus an `Ask:` line (`backlog` ·
 `permission` · `ruling` · `deferred(<trigger>)`), and `colab issue-filed <N>` where `colab`
 exists. More than one session of work ⇒ an epic with sub-issues. One the human asked for is
 `Filed-by: boss (via session <name>)`, no label.

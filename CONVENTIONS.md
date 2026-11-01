@@ -1393,9 +1393,13 @@ Why provenance exists, and why the label: [ADR 89](docs/adr/89-provenance-and-as
 body with:**
 
 ```
-Filed-by: agent (during code-wrap of #48, session <name>)
+Filed-by: agent (<agent>, during code-wrap of #48, session <name>)
 Filed-by: boss (via discussion session <name>)
 ```
+
+- **An agent stamp names the agent first** — `<agent>` is the filing session's own agent
+  name. A consumer that does not know the session resolves the filer from that leading
+  name; a stamp without it reads as a filer nobody can identify.
 
 - **No label means a human filed it** — the default; existing issues need no backfill.
 - **Provenance is whose *intent* it was, not whose keyboard.** An agent transcribing a

@@ -1103,6 +1103,7 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.provenance.04 | default |  | Provenance is whose intent it was, not whose keyboard: transcribing a person's decision is Filed-by: boss with no label; an agent noticing a problem is agent-filed. | Provenance is whose intent it was, not whose keyboard | CONVENTIONS.md | — |
 | C5a.provenance.05 | default |  | Write both the Filed-by: line (durable record) and the label (queryable). | The `Filed-by:` line is the durable record; the label makes it queryable | CONVENTIONS.md | — |
 | C5a.provenance.06 | explanation |  | Why the label: anything starting work in bulk must be able to exclude work no human approved. | anything that starts work in bulk (a start button, batch triage, a scheduled | docs/adr/89-provenance-and-ask-rationale.md | — |
+| C5a.provenance.07 | default |  | An agent's Filed-by stamp names the filing agent first inside the parentheses, so a consumer that does not know the session can still resolve the filer. | An agent stamp names the agent first | CONVENTIONS.md | #675 |
 
 ### §5 Ask — the filer declares the ask class (#89)
 
