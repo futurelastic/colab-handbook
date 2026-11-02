@@ -269,6 +269,9 @@ function parseScalarValue(raw) {
 const NESTED_MAP_KEYS = new Set(["release", "owner", "gate", "thresholds", "contention"]); // owner: #394 · gate: #410 · thresholds: #560 · contention: #630
 // The one map whose pairs may hold an INLINE list (`coupled: [a, b]`) — still one level, still no block list (#630).
 const LIST_IN_MAP_KEYS = new Set(["contention"]);
+// A key whose empty value may open EITHER a block list or a one-level map: `migrations:` is a list of
+// paths, or the `none: <reason>` block (#672). The two line shapes cannot be mistaken for each other.
+const LIST_OR_MAP_KEYS = new Set(["migrations"]);
 
 function parseFlatYaml(text) {
   const out = {};
@@ -340,6 +343,7 @@ function parseFlatYaml(text) {
     if (trimmed === "") {
       if (NESTED_MAP_KEYS.has(key)) mapKey = key;
       else listKey = key;
+      if (LIST_OR_MAP_KEYS.has(key)) mapKey = key;
     }
   });
   return { data: out, problems };
@@ -1426,6 +1430,14 @@ function auditRepoInner(target, ctx) {
     migCfg.problems.forEach((p) => fail(p));
     migCfg.notes.forEach((p) => warn(p));
     const migFiles = src.migrationDirFiles();
+    // #672's guard, where the declaration is read: `migrations: none` beside a Laravel or Prisma
+    // migrations directory is a contradiction, and every later cut refuses it too (release-cut.js
+    // schemaVerdict, release-finalize.js migrationGrantVerdict). Local-only, like the rule below.
+    if (migFiles && migCfg.none) {
+      const dirsOf = migFiles.map((f) => f.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/"))).flat();
+      const why = migrationPaths.noneContradiction(migCfg.none, migrationPaths.defaultLayoutDirs([...new Set(dirsOf)]));
+      if (why) fail(`migrations: ${why}`);
+    }
     if (migFiles) {
       const undeclared = migrationPaths.undeclaredMigrationDirs(migFiles, migCfg.paths);
       if (undeclared.length) {

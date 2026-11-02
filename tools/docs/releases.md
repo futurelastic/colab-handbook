@@ -136,7 +136,11 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
   migration changed (#671):** where nothing is declared in `migrations:` and neither default
   layout exists at the candidate (or its tree could not be read), the gate cannot see a
   migration at all, so it fails closed the same way — declare `migrations:`, or the final stays a
-  human act. A repo with no database has no layout to declare, so its final stays one. **A
+  human act. **A repo with no schema migrations at all says so (#672):** `migrations:` then,
+  indented, `none: <why>` — the gate reads it as *nothing to read*, so `--auto` releases again.
+  A `none` without its reason declares nothing, and a `none` beside a Laravel
+  `database/migrations/` or Prisma `prisma/migrations/` directory at the candidate is refused on
+  every cut (and failed by the audit): a repo that can have migrations is never waved through. **A
   schema the server applies inline is declarable too (#673):** a repo with no migrations
   directory — one `db.ts` that runs its `CREATE`/`ALTER TABLE` at start-up — declares the
   **file** (`migrations: [server/db.ts]`). Every change to it is then a migration: the grant

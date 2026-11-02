@@ -534,6 +534,33 @@ test('#671 (c): layout unread (null) or never passed -> ok:false, unread:true', 
   assert.strictEqual(seen.ok, true);
 });
 
+// ---- #672: `migrations: none` — "nothing to read", not "cannot see" ------------------------------
+
+test('#672: none + no layout + no paths -> ok:true naming the reason; the granted final is taken', () => {
+  const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: false, none: { reason: 'no database', dirs: [] } });
+  assert.strictEqual(v.ok, true);
+  assert.match(v.detail, /no schema migrations to read since v1\.2\.0: the repo declares `migrations: none` \(no database\)/);
+  assert.strictEqual(rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: v })).state, 'finalized');
+});
+
+test('#672 S1.migrations.11: none + a default layout -> refused, migrations changed or not (the #671 rule stays)', () => {
+  const none = { reason: 'no database', dirs: ['database/migrations/'] };
+  for (const paths of [[], ['database/migrations/2026_x.php']]) {
+    const v = rf.migrationGrantVerdict({ paths, grant: { issue: 12, ok: true }, since: 'v1.2.0', layout: true, none });
+    assert.strictEqual(v.ok, false, paths.join());
+    assert.match(v.detail, /database\/migrations\/ exists at the commit/);
+  }
+});
+
+test('#672: none + an unread tree -> still unread and refused; no none -> #671 unchanged', () => {
+  const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: null, none: { reason: 'no database' } });
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.unread, true);
+  const blind = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: false, none: null });
+  assert.strictEqual(blind.ok, false);
+  assert.match(blind.detail, /none: <why>/, 'the way out now names the none declaration');
+});
+
 test('#441: a grant that no longer resolves (reopened, unread) falls back to a human final; the human bar still works', () => {
   const reopened = { ok: false, ruledBy: null, detail: 'release.final-grant #77 does not grant an automatic final: its decision was reopened' };
   const v = rf.decide(facts({ policy: GRANTED, finalGrant: reopened, migrations: NO_MIGRATION }));

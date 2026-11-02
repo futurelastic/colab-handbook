@@ -862,6 +862,37 @@ test('#671 deploy-tag-fast: no migration layout declared or present -> the grant
   assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
 });
 
+// #672: a repo with no schema migrations declares `migrations: none` with its reason.
+const FAST_YML_NONE = FAST_YML_NO_LAYOUT.replace('stack: node\n', 'stack: node\nmigrations:\n  none: every record lives behind another service\'s API\n');
+
+test('#672 deploy-tag-fast --auto: `migrations: none` with a reason and no layout releases — the final is tagged', () => {
+  const fx = fastFixture({ projectYml: FAST_YML_NONE });
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.checks, null, 2));
+  assert.strictEqual(r.body.tag, 'v1.2.1');
+  const m = r.body.checks.find((c) => c.condition === 'migration-grant');
+  assert.match(m.detail, /declares `migrations: none` \(every record lives behind another service's API\)/);
+  const s = r.body.checks.find((c) => c.condition === 'schema-additive');
+  assert.match(s.detail, /not checked — the repo declares `migrations: none`/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1']);
+});
+
+test('#672 deploy-tag-fast: `migrations: none` without a reason declares nothing — still fails closed', () => {
+  const fx = fastFixture({ projectYml: FAST_YML_NO_LAYOUT.replace('stack: node\n', 'stack: node\nmigrations: none\n') });
+  const r = cut(fx, ['--auto']);
+  assertRefused(fx, r, 'migration-grant', /no migration was read since v1\.2\.0/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});
+
+test('#672 S1.migrations.11 deploy-tag-fast: `migrations: none` beside a Laravel migrations directory is refused on the cut', () => {
+  const fx = fastFixture({ projectYml: FAST_YML_NONE, files: { 'database/migrations/2026_01_01_000000_init.php': '<?php\n' } });
+  const r = cut(fx, ['--auto']);
+  assertRefused(fx, r, 'migration-grant', /database\/migrations\/ exists at the commit/);
+  assert.match(r.body.checks.find((c) => c.condition === 'schema-additive').detail, /never waved through/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});
+
 test('#446 deploy-tag-fast without --auto refuses — finals come only from the workflow', () => {
   const fx = fastFixture();
   const r = cut(fx);

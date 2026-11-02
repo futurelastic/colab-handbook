@@ -76,30 +76,57 @@ function entryCovers(p, f) {
  *                          lenient in the direction that makes the gate STRICTER (it still sees
  *                          the path the author obviously meant); the audit fails the shape.
  *
+ * - a `none:` block      → #672: the repo has no schema migrations, and `none:`'s value says why:
+ *                            migrations:
+ *                              none: every record lives behind another service's API
+ *                          `none` is then `{ reason }` and `paths` is []. A block, not a scalar plus a
+ *                          sibling key, because the reason is part of the declaration and must not
+ *                          drift from it (and tools/lib/yaml.js reads no flow maps). Without a reason —
+ *                          a bare `migrations: none`, an empty `none:`, a `none` list entry — it is a
+ *                          problem and `none` stays null: the grant gate keeps failing closed (#671).
+ *                          Whether a default layout contradicts it is the caller's to measure, at the
+ *                          commit (`noneContradiction`).
+ *
  * `paths` never includes the defaults — `isMigrationPath` always applies those itself. An entry
  * keeps its trailing `/` as written (#673): `a/b/` is a directory, `a/b` a file or a directory.
  */
 function parseMigrationPaths(doc) {
   const has = !!doc && Object.prototype.hasOwnProperty.call(doc, 'migrations');
   if (!has || doc.migrations === null || doc.migrations === undefined) {
-    return { declared: false, paths: [], problems: [], notes: [], reason: 'migrations absent — defaults only' };
+    return { declared: false, paths: [], none: null, problems: [], notes: [], reason: 'migrations absent — defaults only' };
   }
   const v = doc.migrations;
   const problems = [];
   const notes = [];
+  const NONE_FORM = 'write it as a block naming why — `migrations:` then, indented, `none: <why this repo has no schema migrations>`';
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const keys = Object.keys(v);
+    if (keys.length !== 1 || keys[0] !== 'none') {
+      return { declared: true, paths: [], none: null, problems: [`migrations is a block with ${keys.map((k) => `\`${k}\``).join(', ') || 'no key'} — the only block form is \`none: <reason>\` (#672); a layout is a list (e.g. [backend/migrations/])`], notes, reason: 'migrations malformed — defaults only' };
+    }
+    const why = typeof v.none === 'string' ? v.none.trim() : '';
+    if (!why) return { declared: true, paths: [], none: null, problems: [`migrations: none has no reason — ${NONE_FORM}; until it has one, it declares nothing`], notes, reason: 'migrations: none without a reason — defaults only' };
+    return { declared: true, paths: [], none: { reason: why }, problems, notes, reason: `migrations: none — ${why}` };
+  }
+  if (typeof v === 'string' && v.trim().toLowerCase() === 'none') {
+    return { declared: true, paths: [], none: null, problems: [`migrations: none needs its reason — ${NONE_FORM}; until it has one, it declares nothing`], notes, reason: 'migrations: none without a reason — defaults only' };
+  }
   let entries;
   if (Array.isArray(v)) entries = v;
   else if (typeof v === 'string' && v.trim() !== '') {
     entries = [v];
     problems.push(`migrations is a bare string ${JSON.stringify(v)}, expected a list (e.g. [${v.trim()}])`);
   } else {
-    return { declared: true, paths: [], problems: [`migrations is ${JSON.stringify(v)}, expected a list of repo-relative prefixes (e.g. [backend/migrations/])`], notes, reason: 'migrations malformed — defaults only' };
+    return { declared: true, paths: [], none: null, problems: [`migrations is ${JSON.stringify(v)}, expected a list of repo-relative prefixes (e.g. [backend/migrations/])`], notes, reason: 'migrations malformed — defaults only' };
   }
   if (Array.isArray(v) && v.length === 0) {
     notes.push('migrations is an empty list — omit the key for the defaults alone');
   }
   const paths = [];
   for (const raw of entries) {
+    // #672: `none` inside a list would be a path named `none` — and any declared path reads as a
+    // layout, so it would wave the fail-closed grant gate through. Refused, never kept as a path.
+    if (typeof raw === 'string' && raw.trim().toLowerCase() === 'none') { problems.push(`migrations: "none" in a list is not a path — to declare no schema migrations, ${NONE_FORM}`); continue; }
     const r = normalizeEntry(raw);
     if (r.problem) { problems.push(`migrations: ${r.problem}`); continue; }
     if (DEFAULT_MIGRATION_PATHS.includes(dirForm(r.path))) {
@@ -109,7 +136,33 @@ function parseMigrationPaths(doc) {
     if (paths.some((q) => dirForm(q) === dirForm(r.path))) { notes.push(`migrations: "${r.path}" is declared twice`); continue; }
     paths.push(r.path);
   }
-  return { declared: true, paths, problems, notes, reason: paths.length ? `migrations: [${paths.join(', ')}] + defaults` : 'defaults only' };
+  return { declared: true, paths, none: null, problems, notes, reason: paths.length ? `migrations: [${paths.join(', ')}] + defaults` : 'defaults only' };
+}
+
+/**
+ * #672's guard: a `migrations: none` contradicted by the tree. `none` is parseMigrationPaths().none;
+ * `defaultDirs` the default-layout directories found at the commit (`database/migrations/`,
+ * `prisma/migrations/`, anywhere), or null when the tree could not be read. Returns a refusal detail,
+ * or null when `none` stands (or there is no `none`). An unread tree is not "absent": the caller
+ * fails closed on it the way it already does — this answers only "does a layout exist".
+ */
+function noneContradiction(none, defaultDirs) {
+  if (!none || !defaultDirs || !defaultDirs.length) return null;
+  const dirs = defaultDirs.slice(0, 3).join(', ') + (defaultDirs.length > 3 ? ` (+${defaultDirs.length - 3} more)` : '');
+  return `the repo declares \`migrations: none\` (${none.reason}) but ${dirs} exists at the commit — a repo that can have migrations is never waved through: remove the \`none:\` block (the default layout is read without it), or remove the directory`;
+}
+
+/** The default-layout directories in a `git ls-tree -r -d --name-only` listing (#670, #672), outermost match per path. */
+function defaultLayoutDirs(dirs) {
+  const out = [];
+  for (const d of dirs || []) {
+    if (!d) continue;
+    const dd = `${d}/`;
+    for (const def of DEFAULT_MIGRATION_PATHS) {
+      if ((dd === def || dd.endsWith(`/${def}`)) && !out.includes(dd)) out.push(dd);
+    }
+  }
+  return out;
 }
 
 /** Union of several docs' declared prefixes (trunk's + the branch's) — the gate sees every one. */
@@ -162,4 +215,5 @@ function undeclaredMigrationDirs(files, declared) {
 
 module.exports = {
   DEFAULT_MIGRATION_PATHS, parseMigrationPaths, unionPaths, isMigrationPath, isDeclaredFile, undeclaredMigrationDirs,
+  noneContradiction, defaultLayoutDirs,
 };
