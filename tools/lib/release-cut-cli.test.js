@@ -809,7 +809,10 @@ const GRANT_RECORD = {
 
 /** A fast-route fixture: the gh stub also answers `issue view` from view-<N>.json and logs create/comment/close. */
 function fastFixture(opts = {}) {
-  const fx = fixture({ projectYml: FAST_YML, ...opts });
+  // #676: a declared path is a layout only where it exists — the declared db/migrations/ holds a file.
+  const yml = opts.projectYml || FAST_YML;
+  const layoutFiles = /db\/migrations\//.test(yml) ? { 'db/migrations/0001_init.sql': 'CREATE TABLE t (id int);\n' } : {};
+  const fx = fixture({ projectYml: FAST_YML, ...opts, files: { ...layoutFiles, ...(opts.files || {}) } });
   const ghPath = path.join(fx.bin, 'gh');
   const log = path.join(fx.root, 'gh-writes.log');
   const extra = [
@@ -890,6 +893,42 @@ test('#672 S1.migrations.11 deploy-tag-fast: `migrations: none` beside a Laravel
   const r = cut(fx, ['--auto']);
   assertRefused(fx, r, 'migration-grant', /database\/migrations\/ exists at the commit/);
   assert.match(r.body.checks.find((c) => c.condition === 'schema-additive').detail, /never waved through/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});
+
+// #676: a declared path counts as a layout only where it exists at the candidate.
+const FAST_YML_MISSING = FAST_YML_NO_LAYOUT.replace('stack: node\n', 'stack: node\nmigrations: [db/migratons/]\n');
+const FAST_YML_MIXED = FAST_YML_NO_LAYOUT.replace('stack: node\n', 'stack: node\nmigrations: [db/migrations/, db/migratons/]\n');
+
+test('#676 deploy-tag-fast: a declared path that does not exist, and no migrations directory -> refused naming the path, nothing tagged', () => {
+  const fx = fastFixture({ projectYml: FAST_YML_MISSING });
+  const r = cut(fx, ['--auto']);
+  assertRefused(fx, r, 'migration-grant', /no migration was read since v1\.2\.0: the declared `migrations:` path db\/migratons\/ does not exist at the candidate/);
+  assert.strictEqual(r.body.handoff, null, 'an empty list has nothing to grant');
+  assert.match(r.body.checks.find((c) => c.condition === 'schema-additive').detail, /^not checked — the declared `migrations:` path db\/migratons\/ does not exist/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});
+
+test('#676 deploy-tag-fast --auto: mixed present and missing paths read the present one, report the missing one, and release', () => {
+  const fx = fastFixture({ projectYml: FAST_YML_MIXED });
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.checks, null, 2));
+  assert.strictEqual(r.body.tag, 'v1.2.1');
+  const m = r.body.checks.find((c) => c.condition === 'migration-grant');
+  assert.match(m.detail, /^no migration file changed since v1\.2\.0 — declared `migrations:` path db\/migratons\/ does not exist at the candidate/);
+  const s = r.body.checks.find((c) => c.condition === 'schema-additive');
+  assert.match(s.detail, /\+ declared db\/migrations\/ \(/);
+  assert.match(s.detail, /db\/migratons\/ does not exist/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1']);
+});
+
+test('#676 deploy-tag-fast: mixed paths still read the present one — an ungranted migration under it refuses', () => {
+  const fx = fastFixture({ projectYml: FAST_YML_MIXED });
+  commit(fx, 'db/migrations/0002_add_x.sql', 'fix: add a column', 'ALTER TABLE t ADD COLUMN x int;\n');
+  const r = cut(fx, ['--auto']);
+  assertRefused(fx, r, 'migration-grant', /1 migration file\(s\) since v1\.2\.0 \(db\/migrations\/0002_add_x\.sql\)/);
+  assert.match(r.body.checks.find((c) => c.condition === 'migration-grant').detail, /db\/migratons\/ does not exist/);
   assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
 });
 

@@ -903,3 +903,42 @@ test('#673: a changed declared schema file is a migration — refused ungranted,
   assert.strictEqual(granted.ok, true);
   assert.strictEqual(rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: granted })).state, 'finalized');
 });
+
+// ---- #676: a declared path that does not exist at the candidate is not a layout -----------------
+
+test('#676: every declared path missing and no default layout -> refused, naming the path, never an unread', () => {
+  // measureCandidateConditions sets layout false here: no present declared path, no default directory
+  const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: false, missing: ['db/migratons/'] });
+  assert.strictEqual(v.ok, false);
+  assert.ok(!v.unread, 'a measured absence is a finding, as #671');
+  assert.match(v.detail, /^no migration was read since v1\.2\.0: the declared `migrations:` path db\/migratons\/ does not exist at the candidate/);
+  assert.match(v.detail, /a misspelled or stale entry is not a layout/);
+  assert.strictEqual((v.detail.match(/db\/migratons\//g) || []).length, 1, 'named once');
+  assert.strictEqual('missingNamed' in v, false, 'the internal marker never leaks');
+  const two = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: false, missing: ['a/', 'b.ts'] });
+  assert.match(two.detail, /paths a\/, b\.ts do not exist/);
+});
+
+test('#676: a declared path that exists and nothing changed still passes, as before', () => {
+  const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: true, missing: [] });
+  assert.deepStrictEqual(v, { ok: true, detail: 'no migration file changed since v1.2.0' });
+});
+
+test('#676: mixed present and missing -> the present one is read, the missing one reported, the verdict unchanged', () => {
+  const clean = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: true, missing: ['db/migratons/'] });
+  assert.strictEqual(clean.ok, true);
+  assert.match(clean.detail, /^no migration file changed since v1\.2\.0 — declared `migrations:` path db\/migratons\/ does not exist at the candidate/);
+  const ungranted = rf.migrationGrantVerdict({ paths: ['db/migrations/2.sql'], grant: null, since: 'v1.2.0', layout: true, missing: ['db/migratons/'] });
+  assert.strictEqual(ungranted.ok, false);
+  assert.match(ungranted.detail, /1 migration file\(s\) since v1\.2\.0 \(db\/migrations\/2\.sql\)/);
+  assert.match(ungranted.detail, /db\/migratons\/ does not exist/);
+  const granted = rf.migrationGrantVerdict({ paths: ['db/migrations/2.sql'], grant: { issue: 12, ok: true }, since: 'v1.2.0', layout: true, missing: ['db/migratons/'] });
+  assert.strictEqual(granted.ok, true);
+  assert.match(granted.detail, /db\/migratons\/ does not exist/);
+});
+
+test('#676: an unlistable tree with a declaration is unread (layout null), and the missing list is empty there', () => {
+  const v = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: null, missing: [] });
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.unread, true);
+});

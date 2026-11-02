@@ -301,3 +301,67 @@ test('#672: schemaVerdict — none + no layout is "not checked" naming the decla
   // unread tree: still the unread "not checked", never the none pass
   assert.match(rc.schemaVerdict([], 'v1.0.0', [], null, none).detail, /could not be read/);
 });
+
+// ---- #676: a declared path counts as a layout only where it exists ------------------------------
+
+test('#676: declaredPresence — a directory exists when a file sits under it, a file entry when it is that file or holds one', () => {
+  const files = ['backend/migrations/0001_init.sql', 'server/db.ts', 'api/sql/x/1.sql', 'f.txt'];
+  assert.deepStrictEqual(
+    mp.declaredPresence(['backend/migrations/', 'server/db.ts', 'api/sql', 'backend/migratons/', 'server/schema.ts', 'f'], files),
+    { present: ['backend/migrations/', 'server/db.ts', 'api/sql'], missing: ['backend/migratons/', 'server/schema.ts', 'f'] },
+  );
+  // a prefix of a name is not the name: `f` does not cover `f.txt`, `server/db` does not cover `server/db.ts`
+  assert.deepStrictEqual(mp.declaredPresence(['server/db'], files).missing, ['server/db']);
+  assert.deepStrictEqual(mp.declaredPresence([], files), { present: [], missing: [] });
+  // an unread tree is unread — never "everything missing"
+  assert.strictEqual(mp.declaredPresence(['backend/migrations/'], null), null);
+});
+
+test('#676: missingNote names every missing path and where it was measured; empty for none', () => {
+  assert.strictEqual(mp.missingNote([]), '');
+  assert.strictEqual(mp.missingNote(undefined), '');
+  assert.match(mp.missingNote(['db/migratons/']), /declared `migrations:` path db\/migratons\/ does not exist at the candidate/);
+  assert.match(mp.missingNote(['a/', 'b.ts'], 'HEAD'), /paths a\/, b\.ts do not exist at HEAD/);
+});
+
+test('#676: schemaVerdict — every declared path missing and no default layout is "not checked" naming them, never a ✓', () => {
+  const v = rc.schemaVerdict([], 'v1.0.0', ['db/migratons/'], false, null, ['db/migratons/']);
+  assert.strictEqual(v.ok, true, 'not checked refuses nothing — the grant gate is where it bites');
+  assert.strictEqual(v.checked, false);
+  assert.match(v.detail, /^not checked — the declared `migrations:` path db\/migratons\/ does not exist at the candidate/);
+  assert.strictEqual((v.detail.match(/db\/migratons\//g) || []).length, 1, 'named once, not twice');
+  // before #676 the same inputs (declared, nothing changed) printed a ✓ over the path
+  const before = rc.schemaVerdict([], 'v1.0.0', ['db/migratons/'], false, null);
+  assert.strictEqual(before.checked, undefined);
+});
+
+test('#676: schemaVerdict — mixed present and missing reads the present one and names the missing one', () => {
+  const declared = ['db/migrations/', 'db/migratons/'];
+  const v = rc.schemaVerdict([], 'v1.0.0', declared, false, null, ['db/migratons/']);
+  assert.strictEqual(v.ok, true);
+  assert.strictEqual(v.checked, undefined, 'a ✓ over what exists');
+  assert.match(v.detail, /\+ declared db\/migrations\/ \(/);
+  assert.doesNotMatch(v.detail, /\+ declared [^(]*db\/migratons\//, 'the missing path is not in the ✓ scope');
+  assert.match(v.detail, /db\/migratons\/ does not exist at the candidate/);
+  // a destructive change under the present path still refuses, and still names the missing one
+  const drop = rc.schemaVerdict([{ status: 'A', path: 'db/migrations/2.sql', content: 'DROP TABLE t;' }], 'v1.0.0', declared, false, null, ['db/migratons/']);
+  assert.strictEqual(drop.ok, false);
+  assert.match(drop.detail, /db\/migrations\/2\.sql:1: `DROP TABLE`/);
+  assert.match(drop.detail, /db\/migratons\/ does not exist/);
+});
+
+test('#676: schemaVerdict — a missing declared path beside a default layout is a ✓ over the defaults, naming the missing path', () => {
+  const v = rc.schemaVerdict([], 'v1.0.0', ['db/migratons/'], true, null, ['db/migratons/']);
+  assert.strictEqual(v.ok, true);
+  assert.strictEqual(v.checked, undefined);
+  assert.match(v.detail, /^no migration file changed since v1\.0\.0 \(Laravel database\/migrations \+ Prisma prisma\/migrations — other layouts/);
+  assert.match(v.detail, /db\/migratons\/ does not exist at the candidate/);
+});
+
+test('#676: schemaVerdict — an unlistable tree (missing null, layout null) with a declaration is "not checked", never a ✓', () => {
+  const v = rc.schemaVerdict([], 'v1.0.0', ['db/migrations/'], null, null, null);
+  assert.strictEqual(v.checked, false);
+  assert.match(v.detail, /could not be read for a migration layout/);
+  // a caller that does not measure presence (undefined) reads as before
+  assert.strictEqual(rc.schemaVerdict([], 'v1.0.0', ['db/migrations/'], false, null).checked, undefined);
+});
