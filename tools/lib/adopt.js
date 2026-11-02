@@ -280,7 +280,7 @@ function detectMigrationCandidates(cfg, trackedFiles) {
     if ([...dirs].some((d) => dir.startsWith(d))) continue;
     dirs.add(dir);
   }
-  return { declared: parsed.declared ? declared : null, candidates: [...dirs].sort() };
+  return { declared: parsed.declared ? declared : null, none: parsed.none, candidates: [...dirs].sort() };
 }
 
 const MIGRATION_CANDIDATES_SHOWN = 6;
@@ -288,6 +288,10 @@ const MIGRATION_CANDIDATES_SHOWN = 6;
 /** The step-2 remainder line about `migrations:` — adopt never asks it, so it always reports it. */
 function migrationsStepText(m) {
   const tail = 'project.schema.md `migrations`; `colab adopt` does not ask it, step 2';
+  if (m && m.none) {
+    const extra = m.candidates.length ? ` — but these look like migrations, check: ${listShort(m.candidates)}` : '';
+    return `\`migrations: none\` declared (${m.none.reason})${extra} — ${tail}`;
+  }
   if (m && m.declared && m.declared.length) {
     const extra = m.candidates.length ? ` — still uncovered, check: ${listShort(m.candidates)}` : '';
     return `\`migrations:\` declared (${m.declared.join(', ')})${extra} — ${tail}`;

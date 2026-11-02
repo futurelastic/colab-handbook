@@ -343,6 +343,12 @@ test('#449: detectMigrationCandidates — uncovered migrations/ and *.sql dirs, 
   assert.deepStrictEqual(d.candidates, ['backend/migrations/', 'db/']);
 });
 
+test('#672: detectMigrationCandidates carries a `none:` declaration through to the step-2 line', () => {
+  const r = detectMigrationCandidates({ migrations: { none: 'no database' } }, ['README.md']);
+  assert.deepStrictEqual(r.none, { reason: 'no database' });
+  assert.deepStrictEqual(r.declared, []);
+});
+
 test('#449: detectUpstreamAgentFiles lists .claude/skills and .claude/commands entries, dotfiles skipped', () => {
   const r = detectUpstreamAgentFiles(io({ dirs: { '.claude/skills': ['spec-flow', '.DS_Store'], '.claude/commands': ['fix.md'] } }));
   assert.deepStrictEqual(r, ['.claude/skills/spec-flow', '.claude/commands/fix.md']);

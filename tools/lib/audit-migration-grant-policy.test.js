@@ -144,3 +144,30 @@ test('#596: the source is reported — repo when declared, undeclared otherwise 
   assert.strictEqual(audit(fixture(`${BASE}migration-grant: human\n`)).migrationGrantSource, 'repo');
   assert.strictEqual(audit(fixture(`${BASE}migration-grant: reviewer\n`, { '.github/workflows/ci.yml': RT_JOB })).migrationGrantSource, 'repo');
 });
+
+// ---- #672: `migrations: none` — read where the declaration is read --------------------------------
+
+const migs = (r) => ({ fails: r.fails.filter((t) => /^migrations/.test(t)), warns: r.warns.filter((t) => /^migrations/.test(t)) });
+
+test('#672: a `none:` block with a reason and no layout is clean — the audit\'s reader takes the block', () => {
+  const r = audit(fixture(`${BASE}migrations:\n  none: every record lives behind another service's API\n`));
+  assert.deepStrictEqual(migs(r), { fails: [], warns: [] });
+  assert.deepStrictEqual(r.fails.filter((t) => /nested\/indented/.test(t)), []);
+});
+
+test('#672: `none` without a reason fails', () => {
+  for (const yml of ['migrations: none\n', 'migrations:\n  none: ""\n']) {
+    const r = audit(fixture(`${BASE}${yml}`));
+    assert.match(migs(r).fails.join('\n'), /reason/, yml);
+  }
+});
+
+test('#672 S1.migrations.11: `none` beside a Laravel or Prisma migrations directory fails, naming the directory', () => {
+  const r = audit(fixture(`${BASE}migrations:\n  none: no database\n`, { 'api/prisma/migrations/1_init/migration.sql': 'CREATE TABLE a (id int);\n' }));
+  assert.match(migs(r).fails.join('\n'), /api\/prisma\/migrations\/ exists at the commit/);
+});
+
+test('#672: the block-list form of migrations: still reads as a list', () => {
+  const r = audit(fixture(`${BASE}migrations:\n  - backend/migrations/\n`, { 'backend/migrations/1.sql': 'x\n' }));
+  assert.deepStrictEqual(migs(r), { fails: [], warns: [] });
+});

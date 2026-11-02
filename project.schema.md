@@ -585,10 +585,9 @@ Laravel `database/migrations/` and Prisma `prisma/migrations/`, both matched any
 and `colab release cut`'s `schema-additive` check read this one list (`tools/lib/migration-paths.js`); neither keeps a regex of its own.
 **Absent changes nothing** — a repo that declares nothing is gated exactly as before; where neither default layout exists
 either, `schema-additive` read nothing, so it prints **not checked** — never a green pass, never a refusal (#670).
-**[Hard — gate: colab release finalize / release cut refuse]** The [`final-grant`](#release--optional) migration gate **fails closed** there instead: the final is a human act until a layout is declared or exists (#671).
+**[Hard — gate: colab release finalize / release cut refuse]** The [`final-grant`](#release--optional) migration gate **fails closed** there instead: the final is a human act until a layout is declared or exists, or the repo declares it has none (#671, #672).
 
-Why `migrations` exists, with the measurement: [ADR
-539](docs/adr/539-schema-migrations-and-grants-rationale.md).
+Why `migrations` exists, with the measurement: [ADR 539](docs/adr/539-schema-migrations-and-grants-rationale.md).
 
 - **Entries are repo-relative directories or files**, from the repo root: `a/` is a directory, `a` that path or anything under it — so `server/db.ts` declares a schema the server applies inline (#673, [ADR 539](docs/adr/539-schema-migrations-and-grants-rationale.md)); an absolute path, a `..`, a glob, or the repo root
   itself is a finding — a path match would silently mean something other than what was written.
@@ -598,10 +597,9 @@ Why `migrations` exists, with the measurement: [ADR
 - **[Hard — gate: colab ship refuses]** **Ship reads trunk's declaration and the branch's, unioned.** A branch that adds its own
   declaration is gated by it; a branch that deletes trunk's is still gated by trunk's.
 - **A declared schema FILE is read by what its change added** — an edit is never "rewritten"; an added `DROP`/`RENAME`/`ALTER COLUMN` is refused at `file:line`, a deleted or unread file fails closed, and any change is a migration to the ship gate and the grant (#673).
-- **`release cut` reads `.php`/`.sql` under a declared prefix** with the same destructive
-  heuristic as the defaults. A declared migration in any other format (`.mjs`, `.go`) is *named*
-  in the check's detail — the heuristic cannot read it, so the §6 judgement owes it a human read —
-  never folded silently into "none destructive".
+- **`release cut` reads `.php`/`.sql` under a declared prefix** with the same destructive heuristic as the defaults. A declared migration in any other format (`.mjs`, `.go`) is *named* in the check's detail — the heuristic cannot read it, so the §6 judgement owes it a human read — never folded silently into "none destructive".
+- **No schema migrations at all is declared with its reason** — `migrations:` then, indented, `none: <why>` (#672): the grant gate reads *nothing to read*, not *cannot see*, and `schema-additive` prints **not checked** naming the reason. Without a reason (a bare `migrations: none`, an empty `none:`, a `none` list entry) it is a finding and declares nothing; it counts only as committed at the candidate, and only where no path is declared.
+  **[Hard S1.migrations.11 — refuse: a declaration of no schema migrations in a repo where a Laravel or Prisma migrations directory exists]** — at the commit, on every cut and in the audit: a repo that can have migrations is never waved through.
 - **The audit reports a tracked `*/migrations/` directory no rule covers** (advisory, local
   audits only): the likely undeclared layout. A `docs/migrations/` upgrade guide is a false
   positive only a human can tell apart; committed dependency trees (`node_modules/`, `vendor/`)

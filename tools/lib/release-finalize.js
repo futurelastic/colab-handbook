@@ -61,6 +61,7 @@
  */
 
 const releaseTag = require('./release-tag');
+const migrationPaths = require('./migration-paths');
 
 // The tracking marker and the event marker are wire format: codec/release.js (#498, epic #496),
 // re-exported below under the names this module always had. VERSION_RE is the codec's, so a
@@ -564,17 +565,25 @@ function regressionVerdict(edges, { periodStart }) {
  * true = a `migrations:` prefix is declared or a default layout (Laravel database/migrations/,
  * Prisma prisma/migrations/) exists in the tree; false = neither, so an empty `paths` is "nothing
  * read", not "nothing changed"; null/absent = the tree could not be read. An empty `paths` passes
- * only with a layout. Returns { ok, detail } (+ unread: true when something could not be read).
+ * only with a layout — or (#672) with `none`: the candidate's committed `migrations: none` block
+ * (`{ reason, dirs? }` — `dirs` the default-layout directories found, for the refusal), honoured only where no default layout exists (`layout` false). With a layout there
+ * (`layout` true) the declaration is a contradiction and the gate refuses, migrations changed or not:
+ * a repo that can have migrations is never waved through; an unread tree still fails closed.
+ * Returns { ok, detail } (+ unread: true when something could not be read).
  */
-function migrationGrantVerdict({ paths, grant, since, layout }) {
+function migrationGrantVerdict({ paths, grant, since, layout, none }) {
   if (paths === null || paths === undefined) return { ok: false, unread: true, detail: 'the migration files since the last final could not be read — an unread migration is not an absent one' };
+  if (none) {
+    if (layout === true) return { ok: false, detail: `${migrationPaths.noneContradiction(none, none.dirs && none.dirs.length ? none.dirs : ['a Laravel database/migrations/ or Prisma prisma/migrations/ directory'])} — then the usual migration grant applies (COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch <version>)` };
+    if (layout === false && !paths.length) return { ok: true, detail: `no schema migrations to read since ${since || 'the first commit'}: the repo declares \`migrations: none\` (${none.reason}), and no Laravel or Prisma migrations directory exists at the candidate` };
+  }
   if (!paths.length) {
     // #671: fail closed where nothing could have been seen — an automatically deployed final never
     // reads "nothing read" as "nothing changed". The way out is named in the detail, never implied —
     // route-neutral: release finalize prints its own human command, and route deploy-tag-fast has none.
     // #673: a schema applied inline by the server's own code is declarable too — as the FILE — and the
     // detail names the grant command that clears its next change, so no one reaches for a raw tag.
-    const wayOut = 'declare where the schema lives as `migrations:` in .github/project.yml (project.schema.md `migrations`) — a migration directory (`migrations: [backend/migrations/]`) or, for a schema the server applies inline, the file itself (`migrations: [server/db.ts]`); a change under it then clears the usual way (COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch <version>). Until then the final is a human act, not the grant\'s — and a repo with no database has no layout to declare, so its final stays one';
+    const wayOut = 'declare where the schema lives as `migrations:` in .github/project.yml (project.schema.md `migrations`) — a migration directory (`migrations: [backend/migrations/]`) or, for a schema the server applies inline, the file itself (`migrations: [server/db.ts]`); a change under it then clears the usual way (COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch <version>). A repo with no schema migrations at all declares that instead, with its reason (`migrations:` then `none: <why>`, #672). Until then the final is a human act, not the grant\'s';
     if (layout === false) return { ok: false, detail: `no migration was read since ${since || 'the first commit'}: no \`migrations:\` declared and no Laravel database/migrations/ or Prisma prisma/migrations/ directory at the candidate, so a migration elsewhere would be invisible — ${wayOut}` };
     if (layout !== true) return { ok: false, unread: true, detail: `the tree at the candidate could not be read for a migration layout, so an empty migration list since ${since || 'the first commit'} is not evidence that none changed — ${wayOut}` };
     return { ok: true, detail: `no migration file changed since ${since || 'the first commit'}` };

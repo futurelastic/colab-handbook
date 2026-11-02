@@ -925,9 +925,14 @@ function laravelDestructive(up, addedBefore) {
  *     is destructive (a destructive read file is still ✗).
  * `layout` = does `database/migrations/` or `prisma/migrations/` exist in the tree at the candidate:
  * true / false / null (the tree could not be read — never "absent"). Undefined = a caller that does
- * not measure it, read as today: present.
+ * not measure it, read as today: present. `none` (#672) = the candidate's `migrations: none` block
+ * (`{ reason, dirs? }`), or absent.
  */
-function schemaVerdict(changes, since, declared, layout) {
+function schemaVerdict(changes, since, declared, layout, none) {
+  // #672: the candidate's `migrations: none` block. Contradicted by a default layout → refused on every
+  // cut, whatever changed; otherwise, with nothing changed, "not checked" naming the declaration —
+  // never a ✓ (nothing was read), never the "declare a layout" advice (the repo already answered).
+  if (none && layout === true) return { ok: false, detail: migrationPaths.noneContradiction(none, none.dirs && none.dirs.length ? none.dirs : ['a Laravel database/migrations/ or Prisma prisma/migrations/ directory']) };
   const inPaths = (changes || []).filter((c) => isMigrationPath(c.path, declared));
   // #673: a declared schema FILE (an inline schema the server applies itself) is read by the lines
   // its change added — never "unread", and an edit is never "an existing migration was rewritten".
@@ -946,9 +951,10 @@ function schemaVerdict(changes, since, declared, layout) {
   const hasDeclared = !!(declared && declared.length);
   const notChecked = (why) => ({ ok: true, checked: false, detail: `not checked — ${why}` });
   const unreadWhy = () => `${unread.length} declared migration file(s) changed since ${since} in a format this check does not read (php/sql only) — a human reads them before the final: ${unread.map((c) => c.path).join(', ')}`;
-  const howToDeclare = 'a repo whose migrations live elsewhere declares their directory as `migrations:` in .github/project.yml (project.schema.md `migrations`); a repo with no database has nothing to declare';
+  const howToDeclare = 'a repo whose migrations live elsewhere declares their directory as `migrations:` in .github/project.yml (project.schema.md `migrations`); a repo with no schema migrations declares `migrations:` then `none: <why>` (#672)';
   if (!migrations.length && !schemaFiles.length) {
     if (unread.length) return notChecked(unreadWhy());
+    if (none && layout === false) return notChecked(`the repo declares \`migrations: none\` (${none.reason}) and no Laravel or Prisma migrations directory exists at the candidate, so there is no schema to read`);
     if (!hasDeclared && layout === false) return notChecked(`no Laravel database/migrations/ or Prisma prisma/migrations/ directory at the candidate and no \`migrations:\` declared, so no migration was read — ${howToDeclare}`);
     if (!hasDeclared && layout === null) return notChecked(`the tree at the candidate could not be read for a migration layout, so no migration was read — ${howToDeclare}`);
     return { ok: true, detail: `no migration file changed since ${since} (${scope})` };

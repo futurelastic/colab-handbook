@@ -2822,6 +2822,7 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.migrations.08 | default |  | `release cut` reads `.php`/`.sql` under a declared prefix; any other format is named in the check detail, never folded into none destructive. | `release cut` reads `.php`/`.sql` under a declared prefix | project.schema.md | — |
 | S1.migrations.09 | default |  | The audit reports a tracked `*/migrations/` directory no rule covers (advisory, local audits only). | The audit reports a tracked `*/migrations/` directory no rule covers | project.schema.md | — |
 | S1.migrations.10 | default |  | A declared schema file is read by the SQL its change added; an added `DROP`, `RENAME` or `ALTER COLUMN` is refused with `file:line`, and a deleted or unreadable file fails closed. | A declared schema FILE is read by what its change added | project.schema.md | #673 |
+| S1.migrations.11 | hard | tools/lib/migration-paths.js::function noneContradiction ; tools/lib/release-finalize.js::migrationPaths.noneContradiction ; audit/audit.mjs::migrationPaths.noneContradiction | A repo with no schema migrations declares `none:` with its reason; the declaration is refused wherever a Laravel or Prisma migrations directory exists at the commit, on every cut and in the audit. | No schema migrations at all is declared with its reason | project.schema.md | #672 |
 
 ### `migration-grant`
 

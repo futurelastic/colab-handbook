@@ -236,3 +236,68 @@ test('#673 schemaVerdict: the declared file fails closed — deleted, or its add
   assert.strictEqual(hist.ok, false);
   assert.match(hist.detail, /an existing migration was rewritten/);
 });
+
+// ---- #672: `migrations: none` — a repo with no schema migrations says so, with its reason ---------
+
+test('#672: a `none:` block with a reason declares no migrations — paths empty, none carries the reason', () => {
+  const r = mp.parseMigrationPaths({ migrations: { none: '  every record lives behind another service\'s API ' } });
+  assert.strictEqual(r.declared, true);
+  assert.deepStrictEqual(r.paths, []);
+  assert.deepStrictEqual(r.none, { reason: 'every record lives behind another service\'s API' });
+  assert.deepStrictEqual(r.problems, []);
+  // reads through the real project.yml parser — block form, the only form tools/lib/yaml.js can carry
+  const yaml = require('./yaml');
+  const doc = yaml.parse('trunk: main\nmigrations:\n  none: data lives in an upstream API\n');
+  assert.deepStrictEqual(mp.parseMigrationPaths(doc).none, { reason: 'data lives in an upstream API' });
+});
+
+test('#672: `none` without a reason is a problem and declares nothing — the gate keeps failing closed', () => {
+  for (const v of ['none', ' None ', { none: '' }, { none: '   ' }, { none: null }]) {
+    const r = mp.parseMigrationPaths({ migrations: v });
+    assert.strictEqual(r.none, null, JSON.stringify(v));
+    assert.deepStrictEqual(r.paths, [], `${JSON.stringify(v)} is never read as a path named none`);
+    assert.strictEqual(r.problems.length, 1, JSON.stringify(v));
+    assert.match(r.problems[0], /reason/);
+    assert.match(r.problems[0], /none: <why/);
+  }
+});
+
+test('#672: `none` inside a list is refused, never kept as a path (a path would read as a layout)', () => {
+  const r = mp.parseMigrationPaths({ migrations: ['none', 'db/'] });
+  assert.deepStrictEqual(r.paths, ['db/']);
+  assert.strictEqual(r.none, null);
+  assert.match(r.problems.join('\n'), /"none" in a list is not a path/);
+});
+
+test('#672: a block with any other key is malformed', () => {
+  const r = mp.parseMigrationPaths({ migrations: { none: 'x', paths: 'y' } });
+  assert.strictEqual(r.none, null);
+  assert.match(r.problems[0], /only block form is `none: <reason>`/);
+});
+
+test('#672: defaultLayoutDirs finds Laravel / Prisma directories anywhere; noneContradiction names them', () => {
+  const dirs = mp.defaultLayoutDirs(['app', 'database', 'database/migrations', 'database/migrations/old', 'api/prisma/migrations', 'x/migrations', '']);
+  assert.deepStrictEqual(dirs, ['database/migrations/', 'api/prisma/migrations/']);
+  const none = { reason: 'no db' };
+  assert.strictEqual(mp.noneContradiction(none, []), null);
+  assert.strictEqual(mp.noneContradiction(none, null), null, 'unread is the caller\'s to fail closed on');
+  assert.strictEqual(mp.noneContradiction(null, dirs), null);
+  const why = mp.noneContradiction(none, dirs);
+  assert.match(why, /`migrations: none` \(no db\)/);
+  assert.match(why, /database\/migrations\//);
+  assert.match(why, /never waved through/);
+});
+
+test('#672: schemaVerdict — none + no layout is "not checked" naming the declaration; none + a layout refuses', () => {
+  const none = { reason: 'data lives in an upstream API', dirs: [] };
+  const v = rc.schemaVerdict([], 'v1.0.0', [], false, none);
+  assert.strictEqual(v.ok, true);
+  assert.strictEqual(v.checked, false);
+  assert.match(v.detail, /declares `migrations: none` \(data lives in an upstream API\)/);
+  assert.doesNotMatch(v.detail, /declares their directory/, 'the repo already answered — no "declare a layout" advice');
+  const bad = rc.schemaVerdict([], 'v1.0.0', [], true, { ...none, dirs: ['database/migrations/'] });
+  assert.strictEqual(bad.ok, false, 'the guard bites on every cut, whatever changed');
+  assert.match(bad.detail, /database\/migrations\/ exists at the commit/);
+  // unread tree: still the unread "not checked", never the none pass
+  assert.match(rc.schemaVerdict([], 'v1.0.0', [], null, none).detail, /could not be read/);
+});

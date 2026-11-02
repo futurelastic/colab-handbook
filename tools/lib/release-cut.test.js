@@ -811,6 +811,21 @@ test('#671 the fast route refuses a final where no migration layout could be see
   assert.strictEqual(rc.decide(fastFacts({ migrations: seen })).ok, true);
 });
 
+test('#672 the fast route releases on --auto when the repo declares `migrations: none` with a reason and has no layout', () => {
+  const rf = require('./release-finalize');
+  const none = { reason: 'every record lives behind another service', dirs: [] };
+  const declared = { ...rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: false, none }), paths: [] };
+  const v = rc.decide(fastFacts({ migrations: declared }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v.checks.filter((c) => !c.ok)));
+  const m = v.checks.find((c) => c.condition === 'migration-grant');
+  assert.match(m.detail, /declares `migrations: none` \(every record lives behind another service\)/);
+  // the guard: the same declaration beside a Laravel or Prisma directory is refused
+  const contradicted = { ...rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0', layout: true, none: { ...none, dirs: ['prisma/migrations/'] } }), paths: [] };
+  const r = rc.decide(fastFacts({ migrations: contradicted }));
+  assert.strictEqual(r.ok, false);
+  assert.match(refusal(r, 'migration-grant').detail, /prisma\/migrations\/ exists at the commit/);
+});
+
 test('#446 spacing and an already-final head are no-ops, not refusals', () => {
   const sp = rc.decide(fastFacts({ spacing: rc.spacingVerdict({ finals: [{ name: 'v1.2.0', date: '2026-10-03T11:30:00Z' }], spacingHours: 1, now: NOW }) }));
   assert.strictEqual(sp.ok, false);
