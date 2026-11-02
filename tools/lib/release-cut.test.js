@@ -214,6 +214,71 @@ test('schema: an additive Laravel migration passes — a drop in down() is the o
   assert.strictEqual(v.ok, true, v.detail);
 });
 
+// #674: the measured shape — add nullable, backfill, then tighten THAT column with ->change().
+const LARAVEL_ADD_THEN_TIGHTEN = `<?php
+return new class extends Migration {
+  public function up(): void {
+    Schema::table('engines', function (Blueprint $table) {
+      $table->string('engine_key', 64)->nullable()->after('id');
+    });
+    DB::table('engines')->orderBy('id')->each(function ($row) {
+      DB::table('engines')->where('id', $row->id)->update(['engine_key' => 'k' . $row->id]);
+    });
+    Schema::table('engines', function (Blueprint $table) {
+      $table->string('engine_key', 64)->nullable(false)->unique()->change();
+    });
+  }
+  public function down(): void { Schema::table('engines', function (Blueprint $table) { $table->dropColumn('engine_key'); }); }
+};`;
+const laravelChange = (table, col) => `<?php
+return new class extends Migration {
+  public function up(): void { Schema::table('${table}', function (Blueprint $t) { $t->string('${col}', 128)->nullable(false)->change(); }); }
+  public function down(): void {}
+};`;
+
+test('#674 schema: ->change() on a column added earlier in the same migration is additive', () => {
+  const v = rc.schemaVerdict([{ status: 'A', path: 'database/migrations/2026_11_01_000000_add_engine_key.php', content: LARAVEL_ADD_THEN_TIGHTEN }], 'v1.2.0');
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.match(v.detail, /none destructive/);
+});
+
+test('#674 schema: ->change() on a column an earlier ADDED migration created is additive; run order decides', () => {
+  const add = { status: 'A', path: 'database/migrations/2026_11_01_000000_add_nick.php', content: LARAVEL_ADD };
+  const later = { status: 'A', path: 'database/migrations/2026_11_02_000000_tighten_nick.php', content: laravelChange('users', 'nick') };
+  assert.strictEqual(rc.schemaVerdict([later, add], 'v1').ok, true);
+  // the change runs BEFORE the add: the column it rewrites is one the last final shipped
+  const earlier = { status: 'A', path: 'database/migrations/2026_10_31_000000_tighten_nick.php', content: laravelChange('users', 'nick') };
+  assert.match(rc.schemaVerdict([earlier, add], 'v1').detail, /->change\(/);
+});
+
+test('#674 schema: ->change() on a pre-existing column still refuses — other column, other table, or a non-column call', () => {
+  // a column nothing since the tag added
+  assert.match(rc.schemaVerdict([{ status: 'A', path: 'database/migrations/x.php', content: laravelChange('users', 'email') }], 'v1').detail, /->change\(/);
+  // same column name, different table
+  const add = { status: 'A', path: 'database/migrations/2026_11_01_a.php', content: LARAVEL_ADD };
+  assert.strictEqual(rc.schemaVerdict([add, { status: 'A', path: 'database/migrations/2026_11_02_b.php', content: laravelChange('accounts', 'nick') }], 'v1').ok, false);
+  // a change BEFORE the add in the same file, and an index call that is not a column add
+  const before = `<?php
+return new class extends Migration {
+  public function up(): void { Schema::table('users', function (Blueprint $t) {
+    $t->string('nick', 9)->change();
+    $t->string('nick')->nullable();
+  }); }
+};`;
+  assert.strictEqual(rc.schemaVerdict([{ status: 'A', path: 'database/migrations/y.php', content: before }], 'v1').ok, false);
+  const indexOnly = `<?php
+return new class extends Migration {
+  public function up(): void { Schema::table('users', function (Blueprint $t) {
+    $t->unique('email');
+    $t->string('email', 9)->change();
+  }); }
+};`;
+  assert.strictEqual(rc.schemaVerdict([{ status: 'A', path: 'database/migrations/z.php', content: indexOnly }], 'v1').ok, false);
+  // a real drop next to an exempt change is still found
+  const withDrop = LARAVEL_ADD_THEN_TIGHTEN.replace("->unique()->change();", "->unique()->change();\n      $table->dropColumn('legacy');");
+  assert.match(rc.schemaVerdict([{ status: 'A', path: 'database/migrations/w.php', content: withDrop }], 'v1').detail, /dropColumn/);
+});
+
 test('schema: a drop in up(), an edited migration, destructive Prisma SQL — each refuses', () => {
   assert.match(rc.schemaVerdict([{ status: 'A', path: 'database/migrations/x.php', content: LARAVEL_DROP }], 'v1').detail, /dropColumn/);
   assert.match(rc.schemaVerdict([{ status: 'M', path: 'database/migrations/old.php' }], 'v1').detail, /edited/);

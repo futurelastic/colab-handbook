@@ -845,6 +845,65 @@ function laravelUpBody(text) {
   return down === -1 ? text.slice(up) : text.slice(up, up + down);
 }
 
+// #674: Laravel Blueprint methods that ADD a column. An allowlist, so it fails closed: a statement
+// whose first call is not on it (`unique('x')`, `index('x')`, a macro) never counts as adding `x`.
+const LARAVEL_COLUMN_TYPES = new Set(('bigIncrements bigInteger binary boolean char dateTimeTz dateTime date ' +
+  'decimal double enum float foreignId foreignIdFor foreignUlid foreignUuid geography geometry id increments ' +
+  'integer ipAddress json jsonb longText macAddress mediumIncrements mediumInteger mediumText morphs ' +
+  'nullableMorphs nullableTimestamps nullableUlidMorphs nullableUuidMorphs rememberToken set smallIncrements ' +
+  'smallInteger softDeletesTz softDeletes string text timeTz time timestampTz timestamp timestampsTz timestamps ' +
+  'tinyIncrements tinyInteger tinyText unsignedBigInteger unsignedDecimal unsignedInteger unsignedMediumInteger ' +
+  'unsignedSmallInteger unsignedTinyInteger ulidMorphs uuidMorphs ulid uuid vector year').split(' '));
+const LARAVEL_SCHEMA_TABLE = /Schema\s*::\s*(?:connection\s*\([^)]*\)\s*->\s*)?(?:create|table)\s*\(\s*['"]([^'"]+)['"]/g;
+
+/**
+ * #674: the columns one Laravel `up()` body adds and changes, in source order —
+ * [{ kind: 'add'|'change', table, column, index }], `index` = the `->change(` offset for a change.
+ * A statement is `;`-delimited; its column is the first `$var->type('name'` in it, with `type` on
+ * the allowlist above; its table is the last `Schema::create|table('<table>'` before it. A statement
+ * with no table or no readable column is not listed — so a `->change()` in it stays destructive.
+ */
+function laravelColumnEvents(up) {
+  const tables = [...up.matchAll(LARAVEL_SCHEMA_TABLE)].map((m) => ({ at: m.index, table: m[1] }));
+  const tableAt = (pos) => { let t = null; for (const s of tables) { if (s.at < pos) t = s.table; else break; } return t; };
+  const events = [];
+  let start = 0;
+  for (const stmt of up.split(';')) {
+    const col = /\$\w+\s*->\s*(\w+)\s*\(\s*['"]([^'"]+)['"]/.exec(stmt);
+    const table = col && tableAt(start + col.index);
+    if (col && table && LARAVEL_COLUMN_TYPES.has(col[1])) {
+      const ch = /->\s*change\s*\(/.exec(stmt);
+      events.push(ch ? { kind: 'change', table, column: col[2], index: start + ch.index } : { kind: 'add', table, column: col[2] });
+    }
+    start += stmt.length + 1;
+  }
+  return events;
+}
+
+/**
+ * #674: the first destructive call in a Laravel `up()` — the RegExp match — or null. A `->change()` on
+ * a column this release itself added — earlier in the same file, or in an ADDED migration that runs
+ * before it (`addedBefore`, a Set of `table.column`) — rewrites nothing the last final shipped, so it is
+ * not destructive: add nullable, backfill, then tighten the same column `->nullable(false)->change()`
+ * is the ordinary safe shape. A change on any other column still is.
+ */
+function laravelDestructive(up, addedBefore) {
+  const events = laravelColumnEvents(up);
+  const fresh = new Set(addedBefore || []);
+  const exempt = new Set();
+  for (const e of events) {
+    const key = `${e.table}.${e.column}`;
+    if (e.kind === 'add') fresh.add(key);
+    else if (fresh.has(key)) exempt.add(e.index);
+  }
+  const re = new RegExp(LARAVEL_DESTRUCTIVE.source, 'g');
+  for (const m of up.matchAll(re)) {
+    if (/->\s*change/.test(m[0]) && exempt.has(m.index)) continue;
+    return m;
+  }
+  return null;
+}
+
 /**
  * `changes` is [{ status, path, content }] for every changed path since the last final tag —
  * `status` is git's --name-status letter (A/M/D/R…), `content` the file at the candidate commit
@@ -901,12 +960,19 @@ function schemaVerdict(changes, since, declared, layout, none) {
     return { ok: true, detail: `no migration file changed since ${since} (${scope})` };
   }
   const findings = [];
+  // #674: columns added by every ADDED Laravel migration, keyed by run order (Laravel runs by file
+  // name), so a `->change()` on a column an earlier added migration created is read as this release's.
+  const base = (p) => p.slice(p.lastIndexOf('/') + 1);
+  const laravelAdds = migrations
+    .filter((c) => String(c.status || '').charAt(0) === 'A' && c.path.endsWith('.php'))
+    .map((c) => ({ name: base(c.path), adds: laravelColumnEvents(laravelUpBody(String(c.content || ''))).filter((e) => e.kind === 'add').map((e) => `${e.table}.${e.column}`) }));
+  const addedBefore = (p) => laravelAdds.filter((a) => a.name < base(p)).flatMap((a) => a.adds);
   for (const c of migrations) {
     const st = String(c.status || '').charAt(0);
     if (st !== 'A') { findings.push(`${c.path}: ${st === 'D' ? 'deleted' : st === 'R' ? 'renamed' : 'edited'} — an existing migration was rewritten`); continue; }
     const text = String(c.content || '');
     if (c.path.endsWith('.php')) {
-      const m = LARAVEL_DESTRUCTIVE.exec(laravelUpBody(text));
+      const m = laravelDestructive(laravelUpBody(text), addedBefore(c.path));
       if (m) findings.push(`${c.path}: \`${m[0].trim()}\` in up()`);
     } else {
       if (SQL_DOWN_FILE.test(c.path)) continue;

@@ -56,6 +56,11 @@ The rule: [CONVENTIONS.md §6, the release contract](../../CONVENTIONS.md#6-rele
 3. **[Hard — gate: colab release cut refuses]** **Every schema change since the last final tag is additive**
    ([*Switched epics*](../../CONVENTIONS.md#switched-epics--concurrent-unfinished-features-336), rule 5). A
    release carrying a destructive one is not a candidate an agent cuts; a human decides it.
+   A Laravel `->change()` counts as destructive **only on a column the last final shipped** (#674):
+   one on a column this release itself added — earlier in the same migration, or in an added
+   migration that runs before it, same table — rewrites nothing released, so the safe shape *add it
+   nullable, backfill, then `->nullable(false)->change()`* cuts. A `->change()` on any other
+   column, or one the check cannot tie to a table and column, still refuses.
 4. **[Hard — gate: colab release cut refuses]** **Switch dependencies are satisfied**
    ([*Switched epics*](../../CONVENTIONS.md#switched-epics--concurrent-unfinished-features-336), rule 3).
 
