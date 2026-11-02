@@ -927,8 +927,22 @@ function laravelDestructive(up, addedBefore) {
  * true / false / null (the tree could not be read — never "absent"). Undefined = a caller that does
  * not measure it, read as today: present. `none` (#672) = the candidate's `migrations: none` block
  * (`{ reason, dirs? }`), or absent.
+ *
+ * #676: `missing` = the declared entries that do not exist at the candidate (migration-paths.js
+ * declaredPresence). They still classify a change (a file deleted under one is still read — the gate
+ * sees more, never less), but they are not a layout and not in the ✓'s scope: with nothing else to
+ * read the verdict is NOT CHECKED naming them, and beside a real layout every detail names them.
+ * `missing` null = the tree could not be listed (pass `layout` null with it): unread, never a ✓.
+ * Undefined = a caller that does not measure it, read as before: every declared path present.
  */
-function schemaVerdict(changes, since, declared, layout, none) {
+function schemaVerdict(changes, since, declared, layout, none, missing) {
+  const v = schemaVerdictCore(changes, since, declared, layout, none, missing);
+  const note = v.missingNamed ? '' : migrationPaths.missingNote(missing);
+  const { missingNamed, ...out } = v;
+  return note ? { ...out, detail: `${out.detail} — ${note}` } : out;
+}
+
+function schemaVerdictCore(changes, since, declared, layout, none, missing) {
   // #672: the candidate's `migrations: none` block. Contradicted by a default layout → refused on every
   // cut, whatever changed; otherwise, with nothing changed, "not checked" naming the declaration —
   // never a ✓ (nothing was read), never the "declare a layout" advice (the repo already answered).
@@ -947,14 +961,19 @@ function schemaVerdict(changes, since, declared, layout, none) {
   const unread = (declared && declared.length)
     ? history.filter((c) => !/\.(php|sql)$/.test(c.path) && !migrationPaths.isMigrationPath(c.path, []))
     : [];
-  const scope = `Laravel database/migrations + Prisma prisma/migrations${declared && declared.length ? ` + declared ${declared.join(', ')} (php/sql only; a declared file: the SQL it added)` : ''} — other layouts are not read`;
-  const hasDeclared = !!(declared && declared.length);
+  // `missing` null = the candidate's tree could not be listed: no declared path is known to exist.
+  const present = missing === null ? [] : (declared || []).filter((p) => !(missing || []).includes(p));
+  const scope = `Laravel database/migrations + Prisma prisma/migrations${present.length ? ` + declared ${present.join(', ')} (php/sql only; a declared file: the SQL it added)` : ''} — other layouts are not read`;
+  const hasDeclared = present.length > 0;
   const notChecked = (why) => ({ ok: true, checked: false, detail: `not checked — ${why}` });
   const unreadWhy = () => `${unread.length} declared migration file(s) changed since ${since} in a format this check does not read (php/sql only) — a human reads them before the final: ${unread.map((c) => c.path).join(', ')}`;
   const howToDeclare = 'a repo whose migrations live elsewhere declares their directory as `migrations:` in .github/project.yml (project.schema.md `migrations`); a repo with no schema migrations declares `migrations:` then `none: <why>` (#672)';
   if (!migrations.length && !schemaFiles.length) {
     if (unread.length) return notChecked(unreadWhy());
     if (none && layout === false) return notChecked(`the repo declares \`migrations: none\` (${none.reason}) and no Laravel or Prisma migrations directory exists at the candidate, so there is no schema to read`);
+    if (!hasDeclared && layout === false && missing && missing.length) {
+      return { ...notChecked(`the declared \`migrations:\` ${missing.length === 1 ? 'path' : 'paths'} ${missing.join(', ')} ${missing.length === 1 ? 'does' : 'do'} not exist at the candidate and there is no Laravel database/migrations/ or Prisma prisma/migrations/ directory, so no migration was read — fix the path (a misspelled or stale entry is not a layout, #676), or ${howToDeclare}`), missingNamed: true };
+    }
     if (!hasDeclared && layout === false) return notChecked(`no Laravel database/migrations/ or Prisma prisma/migrations/ directory at the candidate and no \`migrations:\` declared, so no migration was read — ${howToDeclare}`);
     if (!hasDeclared && layout === null) return notChecked(`the tree at the candidate could not be read for a migration layout, so no migration was read — ${howToDeclare}`);
     return { ok: true, detail: `no migration file changed since ${since} (${scope})` };

@@ -591,6 +591,7 @@ Why `migrations` exists, with the measurement: [ADR 539](docs/adr/539-schema-mig
 
 - **Entries are repo-relative directories or files**, from the repo root: `a/` is a directory, `a` that path or anything under it — so `server/db.ts` declares a schema the server applies inline (#673, [ADR 539](docs/adr/539-schema-migrations-and-grants-rationale.md)); an absolute path, a `..`, a glob, or the repo root
   itself is a finding — a path match would silently mean something other than what was written.
+- **An entry must name something that exists** (#676): a tracked file under a directory entry, or the file (or a directory holding one) a no-slash entry names. A missing entry is not a layout — `release cut`/`finalize` read only the entries that exist at the candidate and name the rest, and with nothing else to read the migration-grant gate fails closed as for an undeclared repo. The audit fails an entry missing at HEAD (local audits only).
 - **[Hard — gate: colab ship refuses]** **Additive, never a replacement.** The defaults
   always apply; restating one is harmless (an advisory). There is deliberately no opt-out
   of the defaults.
@@ -1776,6 +1777,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `migrations` a list of repo-relative directories or files when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |
+| a declared `migrations` entry naming nothing tracked at HEAD → **finding** (local only, #676) | a misspelled or stale path reads nothing, and the release gates no longer count it as a layout |
 | `migration-grant` ∈ {`human`, `reviewer`} when set → **finding** otherwise | a misspelled policy silently read as `human` |
 | `trust-humans` a non-empty list of GitHub logins when set → **finding** otherwise | a malformed list read as "nobody is human", so every human grant and ruling silently stops counting |
 | `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |

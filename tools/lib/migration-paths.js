@@ -172,6 +172,32 @@ function unionPaths(...docs) {
   return out;
 }
 
+/**
+ * #676: which declared entries name something at a commit. `files` is that commit's tracked-file list
+ * (`git ls-tree -r --name-only <sha>`), or null when it could not be read. A directory entry exists
+ * when a tracked file sits under it, a no-slash entry when it is that file or a directory holding one
+ * (entryCovers, the same rule the gate matches by). Returns `{ present, missing }` in declared order,
+ * or null for an unread tree — never "everything missing", which would be a guess.
+ *
+ * Before this a declared path counted as a layout whether or not it existed, so a misspelled or stale
+ * entry opened the migration-grant gate having read nothing. Only `present` is a layout; `missing` is
+ * named wherever the gate reports, and a gate with nothing else to read fails closed.
+ */
+function declaredPresence(declared, files) {
+  if (!Array.isArray(files)) return null;
+  const present = [];
+  const missing = [];
+  for (const p of declared || []) (files.some((f) => entryCovers(p, f)) ? present : missing).push(p);
+  return { present, missing };
+}
+
+/** `missing` (declaredPresence) as the one sentence every gate appends — empty when none is missing. */
+function missingNote(missing, where = 'the candidate') {
+  if (!missing || !missing.length) return '';
+  const list = missing.join(', ');
+  return `declared \`migrations:\` ${missing.length === 1 ? 'path' : 'paths'} ${list} ${missing.length === 1 ? 'does' : 'do'} not exist at ${where}, so nothing was read there — fix or remove ${missing.length === 1 ? 'the entry' : 'the entries'} in .github/project.yml (a misspelled or stale path is not a layout, #676)`;
+}
+
 /** Is `file` (repo-relative, `/`-separated) a migration under the defaults or a declared prefix? */
 function isMigrationPath(file, declared) {
   const f = String(file || '');
@@ -215,5 +241,5 @@ function undeclaredMigrationDirs(files, declared) {
 
 module.exports = {
   DEFAULT_MIGRATION_PATHS, parseMigrationPaths, unionPaths, isMigrationPath, isDeclaredFile, undeclaredMigrationDirs,
-  noneContradiction, defaultLayoutDirs,
+  noneContradiction, defaultLayoutDirs, declaredPresence, missingNote,
 };

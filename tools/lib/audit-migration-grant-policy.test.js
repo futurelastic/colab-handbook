@@ -110,7 +110,8 @@ test('every malformed migration-grant value fails and is reported as the fallbac
 });
 
 test('the list-shaped migrations: key beside it is unaffected', () => {
-  const r = audit(fixture(`${BASE}migrations: [backend/migrations/]\nmigration-grant: human\n`));
+  // #676: the declared path holds a file — a declared path that names nothing is its own finding
+  const r = audit(fixture(`${BASE}migrations: [backend/migrations/]\nmigration-grant: human\n`, { 'backend/migrations/1.sql': 'x\n' }));
   assert.strictEqual(r.migrationGrant, 'human');
   assert.deepStrictEqual([...r.fails, ...r.warns].filter((t) => /^migrations/.test(t)), []);
 });
@@ -170,4 +171,25 @@ test('#672 S1.migrations.11: `none` beside a Laravel or Prisma migrations direct
 test('#672: the block-list form of migrations: still reads as a list', () => {
   const r = audit(fixture(`${BASE}migrations:\n  - backend/migrations/\n`, { 'backend/migrations/1.sql': 'x\n' }));
   assert.deepStrictEqual(migs(r), { fails: [], warns: [] });
+});
+
+// ---- #676: a declared path missing at HEAD is a finding ----------------------------------------
+
+test('#676: a declared migrations: path that does not exist at HEAD fails, naming it', () => {
+  const r = audit(fixture(`${BASE}migrations: [backend/migratons/]\n`, { 'backend/migrations/1.sql': 'x\n' }));
+  assert.match(migs(r).fails.join('\n'), /^migrations: declared `migrations:` path backend\/migratons\/ does not exist at HEAD/m);
+});
+
+test('#676: a declared FILE entry exists when it is tracked; a near-miss name does not count', () => {
+  const ok = audit(fixture(`${BASE}migrations: [server/db.ts]\n`, { 'server/db.ts': 'CREATE TABLE t (id int);\n' }));
+  assert.deepStrictEqual(migs(ok), { fails: [], warns: [] });
+  const typo = audit(fixture(`${BASE}migrations: [server/db.js]\n`, { 'server/db.ts': 'x\n' }));
+  assert.match(migs(typo).fails.join('\n'), /path server\/db\.js does not exist at HEAD/);
+});
+
+test('#676: mixed — only the missing path is named', () => {
+  const r = audit(fixture(`${BASE}migrations: [backend/migrations/, db/schema.sql]\n`, { 'backend/migrations/1.sql': 'x\n' }));
+  const f = migs(r).fails.join('\n');
+  assert.match(f, /path db\/schema\.sql does not exist at HEAD/);
+  assert.doesNotMatch(f, /backend\/migrations\//);
 });

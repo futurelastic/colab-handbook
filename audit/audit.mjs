@@ -897,6 +897,16 @@ function makeSource(target) {
           return [];
         }
       },
+      // #676: the tracked files at HEAD under the given declared `migrations:` entries (pathspec-
+      // limited, never the whole tree). null = git could not list — the check then says nothing.
+      filesAtHeadUnder: (paths) => {
+        try {
+          const out = execFileSync("git", ["-C", root, "ls-tree", "-r", "--name-only", "HEAD", "--", ...paths], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+          return out.split("\n").map((s) => s.trim()).filter(Boolean);
+        } catch {
+          return null;
+        }
+      },
       // Every path under a directory named `migrations` (#383's undeclared-layout check). null =
       // git could not list — the check then says nothing rather than reporting a clean tree.
       migrationDirFiles: () => {
@@ -928,6 +938,8 @@ function makeSource(target) {
     // Same cost argument as markdownFiles: a recursive tree listing per repo per sweep. null = not
     // enumerated, so #383's undeclared-migration-layout check is local-only, silently.
     migrationDirFiles: () => null,
+    // Same cost argument: the declared-path existence check (#676) is local-only too.
+    filesAtHeadUnder: () => null,
     tags: () => listRemoteTags(target.slug),
     metadata: () => readRemoteMetadata(target.slug),
     // The duration report (#137) needs a per-commit walk over historical blobs
@@ -1437,6 +1449,13 @@ function auditRepoInner(target, ctx) {
       const dirsOf = migFiles.map((f) => f.split("/").slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join("/"))).flat();
       const why = migrationPaths.noneContradiction(migCfg.none, migrationPaths.defaultLayoutDirs([...new Set(dirsOf)]));
       if (why) fail(`migrations: ${why}`);
+    }
+    // #676: a declared path that names nothing at HEAD is not a layout — release cut/finalize no
+    // longer count it as one, and here it fails where the declaration is read, so the typo is found
+    // before a release refuses on it. Local-only, like the rules around it.
+    if (migCfg.paths.length && src.filesAtHeadUnder) {
+      const presence = migrationPaths.declaredPresence(migCfg.paths, src.filesAtHeadUnder(migCfg.paths));
+      if (presence && presence.missing.length) fail(`migrations: ${migrationPaths.missingNote(presence.missing, "HEAD")}`);
     }
     if (migFiles) {
       const undeclared = migrationPaths.undeclaredMigrationDirs(migFiles, migCfg.paths);

@@ -153,6 +153,13 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
   or `ALTER COLUMN` it gained is refused, with `file:line`). Before #673 such a repo had no
   tooled release at all on `deploy-tag-fast`, where a hand cut refuses — only a raw tag push,
   outside every check.
+  **A declared path is a layout only where it exists (#676):** each `migrations:` entry is
+  checked against the candidate's tree. One that names nothing there — a misspelled or stale
+  path — is not a layout: with no other declared path and no default directory the gate fails
+  closed exactly as for an undeclared repo, naming the missing path, and `schema-additive` prints
+  **not checked**. Beside a path or default directory that does exist, the existing ones are read
+  as usual and every detail names the missing ones; the verdict does not change. The audit fails
+  the same missing path at HEAD, before a release meets it.
 - **Every automatic deploy says whose choice made it so.** The final tag's message names the
   grant and its decision issue, and who ruled it.
 
