@@ -1774,7 +1774,9 @@ Required properties, and how each is met:
   GitHub's own write-permission check — a drive-by public commenter cannot manufacture one) plus
   a comment on the issue carrying the exact branch name (a label alone cannot: GitHub caps label
   names at 50 characters). `ship` honors a grant only when the comment's branch matches the branch
-  being shipped.
+  being shipped. The name must resolve to a ref, except a final version (`vX.Y.Z`) on the issue
+  whose release tracking marker names exactly it (#677) — the grant a release hand-off prints,
+  minted before the version is a tag; the release gate reads it against the version.
 - **Expires.** The instant the issue closes — `ship` reads the issue's live `state`, not a
   separate expiry date. A grant can never become standing permission that outlives the work it
   was reviewed for.

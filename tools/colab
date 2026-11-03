@@ -3950,6 +3950,8 @@ change. Nothing else can produce a grant — no --force on ship, no project.yml 
 from an issue's content, age or park count. A human act on the issue is the whole answer.
 
   colab migration-grant <N> --branch <branch>    grant #N an exemption, bound to <branch>
+  colab migration-grant <N> --branch vX.Y.Z      on a release tracking issue: bound to that version
+                                                 (#677 — the command a release hand-off prints)
   colab migration-grant <N> --revoke             revoke #N's grant (idempotent — safe if none exists)
   colab migration-grant --list [--json]          list every issue with a live grant right now
 
@@ -3974,6 +3976,13 @@ Revoking removes the label FIRST (the gate is restored the same minute) and post
 \`${migrationGrant.REVOKE_MARK}\` receipt after. Revocation is not scoped to one branch or one
 grantor — any revoke comment cancels every live grant on that issue, because a safety gate should
 fail toward "closed" if either half only partially lands.
+
+A RELEASE VERSION (#677). --branch must name a ref (a local branch or origin's copy) — with one
+exception: a human grant naming a final version \`vX.Y.Z\` that is not a ref, on the issue whose body
+starts with that version's tracking marker (\`<!-- colab:release version=vX.Y.Z -->\`). That is the
+grant a release hand-off asks for (\`colab release cut --auto\` on deploy-tag-fast, and a deploy-tag
+candidate): the version becomes a tag only after the grant, and the release gate reads the grant
+against the version. Any other version — a typo, or one #N does not track — is refused, nothing posted.
 
 There is deliberately no local-only fallback: without a usable \`gh\`, every subcommand here REFUSES
 rather than write (or read) something invisible to the machine \`ship\` might later run on.
@@ -4064,7 +4073,15 @@ function cmdMigrationGrant(argv) {
   if (!opts.revoke && !opts.branch) {
     throw new UserError('--branch <branch> is required — a grant is bound to one branch, never inferred from the current checkout');
   }
-  if (!opts.revoke && !git.branchExists(repoAbs, opts.branch)) {
+  // #677: a release version is the one binding name that is not a ref when it is granted — on route
+  // deploy-tag-fast (and a deploy-tag candidate) the grant is what lets `vX.Y.Z` be tagged at all,
+  // and the release gate compares the grant against the computed version, never a ref. So a human
+  // grant naming a canonical final version is deferred here to cmdMigrationGrantCreate, which accepts
+  // it only when #N's tracking marker names exactly that version: a typo is still refused, just one
+  // step later (it needs the tracker). Any other name — and a reviewer grant, which binds a pushed
+  // HEAD — keeps the ref check below, unchanged.
+  if (!opts.revoke) opts.versionBinding = migrationGrantVersionBinding(repoAbs, opts);
+  if (!opts.revoke && !opts.versionBinding && !git.branchExists(repoAbs, opts.branch)) {
     throw new UserError(`branch "${opts.branch}" does not resolve to a ref (locally or on origin) — refusing to bind a grant to a name nothing exists at`);
   }
   // #397: the role, and for a reviewer grant its whole record — all answerable locally, so all
@@ -4083,6 +4100,19 @@ function cmdMigrationGrant(argv) {
   }
 
   return opts.revoke ? cmdMigrationGrantRevoke(repoAbs, num) : cmdMigrationGrantCreate(repoAbs, num, opts);
+}
+
+/**
+ * #677: true when this grant binds a release VERSION rather than a branch — a human grant whose
+ * --branch is a canonical final version (`vX.Y.Z`, never an `-rc.N`) that resolves to no ref here.
+ * Local only, so it runs before the gh gate; cmdMigrationGrantCreate then holds it to the issue's
+ * tracking marker (`<!-- colab:release version=vX.Y.Z -->`). A ref of that name wins: the grant is
+ * an ordinary branch grant and nothing about it changes.
+ */
+function migrationGrantVersionBinding(repoAbs, opts) {
+  if (opts.role !== undefined && String(opts.role) !== 'human') return false;
+  if (!releaseCut.parseVersion(opts.branch)) return false;
+  return !git.branchExists(repoAbs, opts.branch);
 }
 
 /**
@@ -4205,14 +4235,22 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
   if (!opts.branch) {
     throw new UserError('--branch <branch> is required — a grant is bound to one branch, never inferred from the current checkout');
   }
-  if (!git.branchExists(repoAbs, opts.branch)) {
+  if (!opts.versionBinding && !git.branchExists(repoAbs, opts.branch)) {
     throw new UserError(`branch "${opts.branch}" does not resolve to a ref (locally or on origin) — refusing to bind a grant to a name nothing exists at`);
   }
 
-  const info = git.ghIssueView(repoAbs, num, ['state', 'labels']);
+  const info = git.ghIssueView(repoAbs, num, opts.versionBinding ? ['state', 'labels', 'body'] : ['state', 'labels']);
   if (!info) throw new UserError(`could not read #${num} from the tracker — refusing to write a grant blind`);
   if (info.state !== 'OPEN') {
     throw new UserError(`#${num} is ${info.state} — a grant expires the instant its issue closes, so granting a closed one would do nothing (CONVENTIONS.md §5, Migration exemption)`);
+  }
+  // #677: a version-bound grant stands on the tracking marker in place of a ref — the name must be
+  // exactly the version #N tracks, so a typo still binds nothing.
+  if (opts.versionBinding) {
+    const tracked = releaseFinalize.parseReleaseMarker(info.body);
+    if (tracked !== opts.branch) {
+      throw new UserError(`"${opts.branch}" is not a ref, and #${num} ${tracked ? `tracks ${tracked}, not ${opts.branch}` : 'carries no release tracking marker (<!-- colab:release version=vX.Y.Z -->)'} — a version is granted only on its own tracking issue; nothing was posted. Re-run with the version #${num} tracks, or the branch the migration is on: COLAB_HUMAN=1 colab migration-grant ${num} --branch ${tracked || '<branch>'}`);
+    }
   }
 
   const present = git.ghListLabels(repoAbs);
@@ -4253,8 +4291,13 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
     print(`  Revoke any time: colab migration-grant ${num} --revoke`);
     return 0;
   }
-  print(`Granted #${num} in ${shortRepo(repoAbs)} a migration exemption for branch "${opts.branch}".`);
-  print(`  This covers ONLY this branch, and expires the moment #${num} closes.`);
+  if (opts.versionBinding) {
+    print(`Granted #${num} in ${shortRepo(repoAbs)} a migration exemption for release ${opts.branch}.`);
+    print(`  This covers ONLY that version's final, and expires the moment #${num} closes. The next green release run tags it.`);
+  } else {
+    print(`Granted #${num} in ${shortRepo(repoAbs)} a migration exemption for branch "${opts.branch}".`);
+    print(`  This covers ONLY this branch, and expires the moment #${num} closes.`);
+  }
   print(`  Revoke any time: colab migration-grant ${num} --revoke`);
   // Deliberately no pushEvent — see HELP_SHIP's JSON note: no receiver-agreed kind exists for
   // this yet, and both markers are already visible on the tracker from any machine.

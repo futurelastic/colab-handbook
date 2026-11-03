@@ -244,6 +244,33 @@ test('migration-grant CREATE with COLAB_HUMAN=1 against a non-existent branch re
   assert.match(r.err, /does not resolve to a ref/);
 });
 
+// #677: a final release version with no ref of that name is deferred to the tracking marker (the
+// happy path and the marker refusals run in release-cut-cli.test.js, whose gh stub answers the
+// tracker). These pin the boundary of the deferral: what still refuses locally, and that the
+// deferred case still never succeeds without the tracker.
+test('#677: a release version with no ref is not refused locally — it reaches the tracker read, and fails closed there', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  const r = colab(fx, ['migration-grant', '1', '--branch', 'v1.2.1', '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.notStrictEqual(r.code, 0);
+  assert.doesNotMatch(r.err, /does not resolve to a ref/);
+  assert.match(r.err, /could not read #1 from the tracker/);
+  const human = colab(fx, ['migration-grant', '1', '--branch', 'v1.2.1', '--repo', fx.work], { COLAB_HUMAN: '' });
+  assert.notStrictEqual(human.code, 0);
+  assert.match(human.err, /requires a human/);
+});
+
+test('#677: a candidate tag name, a non-canonical version, and a reviewer grant naming a version still need a ref', () => {
+  const fx = fixture(PROJECT_YML_REVIEWER);
+  for (const name of ['v1.2.1-rc.1', 'v01.2.1', '1.2.1']) {
+    const r = colab(fx, ['migration-grant', '1', '--branch', name, '--repo', fx.work], { COLAB_HUMAN: '1' });
+    assert.notStrictEqual(r.code, 0, name);
+    assert.match(r.err, /does not resolve to a ref/, name);
+  }
+  const rev = colab(fx, ['migration-grant', '1', '--branch', 'v1.2.1', ...REVIEW_FLAGS, '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.notStrictEqual(rev.code, 0);
+  assert.match(rev.err, /does not resolve to a ref/);
+});
+
 test('migration-grant CREATE requires --branch — never inferred from the current checkout', () => {
   const fx = fixture(PROJECT_YML_AUTO_TRUNK);
   const r = colab(fx, ['migration-grant', '1', '--repo', fx.work], { COLAB_HUMAN: '1' });

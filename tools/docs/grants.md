@@ -76,6 +76,10 @@ policy.
   The reviewer role changes what a grant must *prove*, not who may post it.
 - **Two required parts**: a `migration-granted` label (requires write/triage permission)
   and a comment naming the exact branch. Never authorises a migration arriving on a different branch later.
+  The name must resolve to a ref when the grant is minted, with one exception (#677): on a release
+  tracking issue, a human grant may name the version it tracks (`--branch vX.Y.Z`, matched against the
+  issue's `<!-- colab:release version=… -->` marker) before that version is tagged. That is the grant a
+  release hand-off asks for, and the release gate reads it against the version. Any other version is refused.
 - **Expires the instant its issue closes** — `ship` reads the issue's live open/closed
   state, never a separate expiry.
 - Visible from any machine — no local-only fallback.
