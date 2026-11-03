@@ -17,6 +17,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
+const releaseCut = require('./release-cut');
+const labels = require('./labels');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const COLAB = path.join(REPO_ROOT, 'tools', 'colab');
@@ -963,6 +965,82 @@ test('#446 deploy-tag-fast: a migration opens the tracking issue and posts one h
   assert.match(fx.writes(), /^create issue create --title release: v1\.2\.1/m);
   assert.match(fx.writes(), /^comment 90 /m);
   assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});
+
+/**
+ * #677: the fixture's gh also answers `label list` and records `issue edit` and each comment's full
+ * body (comment-<N>.txt), so `colab migration-grant` can run against it — the release side reads the
+ * tracker through the same stub, so the grant it posts is the grant the next cut reads.
+ */
+function grantableFastFixture() {
+  const fx = fastFixture();
+  const ghPath = path.join(fx.bin, 'gh');
+  const log = path.join(fx.root, 'gh-writes.log');
+  const lines = fs.readFileSync(ghPath, 'utf8').split('\n');
+  lines.splice(3, 0,
+    `if [ "$1" = "label" ] && [ "$2" = "list" ]; then echo "${labels.MIGRATION_GRANT_LABEL}"; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then echo "edit $*" >> "${log}"; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then printf '%s' "$5" > "${fx.root}/comment-$3.txt"; echo "comment $3 $5" >> "${log}"; exit 0; fi`);
+  fs.writeFileSync(ghPath, lines.join('\n'), { mode: 0o755 });
+  return fx;
+}
+
+/** Run a printed `COLAB_HUMAN=1 colab …` line exactly as a human would, from inside the repo. */
+function runPrinted(fx, line) {
+  const m = /^COLAB_HUMAN=1 colab (.+)$/.exec(line);
+  assert.ok(m, `not a COLAB_HUMAN=1 colab command: ${line}`);
+  const r = spawnSync('node', [COLAB, ...m[1].split(' ')], {
+    cwd: fx.work, encoding: 'utf8',
+    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: 'sess-release-cut-test', COLAB_HUMAN: '1' },
+  });
+  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+test('#677 deploy-tag-fast: the printed hand-off grants on the first try with no ref of that name, and the next run tags it', () => {
+  const fx = grantableFastFixture();
+  commit(fx, 'database/migrations/2026_10_01_000000_add_x.php', 'fix: add a column',
+    "<?php\nreturn new class { public function up() { Schema::table('t', fn ($t) => $t->string('x')->nullable()); } };\n");
+  const r = cut(fx, ['--auto']);
+  assertRefused(fx, r, 'migration-grant');
+  // The tracking issue the cut opened, as the tracker now returns it (body = the real producer's).
+  const trackingBody = releaseCut.handoffTrackingBody('v1.2.1');
+  const tracking = { number: 90, state: 'OPEN', title: 'release: v1.2.1', body: trackingBody, labels: [] };
+  fs.writeFileSync(fx.issuesFile, JSON.stringify([tracking]));
+  fs.writeFileSync(path.join(fx.root, 'view-90.json'), JSON.stringify({ ...tracking, comments: [] }));
+  assert.strictEqual(fx.g('for-each-ref', 'refs/heads', 'refs/remotes', '--format=%(refname:short)').split('\n').includes('v1.2.1'), false);
+
+  const g = runPrinted(fx, r.body.handoff);
+  assert.strictEqual(g.code, 0, g.out + g.err);
+  assert.match(g.out, /Granted #90 .* release v1\.2\.1/);
+  assert.match(fx.writes(), new RegExp(`^edit issue edit 90 --add-label ${labels.MIGRATION_GRANT_LABEL}`, 'm'));
+  const posted = fs.readFileSync(path.join(fx.root, 'comment-90.txt'), 'utf8');
+  assert.match(posted, /branch `v1\.2\.1`/);
+
+  // The tracker now carries the grant: the label and the comment colab just posted.
+  fs.writeFileSync(path.join(fx.root, 'view-90.json'), JSON.stringify({
+    ...tracking, labels: [{ name: labels.MIGRATION_GRANT_LABEL }],
+    comments: [{ body: posted, createdAt: '2026-10-05T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } }],
+  }));
+  const again = cut(fx, ['--auto']);
+  assert.strictEqual(again.code, 0, again.out + again.err);
+  assert.strictEqual(again.body.ok, true, JSON.stringify(again.body.checks, null, 2));
+  assert.strictEqual(again.body.tag, 'v1.2.1');
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1']);
+});
+
+test('#677: a version the tracking issue does not track is refused before anything is written', () => {
+  const fx = grantableFastFixture();
+  const tracking = { number: 90, state: 'OPEN', title: 'release: v1.2.1', body: releaseCut.handoffTrackingBody('v1.2.1'), labels: [], comments: [] };
+  fs.writeFileSync(path.join(fx.root, 'view-90.json'), JSON.stringify(tracking));
+  const typo = runPrinted(fx, 'COLAB_HUMAN=1 colab migration-grant 90 --branch v1.2.2');
+  assert.strictEqual(typo.code, 1, typo.out + typo.err);
+  assert.match(typo.err, /#90 tracks v1\.2\.1, not v1\.2\.2/);
+  // An issue with no tracking marker grants no version either.
+  fs.writeFileSync(path.join(fx.root, 'view-91.json'), JSON.stringify({ ...tracking, number: 91, body: 'feat: something' }));
+  const unmarked = runPrinted(fx, 'COLAB_HUMAN=1 colab migration-grant 91 --branch v1.2.1');
+  assert.strictEqual(unmarked.code, 1, unmarked.out + unmarked.err);
+  assert.match(unmarked.err, /#91 carries no release tracking marker/);
+  assert.strictEqual(fx.writes().match(/^(edit|comment) /m), null, fx.writes());
 });
 
 test('#446 deploy-tag-fast: inside final-spacing the run is a no-op (exit 0, nothing tagged)', () => {
