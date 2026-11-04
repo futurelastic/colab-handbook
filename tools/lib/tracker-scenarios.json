@@ -17,7 +17,7 @@
     "labels": "the label names defined on the repo, in the order labelList returns them.",
     "issues": "[{number, title, body, state: OPEN|CLOSED, stateReason, labels: [name], assignees: [login], comments: [{author, body}], events: [{event: \"labeled\", label, actor}]}] — `events` is the label timeline claimHolder reads; the claimer is the actor of the LATEST labeled in-progress event.",
     "prs": "[{number, head, base, title, body, state: OPEN|CLOSED|MERGED, author}] — issues and pull requests share ONE number sequence, as on GitHub.",
-    "runs": "[{headBranch, headSha, status, conclusion, event, workflowName, createdAt}] — CI runs; runList returns them newest first by createdAt.",
+    "runs": "[{headBranch, headSha, status, conclusion, event, workflowName, createdAt, databaseId}] — CI runs; runList returns them newest first by createdAt; ciVerdict (#678) summarizes the ones at one sha.",
     "releases": "[{tag, prerelease}]"
   },
   "scenarios": [
@@ -200,6 +200,37 @@
         { "call": "issueComment", "args": [1, "lost"], "expect": { "ok": false } },
         { "call": "runList", "args": [{ "branch": "main", "limit": 5, "fields": ["headSha"] }], "expect": { "ok": false, "data": null } },
         { "call": "prForBranch", "args": ["feat/x-1"], "expect": { "error": { "$type": "string" } } }
+      ]
+    },
+    {
+      "id": "ci-verdict",
+      "description": "ciVerdict reads every CI result at one commit as ONE verdict (#678): green only when every workflow at the sha finished and succeeded; one failed workflow makes it red; an unfinished one reads as still running; no result at all is status none with runCount 0 — never null, which is reserved for a read that failed.",
+      "given": {
+        "login": "alice",
+        "runs": [
+          {"headBranch": "main", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "event": "push", "workflowName": "CI", "createdAt": "2026-11-01T10:00:00Z", "databaseId": 101},
+          {"headBranch": "main", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "event": "push", "workflowName": "Lint", "createdAt": "2026-11-01T10:00:05Z", "databaseId": 102},
+          {"headBranch": "main", "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "completed", "conclusion": "failure", "event": "push", "workflowName": "CI", "createdAt": "2026-11-01T11:00:00Z", "databaseId": 103},
+          {"headBranch": "main", "headSha": "dddddddddddddddddddddddddddddddddddddddd", "status": "in_progress", "conclusion": "", "event": "push", "workflowName": "CI", "createdAt": "2026-11-01T12:00:00Z", "databaseId": 104}
+        ]
+      },
+      "steps": [
+        { "call": "ciVerdict", "args": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", { "branch": "main" }],
+          "expect": {"status": "completed", "conclusion": "success", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "runCount": 2} },
+        { "call": "ciVerdict", "args": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", { "branch": "main" }],
+          "expect": {"status": "completed", "conclusion": "failure", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"} },
+        { "call": "ciVerdict", "args": ["dddddddddddddddddddddddddddddddddddddddd", { "branch": "main" }],
+          "expect": {"status": "in_progress", "sha": "dddddddddddddddddddddddddddddddddddddddd"} },
+        { "call": "ciVerdict", "args": ["cccccccccccccccccccccccccccccccccccccccc", { "branch": "main" }],
+          "expect": {"status": "none", "sha": "cccccccccccccccccccccccccccccccccccccccc", "runCount": 0} }
+      ]
+    },
+    {
+      "id": "ci-verdict-unreadable",
+      "description": "A CI read that cannot reach the tracker returns null — could not read, never a `none` verdict a caller would take for unwired CI.",
+      "given": { "login": "alice", "offline": true },
+      "steps": [
+        { "call": "ciVerdict", "args": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", { "branch": "main" }], "expect": null }
       ]
     }
   ]

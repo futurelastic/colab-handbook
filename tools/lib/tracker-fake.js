@@ -178,6 +178,11 @@ function create(repoAbs, given = {}) {
       .filter((r) => r.headBranch === branch && (!commit || r.headSha === commit))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
       .slice(0, limit).map((r) => pick(r, fields))),
+    // #678: the same summary the real adapters return, over the seeded runs at `sha` (on `branch` when named).
+    ciVerdict: (sha, { branch = null } = {}) => {
+      if (offline) return null;
+      return require('./git').summarizeRunsForCommit(clone(runs.filter((r) => r.headSha === sha && (!branch || r.headBranch === branch))), sha);
+    },
 
     releaseView: (tag) => {
       if (offline) return result(false);

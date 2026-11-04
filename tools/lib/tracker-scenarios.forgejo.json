@@ -1,0 +1,15 @@
+{
+  "$comment": "Recorded Forgejo API replies for the CI-only scenarios of tools/lib/tracker-scenarios.json (#678) — every scenario whose calls are all in tracker.CI_METHODS. For each scenario id: the GET requests tools/lib/ci-forgejo.js makes, in order, and the reply ({status, json}; status 0 = the request never completed). Bodies follow Forgejo's combined commit status (GET /repos/{owner}/{repo}/commits/{ref}/status: state, sha, total_count, statuses[] — the newest status per context), scrubbed to OWNER/REPO on forge.example. A Forgejo Actions context reads `<workflow> / <job> (<event>)`. Not packed: package.json `files` does not list it.",
+  "engine": {"engine":"forgejo","host":"forge.example","owner":"OWNER","repo":"REPO","api":"https://forge.example/api/v1","tokenEnv":"FORGEJO_TOKEN"},
+  "scenarios": {
+    "ci-verdict": [
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?page=1&limit=50","status":200,"json":{"state":"success","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","total_count":2,"statuses":[{"id":11,"status":"success","target_url":"https://forge.example/OWNER/REPO/actions/runs/11","description":"","context":"CI / test (push)","creator":{"login":"forgejo-actions"},"created_at":"2026-11-01T10:03:00Z","updated_at":"2026-11-01T10:03:00Z"},{"id":12,"status":"success","target_url":"https://forge.example/OWNER/REPO/actions/runs/12","description":"","context":"Lint / lint (push)","creator":{"login":"forgejo-actions"},"created_at":"2026-11-01T10:01:00Z","updated_at":"2026-11-01T10:01:00Z"}]}},
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/status?page=1&limit=50","status":200,"json":{"state":"failure","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","total_count":1,"statuses":[{"id":13,"status":"failure","target_url":"https://forge.example/OWNER/REPO/actions/runs/13","description":"","context":"CI / test (push)","creator":{"login":"forgejo-actions"},"created_at":"2026-11-01T11:04:00Z","updated_at":"2026-11-01T11:04:00Z"}]}},
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/dddddddddddddddddddddddddddddddddddddddd/status?page=1&limit=50","status":200,"json":{"state":"pending","sha":"dddddddddddddddddddddddddddddddddddddddd","total_count":1,"statuses":[{"id":14,"status":"pending","target_url":"https://forge.example/OWNER/REPO/actions/runs/14","description":"","context":"CI / test (push)","creator":{"login":"forgejo-actions"},"created_at":"2026-11-01T12:00:10Z","updated_at":"2026-11-01T12:00:10Z"}]}},
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/cccccccccccccccccccccccccccccccccccccccc/status?page=1&limit=50","status":200,"json":{"state":"","sha":"cccccccccccccccccccccccccccccccccccccccc","total_count":0,"statuses":[]}}
+    ],
+    "ci-verdict-unreadable": [
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?page=1&limit=50","status":0,"error":"connect ECONNREFUSED"}
+    ]
+  }
+}

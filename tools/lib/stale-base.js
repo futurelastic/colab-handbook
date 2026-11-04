@@ -27,18 +27,28 @@
  *                                  'no-change' = it is not, but the head lands no change (evidence-close)
  * @param {number|null} a.behind    - commits on the base the head lacks (display only)
  * @param {string} a.base           - the base's name, for the detail line
- * @param {boolean} a.ghUsable      - false = gh not usable here
+ * @param {boolean} a.ciReadable    - false = no CI read exists on this host: gh not usable and the
+ *                                  remote's engine is not one the CLI reads CI from (#678). The old
+ *                                  name `ghUsable` is still accepted.
  * @returns {{ok:boolean, verdict:string, selfClearing:boolean, detail:string}}
  */
 function staleBaseVerdict(a) {
   const short = (s) => (s ? String(s).slice(0, 7) : '?');
+  const ciReadable = a.ciReadable !== undefined ? a.ciReadable : a.ghUsable;
   if (!a.headSha) {
     return { ok: true, verdict: 'no-run', selfClearing: false,
       detail: 'branch not on the remote — no branch run exists to be stale (B2a reads the trunk run at the squash)' };
   }
-  if (!a.ghUsable) {
-    // The base-CI row already refuses without gh; this row does not add a second, different refusal.
-    return { ok: true, verdict: 'unread', selfClearing: false, detail: 'gh not usable — branch run unread (the CI row above already refuses)' };
+  if (!ciReadable) {
+    // #678: this used to pass ("the CI row above already refuses"). Once the CI row reads a forge
+    // other than GitHub, that is no longer true, and a pass here would let a stale branch land on an
+    // unread verdict. Unread refuses — except a head that lands nothing, which grades nothing (#90).
+    if (a.contains === 'no-change') {
+      return { ok: true, verdict: 'no-change', selfClearing: false,
+        detail: `the head introduces no change against ${a.base} — nothing lands, so nothing is graded (evidence-close, #90)` };
+    }
+    return { ok: false, verdict: 'unread', selfClearing: false,
+      detail: `no CI read on this host (gh not usable, and the remote's forge is not one colab reads CI from) — the branch run at ${short(a.headSha)} is unread, and an unread verdict never passes (#678)` };
   }
   if (a.run === null || a.run === undefined) {
     return { ok: false, verdict: 'unread', selfClearing: true,

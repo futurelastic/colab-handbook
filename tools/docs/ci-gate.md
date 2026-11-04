@@ -2,7 +2,8 @@
 
 The mechanics behind invariants 2 and 3 of the CI contract
 ([CONVENTIONS.md §7](../../CONVENTIONS.md#what-ship-reads--the-ci-contract-607)): how `colab ship`
-reads a branch's own run, when a documentation-only change skips the wait, and how a batch lands.
+reads a branch's own run, when a documentation-only change skips the wait, how a batch lands, and
+how it reads CI on a Forgejo remote.
 Moved verbatim from CONVENTIONS.md §4 by #635; each section keeps its heading there as a stub.
 What lives in this directory, and why: [README](README.md).
 
@@ -287,6 +288,59 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 - **One re-run per red episode, not per attempt** — and it is the only CI action the
   coordinator takes. A second identical failure is evidence; spending more re-runs on it
   just moves the wall further out.
+
+## A Forgejo remote — CI from commit statuses, landing only (#678)
+
+On a repo whose remote is a Forgejo (or Gitea) forge, `colab ship` lands without `gh`. The owner's
+ruling on #678 was **landing only**: the CLI reads that forge's CI, and writes nothing to its issue
+tracker. Claim labels and comments, readiness, holds and close-with-evidence stay frozen
+(#604/#608), so on a forge they belong to the adopter's own tracker layer.
+
+**Tell colab which hosts are Forgejo.** Use the machine config, `$COLAB_HOME/config.json`
+(default `~/.colab/config.json`). It is never a tracked file, so an adopter extends the map without
+editing the handbook:
+
+```json
+{ "forges": { "git.example.com": { "engine": "forgejo", "api": "https://git.example.com/api/v1", "tokenEnv": "FORGEJO_TOKEN" } } }
+```
+
+- The key is the remote's host, read from the **configured** remote URL. A `url.<x>.insteadOf`
+  rewrite changes how git reaches the remote, never which forge it is.
+- `api` defaults to `https://<host>/api/v1`, and `tokenEnv` defaults to `FORGEJO_TOKEN`. The short
+  form `"git.example.com": "forgejo"` takes both defaults.
+- A host the map does not name is GitHub, which is today's behaviour. An engine name colab does not
+  know reads as GitHub, and colab says why.
+- **The token comes from the environment and never from an argument list.** colab reads the
+  variable `tokenEnv` names inside the child process that makes the request. If the variable is
+  unset, the read is anonymous: it works on a public repo, and on a private one it reads as
+  "could not read".
+
+**What colab reads.** For a commit it reads the combined commit status,
+`GET {api}/repos/{owner}/{repo}/commits/{sha}/status`. That holds the newest status for each
+context, and Forgejo Actions names each context `<workflow> / <job> (<event>)`. colab judges it by
+the same rule as GitHub runs (tools/lib/git.js `summarizeRunsForCommit`):
+
+- `pending` has not finished, so it is not green yet.
+- Only `success` counts as green. `failure`, `error` and `warning` are all red.
+- A commit with no status reads `none`.
+- A failed read is never green: no response, an HTTP error, unparseable JSON, or more statuses
+  than ten pages.
+
+The read is the tracker contract's `ciVerdict` method (tools/lib/tracker.js), which
+tools/lib/ci-forgejo.js implements. The contract scenarios `ci-verdict*` hold it to the same
+expectations as the GitHub adapter.
+
+**Which ship rows read it:**
+
+| Row | On a Forgejo remote |
+|---|---|
+| trunk CI green, and B1's re-check before the merge | trunk's remote head, by commit status. The GitHub-only doors are not offered: by-commit re-read, docs-only tip, batch substitute, tree-green citation, no-workflow trunk, and the ci-grant and cure exemptions, which live on the tracker. A failed read is `SELF_CLEARING`. |
+| branch run contains current base (#395) | the branch head's commit status, through the same method. A branch behind trunk is `stale-base`. An unreadable status refuses as `unread`. |
+| tracker writes after the push (🚢 evidence, group-label and container teardown, PR close) | skipped. One `B4:` line names the issues the adopter's tracker should close. Skipping never fails the ship. |
+
+`gh` is treated as unusable on such a repo even where it is installed and logged in for GitHub, so
+no `gh` call is ever sent at a Forgejo slug. Without `gh` or a mapped forge, there is no CI read at
+all, and the stale-base row refuses as `unread` instead of passing.
 
 ## Docs-only — no CI wait (#606)
 
