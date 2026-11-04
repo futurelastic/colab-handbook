@@ -54,10 +54,34 @@ test('unmeasurable containment (head sha not local, no base tip) refuses, self-c
   assert.strictEqual(staleBaseVerdict({ ...base, baseTip: null, contains: true }).ok, false);
 });
 
-test('gh unusable defers to the CI row that already refuses — no second refusal', () => {
-  const r = staleBaseVerdict({ ...base, ghUsable: false, run: null, contains: null });
+test('no CI read on this host refuses — an unread verdict never passes (#678)', () => {
+  // Was a pass ("the CI row above already refuses"); a forge CI row no longer refuses without gh.
+  for (const k of ['ghUsable', 'ciReadable']) {
+    const r = staleBaseVerdict({ ...base, ghUsable: undefined, [k]: false, run: null, contains: false, behind: 3 });
+    assert.strictEqual(r.ok, false, k);
+    assert.strictEqual(r.verdict, 'unread', k);
+    assert.strictEqual(r.selfClearing, false, k);
+  }
+});
+
+test('no CI read, but the head lands nothing — passes as no-change (#90, #678)', () => {
+  const r = staleBaseVerdict({ ...base, ghUsable: false, run: null, contains: 'no-change' });
   assert.strictEqual(r.ok, true);
-  assert.strictEqual(r.verdict, 'unread');
+  assert.strictEqual(r.verdict, 'no-change');
+});
+
+test('ciReadable true with a forge summary behind the base refuses as stale-base, not unread (#678)', () => {
+  const run = { status: 'completed', conclusion: 'success', sha: 'aaaaaaa1', runCount: 1, databaseId: null };
+  const r = staleBaseVerdict({ ...base, ghUsable: undefined, ciReadable: true, run, contains: false, behind: 2 });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.verdict, 'stale-base');
+});
+
+test('a forge head with no commit status at all passes as no-run, as on GitHub (#678, Vera r2 note)', () => {
+  const run = { status: 'none', conclusion: null, sha: 'aaaaaaa1', runCount: 0, databaseId: null };
+  const r = staleBaseVerdict({ ...base, ghUsable: undefined, ciReadable: true, run, contains: false, behind: 2 });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.verdict, 'no-run');
 });
 
 test('a head that lands no change against the base passes — evidence-close grades nothing', () => {

@@ -1,11 +1,14 @@
 'use strict';
 /**
  * The tracker contract, run as data (#501): every scenario in tools/lib/tracker-scenarios.json
- * against two implementations —
+ * against every implementation —
  *   - the in-memory fake (tools/lib/tracker-fake.js), seeded from the scenario's `given`;
  *   - the GitHub adapter (tools/lib/tracker-github.js), with every `gh` spawn answered from the
  *     scenario's recorded transcript in tools/lib/tracker-scenarios.github.json. The transcript is
- *     strict: each spawn must be the next recorded argv, and every recorded reply must be used.
+ *     strict: each spawn must be the next recorded argv, and every recorded reply must be used;
+ *   - the Forgejo CI engine (tools/lib/ci-forgejo.js, #678) — a CI-only engine, so only the scenarios
+ *     whose every call is in tracker.CI_METHODS — with every HTTP read answered from
+ *     tools/lib/tracker-scenarios.forgejo.json, just as strictly.
  *
  * Run: `node --test tools/lib/*.test.js` — the existing CI glob picks this file up.
  *
@@ -22,6 +25,8 @@ const fake = require('./tracker-fake');
 const gh = require('./tracker-github');
 const SPEC = require('./tracker-scenarios.json');
 const RECORDED = require('./tracker-scenarios.github.json');
+const forgejo = require('./ci-forgejo');
+const RECORDED_FORGEJO = require('./tracker-scenarios.forgejo.json');
 
 const REPO = '/repo/under/test';
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -149,6 +154,41 @@ for (const scenario of SPEC.scenarios) {
   });
 }
 
+/** The scenarios a CI-only engine must satisfy: every call in tracker.CI_METHODS. */
+const CI_SCENARIOS = SPEC.scenarios.filter((s) => s.steps.every((st) => tracker.CI_METHODS.includes(st.call)));
+
+/** An HTTP fetcher replaying one recorded Forgejo transcript, strictly (same rules as `replay`). */
+function replayForgejo(id) {
+  const tape = RECORDED_FORGEJO.scenarios[id].map((e) => ({ ...e }));
+  const problems = [];
+  let next = 0;
+  const fetcher = (url, { tokenEnv }) => {
+    const want = tape[next];
+    if (!want) { problems.push(`${id}: unrecorded GET ${url}`); return { status: 0, body: '' }; }
+    if (want.url !== url) problems.push(`${id}: GET ${next + 1} was ${url}, recorded ${want.url}`);
+    if (tokenEnv !== RECORDED_FORGEJO.engine.tokenEnv) problems.push(`${id}: GET ${next + 1} named token env ${tokenEnv}`);
+    next += 1;
+    return { status: want.status, body: want.json !== undefined ? JSON.stringify(want.json) : '' };
+  };
+  const leftover = () => tape.slice(next).map((e) => `${id}: recorded GET never made: ${e.url}`);
+  return { fetcher, problems, leftover };
+}
+
+test('the Forgejo CI engine implements the CI methods, and every CI-only scenario has a transcript', () => {
+  assert.ok(tracker.assertImplements(forgejo.create(REPO, RECORDED_FORGEJO.engine), 'forgejo', tracker.CI_METHODS));
+  assert.throws(() => tracker.assertImplements(forgejo.create(REPO, RECORDED_FORGEJO.engine), 'forgejo'), /missing/);
+  assert.ok(CI_SCENARIOS.length >= 2, 'at least the ci-verdict scenarios');
+  assert.deepStrictEqual(Object.keys(RECORDED_FORGEJO.scenarios).sort(), CI_SCENARIOS.map((s) => s.id).sort());
+});
+
+for (const scenario of CI_SCENARIOS) {
+  test(`forgejo (recorded): ${scenario.id}`, () => {
+    const { fetcher, problems, leftover } = replayForgejo(scenario.id);
+    const failures = forgejo.withFetcher(fetcher, () => runScenario(forgejo.create(REPO, RECORDED_FORGEJO.engine), scenario));
+    assert.deepStrictEqual([...problems, ...leftover(), ...failures], []);
+  });
+}
+
 test('a scenario the implementation does not satisfy fails, naming the step', () => {
   const broken = { ...fake.create(REPO, { login: 'alice' }), currentLogin: () => 'mallory' };
   const s = SPEC.scenarios.find((x) => x.id === 'identity');
@@ -157,13 +197,13 @@ test('a scenario the implementation does not satisfy fails, naming the step', ()
 
 test('the scenarios ship in the package; the GitHub transcripts and this test do not', async () => {
   // package.json `files` decides what npm packs; scripts/check-pack-allowlist.mjs is the gate that
-  // runs the real `npm pack` (smoke + CI). Here: both agree on these four paths.
+  // runs the real `npm pack` (smoke + CI). Here: both agree on these five paths.
   const globs = require(path.join(ROOT, 'package.json')).files;
   assert.ok(globs.includes('tools/lib/tracker-scenarios.json'), 'package.json files must list tools/lib/tracker-scenarios.json');
-  assert.ok(!globs.some((g) => !g.startsWith('!') && /\*\.json$|tracker-scenarios\.github/.test(g)), 'no glob may sweep in the recorded transcripts');
+  assert.ok(!globs.some((g) => !g.startsWith('!') && /\*\.json$|tracker-scenarios\.(github|forgejo)/.test(g)), 'no glob may sweep in the recorded transcripts');
   const { findStrays } = await import(path.join(ROOT, 'scripts', 'check-pack-allowlist.mjs'));
   const shipped = ['tools/lib/tracker-scenarios.json', 'tools/lib/tracker-fake.js'];
-  const kept = ['tools/lib/tracker-scenarios.github.json', 'tools/lib/tracker-contract.test.js'];
+  const kept = ['tools/lib/tracker-scenarios.github.json', 'tools/lib/tracker-scenarios.forgejo.json', 'tools/lib/tracker-contract.test.js'];
   assert.deepStrictEqual(findStrays(shipped, new Set(shipped)), []);
   assert.deepStrictEqual(findStrays(kept, new Set(kept)).map((x) => x.path), kept);
 });

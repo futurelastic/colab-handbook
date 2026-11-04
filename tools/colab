@@ -231,7 +231,34 @@ function findClaim(st, num, repoAbs) {
 }
 
 function isGhUsable(repoAbs) {
+  // #678: a remote whose forge the engine map names (Forgejo) is never served by gh — even on a host
+  // where gh is installed and authenticated for GitHub, a call would go to the wrong forge. Every
+  // gh-keyed row (issue evidence, labels, PR close, grants) then behaves as "no tracker here"; the CI
+  // rows read the forge through forgeCi below instead.
+  if (forgeEngine(repoAbs).engine !== 'github') return false;
   return git.ghAvailable() && !!git.remoteUrl(repoAbs);
+}
+
+/**
+ * #367's forge-visibility read, or null on a forge gh does not serve (#678) — null is "could not
+ * read", which tools/lib/machine-trailer.js fails closed on. Never sends `gh repo view` at a forge slug.
+ */
+function repoVisibility(repoAbs) {
+  return forgeEngine(repoAbs).engine === 'github' ? git.ghRepoVisibility(repoAbs) : null;
+}
+
+/** #678: the repo's forge engine (tools/lib/tracker.js engineFor) — github unless the machine config's `forges` names the host. */
+function forgeEngine(repoAbs) {
+  return tracker.engineFor(repoAbs);
+}
+
+/**
+ * #678: the CI reader for a repo whose remote is a non-GitHub forge the engine map names, or null on
+ * GitHub (the gh-based reads stay exactly as they were there). The forge's CI is read through the
+ * tracker contract's `ciVerdict` — commit statuses on Forgejo (tools/lib/ci-forgejo.js).
+ */
+function forgeCi(repoAbs) {
+  return forgeEngine(repoAbs).engine === 'github' ? null : tracker.ciFor(repoAbs);
 }
 
 /**
@@ -240,6 +267,8 @@ function isGhUsable(repoAbs) {
  * active credential was fine at auth. Only meaningful when isGhUsable() is false.
  */
 function ghUnusableWhy(repoAbs) {
+  const eng = forgeEngine(repoAbs);
+  if (eng.engine !== 'github') return `the remote is a ${eng.engine} forge (${eng.host}, machine config \`forges\`) — gh does not serve it; the adopter's own tracker owns issue writes there (#678)`;
   const s = git.ghState();
   if (!s.ok && s.reason === 'missing') return 'gh is not installed';
   if (!s.ok && s.reason === 'rate-limited') { // #516
@@ -281,7 +310,7 @@ const { liveClaimComments, tieBreakVerdict } = claimComments; // the format itse
 const commentHostCache = new Map();
 function commentHostDecision(repoAbs) {
   if (commentHostCache.has(repoAbs)) return commentHostCache.get(repoAbs);
-  const d = machineTrailer.mayNameHost({ visibility: git.ghRepoVisibility(repoAbs), room: projectDoc(repoAbs).room });
+  const d = machineTrailer.mayNameHost({ visibility: repoVisibility(repoAbs), room: projectDoc(repoAbs).room });
   commentHostCache.set(repoAbs, d);
   return d;
 }
@@ -9450,7 +9479,7 @@ async function cmdAdopt(argv) {
   // the forge reads private, or reads nothing and the room (this run's answer, else the one on
   // record) is private. Otherwise the comment keeps its date and drops the host.
   const provenanceHost = machineTrailer.mayNameHost({
-    visibility: git.ghRepoVisibility(repoAbs),
+    visibility: repoVisibility(repoAbs),
     room: answers.room ? answers.room.values.room : cfg.room,
   }).include ? HOST : null;
   const meta = (a) => (a.mode === 'interactive'
@@ -11779,6 +11808,9 @@ function descriptorHolds(doc) {
 function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk, branch = null) {
   const name = `${target === trunk ? 'trunk' : 'line'} CI green`;
   const r = readCiVerdict(repoAbs, gh, target, trunk);
+  // #678: on a forge the engine map names, the verdict is final — the #482 no-workflow door counts
+  // `.github/workflows` and reads the branch through gh, neither of which describes a forge's CI.
+  if (forgeCi(repoAbs)) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null };
   const nw = noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch);
   if (nw) return { name, ...nw, grantVerdict: null, cureVerdict: null };
   if (r.final) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null };
@@ -11874,6 +11906,8 @@ function trunkWorkflowFiles(repoAbs, sha) {
  * branch past a red trunk, it does not make the trunk green, and the red still needs an owner.
  */
 function readCiVerdict(repoAbs, gh, target, trunk) {
+  const fc = forgeCi(repoAbs);
+  if (fc) return readForgeCiVerdict(repoAbs, fc, target, trunk);
   if (!gh) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI` } };
   // #503: only runs that VERIFY the code count — a post-CI release/deploy run at the same sha is set
   // aside and named, never a red and never a reason to wait (tools/lib/verify-runs.js).
@@ -11926,6 +11960,45 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
   }
   if (verdict.ok && target === trunk) verdict = treeGreenVerdict(repoAbs, run, verdict);
   return { run, verdict, final: verdict.ok || verdict.class !== HUMAN_GATED };
+}
+
+/**
+ * #678: readCiVerdict on a non-GitHub forge — the target's remote head (plain git), its verdict
+ * through the tracker contract's `ciVerdict` (commit statuses on Forgejo), classified by the same
+ * classifyCiRun every GitHub read goes through. Kept: the line→trunk fallback and the #413 empty-read
+ * grace (both git-side). Not offered: the GitHub-only doors — the by-commit re-read (#413), the
+ * docs-only tip (#606), the batch substitute (#373), the tree-green citation (#493) — and, by
+ * returning `final: true`, the ci-grant and cure exemptions, which live on the tracker (frozen on a
+ * forge, #604/#608). A failed read is SELF_CLEARING and never green.
+ */
+function readForgeCiVerdict(repoAbs, fc, target, trunk) {
+  const engine = fc.kind || 'forge';
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  const headOf = (b) => {
+    const ls = git.git(['ls-remote', remote, `refs/heads/${b}`], repoAbs);
+    return ls.ok ? ((ls.stdout.split('\n')[0] || '').split('\t')[0].trim() || null) : null;
+  };
+  const unread = (detail) => ({ run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail } });
+  let sha = headOf(target);
+  if (!sha) return unread(`${target} not readable on the remote — cannot confirm CI (${engine})`);
+  let run = fc.ciVerdict(sha, { branch: target });
+  let via = target;
+  if (run && run.status === 'none' && target !== trunk) {
+    const tSha = headOf(trunk);
+    const tRun = tSha ? fc.ciVerdict(tSha, { branch: trunk }) : null;
+    if (tRun) { run = tRun; sha = tSha; via = `${trunk} (line "${target}" has no runs — ungated, advisory)`; }
+  }
+  if (!run) return unread(`${engine} commit-status read failed for ${target}@${shortSha(sha)} — cannot confirm CI`);
+  const at = `${via}@${shortSha(run.sha || sha)} (${engine} commit status)`;
+  let verdict = classifyCiRun(repoAbs, run, at);
+  if (run.status === 'none' && target === trunk) {
+    const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha), { graceSec: ciProfileFor(repoAbs).th.emptyReadGraceSec });
+    if (fresh.fresh) {
+      verdict = { ok: false, class: SELF_CLEARING,
+        detail: `no commit status yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${Math.round(fresh.graceMinutes * 10) / 10}m grace; retry later` };
+    }
+  }
+  return { run, verdict, final: true };
 }
 
 /**
@@ -12198,9 +12271,14 @@ function shipStaleBaseCheck(repoAbs, gh, base, branch) {
     // stale verdict there grades nothing, so it must not block the close.
     if (contains === false && git.git(['diff', '--quiet', `${baseTip}...${headSha}`], repoAbs).code === 0) contains = 'no-change';
   }
-  if (headSha && gh) run = git.ghRunForCommit(repoAbs, branch, headSha);
+  // #678: on a forge the engine map names, the branch head's verdict comes through the same CI method
+  // the trunk-CI row reads (commit statuses on Forgejo) — never keyed on the gh flag, so a stale or red
+  // branch head cannot pass here as `unread` while the CI row passes on the forge's statuses.
+  const fc = forgeCi(repoAbs);
+  if (headSha && fc) run = fc.ciVerdict(headSha, { branch });
+  else if (headSha && gh) run = git.ghRunForCommit(repoAbs, branch, headSha);
   // #606: `run`/`headSha` are additive — the docs-only row reads whether that run finished red.
-  return { ...staleBase.staleBaseVerdict({ headSha, run, baseTip, contains, behind, base, ghUsable: !!gh }), run, headSha };
+  return { ...staleBase.staleBaseVerdict({ headSha, run, baseTip, contains, behind, base, ciReadable: !!(fc || gh) }), run, headSha };
 }
 
 /**
@@ -13767,7 +13845,7 @@ function shipMachineTrailerDecision(repoAbs, doc) {
   if (shipMachineTrailerCache.has(repoAbs)) return shipMachineTrailerCache.get(repoAbs);
   const d = machineTrailer.decide({
     label: branchName.machineLabel(HOST),
-    visibility: git.ghRepoVisibility(repoAbs),
+    visibility: repoVisibility(repoAbs),
     room: doc && doc.room,
   });
   shipMachineTrailerCache.set(repoAbs, d);
@@ -14729,7 +14807,7 @@ function cmdShip(argv) {
   // never silently ride the same exemption twice.
   let ciGrantForTrailer = null; // #105: set below when B1 shipped UNDER a grant — read at commit-message time
   let ciCureForTrailer = null; // #281: set below when B1 shipped UNDER the cure rule — read at commit-message time
-  if (gh) {
+  if (gh || forgeCi(repoAbs)) { // #678: a forge's CI is re-read at B1 exactly as GitHub's is
     const measureB1 = () => shipCiCheck(repoAbs, gh, target, trunk,
       (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
       (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
@@ -15224,6 +15302,13 @@ function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, re
   const disposition = shippedBranch.shippedBranchDisposition({ closeIssues, refsIssues, deleteBranch: opts.deleteBranch, keepBranch: opts.keepBranch || (!!sess.handoff && !opts.deleteBranch) });
   handleShippedBranch(repoAbs, target, sess.branch, { disposition, worktreeKept, integration });
 
+  // #678: on a forge the engine map names, the tracker writes below (🚢 evidence, group-label and
+  // container teardown) are frozen surfaces (#604/#608) — skipped, and said once, never a failure.
+  if (!gh) {
+    const eng = forgeEngine(repoAbs);
+    const what = sess.issues.length ? `closing #${sess.issues.join(', #')} with evidence and releasing the claim` : 'issue writes';
+    if (eng.engine !== 'github') print(`B4: tracker writes skipped — ${eng.host} is a ${eng.engine} forge; ${what} there is the adopter's own tracker's job (#678)`);
+  }
   // ---- (g/h) B4 verify + post summary per issue ----
   const groupLabelsCarried = new Set(); // union across every issue this branch carried — for (i) below
   const closedByShip = []; // the issues this ship actually closed — for (i2) below (#371)

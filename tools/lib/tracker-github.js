@@ -154,6 +154,12 @@ function create(repoAbs) {
     runList: ({ branch, commit, limit, fields }) => withData(exec(
       ['run', 'list', '--branch', branch, ...(commit ? ['--commit', commit] : []), '-L', String(limit),
         '--json', fields.join(',')], at)),
+    // #678: the one-summary CI verdict at `sha` — the exact reads ship made before the contract had
+    // it: by branch when one is named (ghRunForCommit), by commit otherwise (ghRunForCommitAnyRef).
+    ciVerdict: (sha, { branch = null, verifying = null } = {}) => {
+      const opts = verifying ? { verifying } : {};
+      return branch ? git().ghRunForCommit(repoAbs, branch, sha, undefined, opts) : git().ghRunForCommitAnyRef(repoAbs, sha, undefined, opts);
+    },
 
     // --- releases ----------------------------------------------------------------------------
     releaseView: (tag) => exec(['release', 'view', tag, '--json', 'tagName'], at),
