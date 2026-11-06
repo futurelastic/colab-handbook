@@ -6,7 +6,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { staleBaseVerdict } = require('./stale-base.js');
+const { staleBaseVerdict, branchHeadCiVerdict } = require('./stale-base.js');
 
 const GREEN = { status: 'completed', conclusion: 'success' };
 const base = { headSha: 'aaaaaaa1', baseTip: 'bbbbbbb2', base: 'main', ghUsable: true, run: GREEN, behind: 0 };
@@ -88,4 +88,42 @@ test('a head that lands no change against the base passes — evidence-close gra
   const r = staleBaseVerdict({ ...base, contains: 'no-change' });
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.verdict, 'no-change');
+});
+
+// --- #682: the branch head's own CI on a forge ------------------------------------------------
+
+const HEAD = 'c0ffee1234567890c0ffee1234567890c0ffee12';
+const hc = (run) => branchHeadCiVerdict({ headSha: HEAD, run, branch: 'feat/x-1', engine: 'forgejo' });
+
+test('#682 a green head passes, naming how many contexts agreed', () => {
+  const r = hc({ status: 'completed', conclusion: 'success', runCount: 2 });
+  assert.deepStrictEqual([r.ok, r.verdict], [true, 'green']);
+  assert.match(r.detail, /2 contexts at feat\/x-1@c0ffee1 \(forgejo commit status\): all success/);
+});
+
+test('#682 the measured incident: a failing context refuses, human-gated, naming it (and what still runs)', () => {
+  const r = hc({ status: 'completed', conclusion: 'failure', notGreen: [
+    { name: 'CI / smoke (push)', status: 'completed', conclusion: 'failure' },
+    { name: 'CI / e2e (push)', status: 'in_progress', conclusion: null }] });
+  assert.deepStrictEqual([r.ok, r.verdict, r.selfClearing], [false, 'red', false]);
+  assert.match(r.detail, /failing: CI \/ smoke \(push\) \(failure\); still running: CI \/ e2e \(push\) \(in_progress\)/);
+  assert.match(r.detail, /C7\.contract\.03/);
+});
+
+test('#682 a red summary without context names still refuses, on its conclusion', () => {
+  const r = hc({ status: 'completed', conclusion: 'error' });
+  assert.deepStrictEqual([r.ok, r.verdict], [false, 'red']);
+  assert.match(r.detail, /failing: conclusion=error/);
+});
+
+test('#682 a running head is not ready — self-clearing, and the detail names the ci-wait to run', () => {
+  const r = hc({ status: 'in_progress', conclusion: '', notGreen: [{ name: 'CI / smoke (push)', status: 'in_progress', conclusion: null }] });
+  assert.deepStrictEqual([r.ok, r.verdict, r.selfClearing], [false, 'pending', true]);
+  assert.ok(r.detail.includes(`colab ci-wait --sha ${HEAD} --branch feat/x-1`), r.detail);
+});
+
+test('#682 nothing to judge is null: no head, an unread run, or no status at all', () => {
+  assert.strictEqual(branchHeadCiVerdict({ headSha: null, run: { status: 'completed', conclusion: 'failure' }, branch: 'b' }), null);
+  assert.strictEqual(hc(null), null);
+  assert.strictEqual(hc({ status: 'none', conclusion: null, runCount: 0 }), null);
 });

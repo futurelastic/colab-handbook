@@ -336,7 +336,13 @@ expectations as the GitHub adapter.
 |---|---|
 | trunk CI green, and B1's re-check before the merge | trunk's remote head, by commit status. The GitHub-only doors are not offered: by-commit re-read, docs-only tip, batch substitute, tree-green citation, no-workflow trunk, and the ci-grant and cure exemptions, which live on the tracker. A failed read is `SELF_CLEARING`. |
 | branch run contains current base (#395) | the branch head's commit status, through the same method. A branch behind trunk is `stale-base`. An unreadable status refuses as `unread`. |
+| branch CI green at its head (#682) | the same read, judged on its own: a failing context refuses `HUMAN_GATED` and is named; a context still running is not ready (`SELF_CLEARING`) and the row names the `colab ci-wait` to run. A head with no status adds no row: Branch CI's `none` governs it, as on GitHub. On GitHub this row does not exist; code-ship B1a reads the class through `colab ci-wait`. |
 | tracker writes after the push (🚢 evidence, group-label and container teardown, PR close) | skipped. One `B4:` line names the issues the adopter's tracker should close. Skipping never fails the ship. |
+
+**`colab ci-wait --sha` on such a repo** polls the same commit status until it is green, red, or the
+deadline passes, with the exit codes it has on GitHub (#682). A status has no run id, so the
+`<run-id>` form is a usage error there. A failed read ends the wait as `UNKNOWN`. `--batch` still
+needs `gh`, because it reads its combined run through gh, so on a forge it refuses and names why.
 
 `gh` is treated as unusable on such a repo even where it is installed and logged in for GitHub, so
 no `gh` call is ever sent at a Forgejo slug. Without `gh` or a mapped forge, there is no CI read at

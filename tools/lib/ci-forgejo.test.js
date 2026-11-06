@@ -96,6 +96,17 @@ test('ciVerdict: green needs every context green; a warning or error is red', ()
   assert.deepStrictEqual([none.status, none.runCount], ['none', 0]);
 });
 
+test('#682 ciVerdict names the contexts that keep the sha from green, and only those', () => {
+  const at = (sts) => forgejo.withFetcher(pagedFetcher(sts), () => forgejo.create('/r', ENG).ciVerdict(SHA));
+  const red = at([st(1, 'CI / lint (push)', 'success'), st(2, 'CI / smoke (push)', 'failure'), st(3, 'CI / e2e (push)', 'pending')]);
+  assert.deepStrictEqual(red.notGreen, [
+    { name: 'CI / smoke (push)', status: 'completed', conclusion: 'failure' },
+    { name: 'CI / e2e (push)', status: 'in_progress', conclusion: null },
+  ]);
+  assert.strictEqual('notGreen' in at([st(1, 'a', 'success')]), false, 'a green sha carries no notGreen field');
+  assert.strictEqual('notGreen' in at([]), false, 'no statuses: nothing to name');
+});
+
 test('ciVerdict: reads every page, and a red context on page 2 is not missed', () => {
   const sts = Array.from({ length: 60 }, (_, i) => st(i + 1, `ctx-${i}`, i === 55 ? 'failure' : 'success'));
   const calls = [];

@@ -11991,6 +11991,7 @@ function readForgeCiVerdict(repoAbs, fc, target, trunk) {
   if (!run) return unread(`${engine} commit-status read failed for ${target}@${shortSha(sha)} — cannot confirm CI`);
   const at = `${via}@${shortSha(run.sha || sha)} (${engine} commit status)`;
   let verdict = classifyCiRun(repoAbs, run, at);
+  if (!verdict.ok) verdict = { ...verdict, detail: verdict.detail + notGreenNote(run) }; // #682: name the contexts
   if (run.status === 'none' && target === trunk) {
     const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha), { graceSec: ciProfileFor(repoAbs).th.emptyReadGraceSec });
     if (fresh.fresh) {
@@ -12064,6 +12065,12 @@ function treeGreenVerdict(repoAbs, run, verdict) {
 function classifyCiRun(repoAbs, run, at) {
   const v = classifyCiRunRaw(repoAbs, run, at);
   return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) + verifyRuns.dispatchCountedNote(run && run.dispatchCounted) + readViaNote(run) };
+}
+
+/** #682: a forge verdict's not-green contexts, named — '' on GitHub, or when every context is green. */
+function notGreenNote(run) {
+  const ng = run && Array.isArray(run.notGreen) ? run.notGreen : [];
+  return ng.length ? ` — not green: ${ng.map((x) => `${x.name} (${x.status === 'completed' ? (x.conclusion || 'none') : x.status})`).join(', ')}` : '';
 }
 
 /**
@@ -12278,8 +12285,15 @@ function shipStaleBaseCheck(repoAbs, gh, base, branch) {
   if (headSha && fc) run = fc.ciVerdict(headSha, { branch });
   else if (headSha && gh) run = git.ghRunForCommit(repoAbs, branch, headSha);
   // #606: `run`/`headSha` are additive — the docs-only row reads whether that run finished red.
-  return { ...staleBase.staleBaseVerdict({ headSha, run, baseTip, contains, behind, base, ciReadable: !!(fc || gh) }), run, headSha };
+  // #682: on a forge, `headCi` is the branch head's own CI verdict (green / red / pending), its own
+  // row — the class code-ship B1a reads through `colab ci-wait` on GitHub. null on GitHub, and where
+  // the head has no run to judge (the stale-base row speaks for those).
+  const headCi = fc ? staleBase.branchHeadCiVerdict({ headSha, run, branch, engine: fc.kind }) : null;
+  return { ...staleBase.staleBaseVerdict({ headSha, run, baseTip, contains, behind, base, ciReadable: !!(fc || gh) }), run, headSha, headCi };
 }
+
+/** #682: the forge branch-head CI row's name — one spelling for the JSON and the prose table. */
+const BRANCH_HEAD_CI_ROW = 'branch CI green at its head (#682)';
 
 /**
  * #294: WHICH paths are dirty in the trunk checkout, and — where the signal is strong enough — a
@@ -13102,6 +13116,8 @@ function cmdShipDryJson(opts) {
   } else {
     checks.push({ name: 'branch run contains current base (#395)', ok: staleJson.ok,
       class: staleJson.ok ? null : SELF_CLEARING, verdict: staleJson.verdict, detail: staleJson.detail });
+    const hc = staleJson.headCi; // #682: forge only — a red head needs a person, a running one clears
+    if (hc) checks.push({ name: BRANCH_HEAD_CI_ROW, ok: hc.ok, class: hc.ok ? null : (hc.selfClearing ? SELF_CLEARING : HUMAN_GATED), verdict: hc.verdict, detail: hc.detail });
   }
   // #610: the same gated heavy-lane read as the prose path. A missing or running heavy run clears on
   // its own (a real ship dispatches it); a red, or no heavy lane at all, needs a person.
@@ -14353,7 +14369,9 @@ function cmdShip(argv) {
     docsRowOk = row.ok && docsCi.scan.ok;
   } else {
     checks.push([staleResult.ok ? '✓' : '✗', 'branch run contains current base (#395)', staleResult.detail]);
+    if (staleResult.headCi) checks.push([staleResult.headCi.ok ? '✓' : '✗', BRANCH_HEAD_CI_ROW, staleResult.headCi.detail]); // #682
   }
+  const headCiOk = docsCi.applies || !staleResult.headCi || staleResult.headCi.ok;
   // #610: integration-profile: gated — the heavy lane green at the branch head. A missing or running
   // heavy run is a pause (⏸, taken below once every real precondition passes); only a red, or no
   // heavy lane at all, fails the table.
@@ -14385,7 +14403,7 @@ function cmdShip(argv) {
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && coreOk && recOk && heavyOk;
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && headCiOk && coreOk && recOk && heavyOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -16556,9 +16574,13 @@ Exit codes — branch on these, never on the text:
   5 UNKNOWN          a read failed or returned a state it cannot classify
   6 ALREADY_WAITING  another live ci-wait on this checkout holds the same run/sha
 
+On a remote the machine config's \`forges\` names as Forgejo (#678, #682), --sha reads the commit's
+combined status instead — no gh call, no conditional request; a status has no run id, so <run-id>
+is a usage error there. RED and --json name the contexts that are not green (\`notGreen\`).
+
 It prints the wait it did: outcome, elapsed time, polls, and how many were 304s.
   --json   { outcome, exit, target, polls, notModified, forced, waitedSec, deadlineSec, deadlineBasis,
-             detail, status, conclusion, url }`;
+             detail, status, conclusion, url, notGreen? }`;
 
 function cmdCiWait(argv) {
   const opts = parseArgs(argv, {
@@ -16587,9 +16609,16 @@ function cmdCiWait(argv) {
     }
     opts.sha = full;
   }
-  if (!git.ghInstalled()) { warn('gh is not installed — cannot read CI'); return ciWait.EXIT.UNKNOWN; }
+  // #682: a remote the engine map names as a forge (#678) is read from its commit statuses, never
+  // through gh — which would answer `no known GitHub host` (exit 5) for every wait there.
+  const fc = forgeCi(repoAbs);
+  if (fc && runId) {
+    warn(`the remote is a ${fc.kind} forge — a commit status has no run id to wait on; pass --sha <sha> [--branch <b>]`);
+    return ciWait.EXIT.USAGE;
+  }
+  if (!fc && !git.ghInstalled()) { warn('gh is not installed — cannot read CI'); return ciWait.EXIT.UNKNOWN; }
 
-  const target = runId ? `run ${runId}` : `sha ${shortSha(opts.sha)}${opts.branch ? ` on ${opts.branch}` : ''}`;
+  const target = (runId ? `run ${runId}` : `sha ${shortSha(opts.sha)}${opts.branch ? ` on ${opts.branch}` : ''}`) + (fc ? ` (${fc.kind} commit status)` : '');
   const apiPath = runId
     ? `repos/{owner}/{repo}/actions/runs/${runId}`
     : `repos/{owner}/{repo}/actions/runs?head_sha=${encodeURIComponent(opts.sha)}${opts.branch ? `&branch=${encodeURIComponent(opts.branch)}` : ''}&per_page=100`;
@@ -16619,7 +16648,7 @@ function cmdCiWait(argv) {
   }
 
   const verifyPolicy = verifyingPolicy(repoAbs);
-  const poll = (etag) => {
+  const poll = fc ? () => ciWait.forgePoll(fc.ciVerdict(opts.sha, { branch: opts.branch || null }), fc.kind) : (etag) => {
     const r = git.ghApiConditional(repoAbs, apiPath, etag);
     if (r.kind !== 'ok') return r;
     let summary;
@@ -16665,11 +16694,12 @@ function cmdCiWait(argv) {
     ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),
     ...(Array.isArray(s.dispatchCounted) && s.dispatchCounted.length ? { dispatchCounted: s.dispatchCounted } : {}),
     ...(s.readVia ? { readVia: s.readVia } : {}), // #654: the verdict names how it was read
+    ...(Array.isArray(s.notGreen) && s.notGreen.length ? { notGreen: s.notGreen } : {}), // #682: forge contexts not green
   };
   if (opts.json) print(JSON.stringify(out, null, 2));
   else {
     print(`${res.outcome} ${target} — waited ${ciWait.fmtDuration(res.waitedMs)}, ${res.polls} poll(s), ${res.notModified} of them 304` +
-      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}${verifyRuns.dispatchCountedNote(s.dispatchCounted)}${readViaNote(s)}`);
+      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}${verifyRuns.dispatchCountedNote(s.dispatchCounted)}${readViaNote(s)}${notGreenNote(s)}`);
   }
   return code;
 }
