@@ -213,6 +213,15 @@
  * malignant-absence reason above: the moment a human wants to veto is a test period that is
  * already counting down, and a label the repo never created cannot be applied in that moment —
  * the veto would silently not exist. Only a human removes it; no command in this repo does.
+ *
+ * `blocked:needs-human` joined the set in #683: the park label for "waits until a person decides
+ * or acts" — the label form of the `needs-human` disposition (tools/lib/disposition.js). Before
+ * it the wait had two role-named spellings (DEPRECATED_LABELS below), neither provisioned, so
+ * adopters hand-created them with different colours and descriptions, and on an install where
+ * the person who lifts the park is not the install's owner the name pointed at someone else.
+ * Provisioned for the malignant-absence reason above: a park a session wants to record must be
+ * appliable at that moment. Not in MINIMAL_LABEL_NAMES — a session's start → wrap → ship path
+ * does not write it.
  */
 
 const CONVENTION_LABELS = [
@@ -239,7 +248,54 @@ const CONVENTION_LABELS = [
   { name: 'deferred:measurement', color: '7C6F57', description: 'Parked until a metric crosses a threshold — name the metric and the threshold on the issue' },
   { name: 'deferred:external-party', color: '6E5494', description: 'Parked until someone outside this repo acts — name who, and pair with review-by:<date>' },
   { name: 'release-hold', color: 'E11D21', description: 'Human veto on a release tracking issue: its candidate is not finalized while this is present' },
+  { name: 'blocked:needs-human', color: 'D93F0B', description: 'Parked until a person decides or acts — a decision or an act only a person can give' },
 ];
+
+// The label alias table (#683) — deprecated spellings of a convention label, each with the label
+// that replaces it and the last day of its migration window (YYYY-MM-DD). Read, never written:
+// nothing in this repo applies one. `colab labels --ensure` reports open issues still carrying
+// one, `--relabel-deprecated` moves them, and `--prune-deprecated` deletes the old label once the
+// window is over (deprecatedLabelDecision below). The window is a DATE, not a release count:
+// minor releases here ship days apart, so a release-counted window would close before most
+// adopters had synced once. Dropping an entry is a separate change, made after its date.
+const HUMAN_WAIT_ALIAS_UNTIL = '2027-01-06';
+const DEPRECATED_LABELS = Object.freeze([
+  Object.freeze({ name: 'blocked:needs-owner', replacedBy: 'blocked:needs-human', until: HUMAN_WAIT_ALIAS_UNTIL }),
+  Object.freeze({ name: 'blocked:needs-boss', replacedBy: 'blocked:needs-human', until: HUMAN_WAIT_ALIAS_UNTIL }),
+]);
+
+/** The DEPRECATED_LABELS entry for `name`, or null. Tolerant of a label object or a bare string. */
+function deprecatedLabel(name) {
+  const s = name && typeof name === 'object' ? name.name : name;
+  return DEPRECATED_LABELS.find((d) => d.name === s) || null;
+}
+
+/**
+ * What to do with one deprecated label on one tracker — pure, so the clock and the tracker read
+ * are both inputs (#683). `entry` is a DEPRECATED_LABELS row, `today` a YYYY-MM-DD string, `open`
+ * the open issue numbers carrying the label from a NON-search read (null = could not read).
+ *
+ * Returns { action, reason, open }:
+ *   - `move`   — open issues carry it: relabel them onto `entry.replacedBy`. Moving is always
+ *                allowed, inside the window or after it.
+ *   - `delete` — the window is over (today is after `until`) AND the read confirms no open issue
+ *                carries it: the label object may be deleted.
+ *   - `keep`   — anything else: `unread` (the read failed — never read as "none open"), `window`
+ *                (still inside the window; aliases are guaranteed until `until`), `bad-date`.
+ *
+ * Deleting a label object strips it from closed issues too and cannot be undone from the tracker,
+ * so every unclear input keeps — the same posture as group-labels.js's spent-label teardown.
+ */
+function deprecatedLabelDecision(entry, { today, open } = {}) {
+  if (!Array.isArray(open)) return { action: 'keep', reason: 'unread', open: [] };
+  if (open.length) return { action: 'move', reason: 'open', open: [...open] };
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  if (!entry || !day.test(String(entry.until)) || !day.test(String(today))) {
+    return { action: 'keep', reason: 'bad-date', open: [] };
+  }
+  if (today <= entry.until) return { action: 'keep', reason: 'window', open: [] };
+  return { action: 'delete', reason: 'spent', open: [] };
+}
 
 // The DELIVERY label prefix (CONVENTIONS.md §5, Delivery type). Six fixed values, unlike
 // `group:<key>` — provisioned up front in CONVENTION_LABELS above, not created on demand.
@@ -707,6 +763,7 @@ function encodeLabel(label) {
 
 module.exports = {
   CONVENTION_LABELS, conventionLabelNames, missingConventionLabels, staleConventionDescriptions,
+  HUMAN_WAIT_ALIAS_UNTIL, DEPRECATED_LABELS, deprecatedLabel, deprecatedLabelDecision,
   MINIMAL_LABEL_NAMES, minimalConventionLabels,
   READINESS_LABEL, readinessLabelArgs, readinessMissingLabelHint, readinessMarkedMessage,
   TRACKING_LABEL,

@@ -64,10 +64,10 @@ as stubs, so every link into them still resolves. Mechanics of `colab adopt`, `c
    questions asks it, so `colab adopt` lists it as the first remaining step, naming the
    candidate layouts it found (`git ls-files`: an uncovered `migrations/` directory, or a
    directory of tracked `*.sql` files).
-3. **Create the whole label set — twenty-three names, not a subset** (`in-progress`,
+3. **Create the whole label set — twenty-four names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
-   `low-priority`, `priority:now`, `priority:high`, the six `delivery:*`, the three `deferred:*`, and `release-hold`):
+   `low-priority`, `priority:now`, `priority:high`, the six `delivery:*`, the three `deferred:*`, `release-hold`, and `blocked:needs-human`):
    ```sh
    colab labels --ensure
    ```
@@ -78,14 +78,14 @@ as stubs, so every link into them still resolves. Mechanics of `colab adopt`, `c
    description differs from the handbook's, and rewrites it only when asked
    (`--refresh-descriptions`, #364) — a description may be a declared local divergence
    ([§8, *Upstream*](../../CONVENTIONS.md#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)).
-   (No `colab` on this machine? The twenty-three `gh label
-   create … || true` lines this replaced are recoverable from that file's history.)
+   (No `colab` on this machine? The `gh label create … || true` lines this replaced are
+   recoverable from that file's history; labels added since are in `CONVENTION_LABELS`.)
 
-   **This count is a hand-typed number restated in at least four places** (here, the `gh
-   label create` fallback line above, `skills/handbook-sync/SKILL.md`, and
+   **This count is a hand-typed number restated in at least three places** (here,
+   `skills/handbook-sync/2-adoption-details.md`, and
    `tools/lib/codec/labels.js`'s own doc comment) — **none checkable against the others
    except the one pinned assertion in `tools/lib/labels-ensure-cli.test.js`.** Add a
-   label, bump that test, then grep for the other three prose counts before you're done.
+   label, bump that test, then grep for the other two prose counts before you're done.
    This full set is provisioned again on every sync, not only at adoption.
 4. **Add the tier topic** — `gh repo edit <owner>/<repo> --add-topic tier-b` (or
    `tier-c`/`tier-a`).

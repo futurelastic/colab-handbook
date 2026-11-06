@@ -221,12 +221,15 @@ with no proposal, never "no evidence exists".
 close-reason spelling, because that is the string the close is made with; its token is
 `not-planned`, because a token compared by equality cannot carry whitespace.
 
-**One kind has a legacy name, read but never written** (#609, why on the issue). A
-reader accepts `needs-boss` as a kind and as a token and classifies it exactly like
-`needs-owner`; an old and a new marker on one comment are one proposal, not two; writers emit
-`needs-owner` only. The park label adopters keep switches alike: `blocked:needs-owner`, with
-`blocked:needs-boss` still read as the same park (the handbook provisions neither). Accept both
-until the old name has had no open use for 14 days; dropping it is a separate change.
+**One kind has deprecated aliases, read but never written** (#609, #683, why on the issues).
+The person-wait kind is `needs-human`: it names the wait, not a role. A reader accepts each
+alias as a kind and as a token and classifies it exactly like `needs-human`; an old and a new
+marker on one comment are one proposal, not two; writers emit `needs-human` only. The park
+label is `blocked:needs-human`, a provisioned convention label, so the label sync creates it;
+`colab labels --ensure --relabel-deprecated` moves open issues off an alias label onto it.
+Deprecated aliases until 2027-01-06: `needs-owner` and `needs-boss` (labels `blocked:needs-owner`, `blocked:needs-boss`).
+After that date `colab labels --ensure --prune-deprecated` deletes an alias label no open issue
+carries; dropping the aliases from the reader is a separate change.
 
 | Kind | Token | What it means | What it converts to |
 |---|---|---|---|
@@ -234,7 +237,7 @@ until the old name has had no open use for 14 days; dropping it is a separate ch
 | `split` | `split` | Part landed; the remainder is filed as a native sub-issue carrying the same `delivery:` and a wake condition, evidence copied across | closes with evidence |
 | `routed-out` | `routed-out` | The work belongs to another repo; `<other-repo>#N` exists and links back | closes with evidence |
 | `hold` | `hold` | Parked on a named wake condition | `deferred:<kind>` + a `Hold:` line whose `wake:` is from the closed vocabulary (above) |
-| `needs-owner` | `needs-owner` | A human must answer before anything else can happen | a recorded decision (*Decision gate*, below) |
+| `needs-human` | `needs-human` | A human must answer before anything else can happen | a recorded decision (*Decision gate*, below) |
 | `not planned` | `not-planned` | Superseded, or the direction was abandoned | closes as `not planned` |
 | `leave` | `leave` | Nothing decided | **never applied by an agent** — a nameable wake ⇒ `hold`; nothing to name ⇒ a *finding* |
 
@@ -272,7 +275,7 @@ neither input reaches them.
 | `split` | the remainder is filed as a native sub-issue with the same `delivery:` and a wake condition, evidence copied across | never — filing is mechanical |
 | `routed-out` | `<other-repo>#N` exists **and** links back to this issue | never — but the filing itself obeys the destination repo's own language rule |
 | `hold` | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, **or** a `wake:` from *Holds*' closed vocabulary | the wake has stood **30 d** (a PROPOSAL, unmeasured; a repo may declare `thresholds.hold-stale-days`) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
-| `needs-owner` | **never** — the agent *records* the question and moves on (record-first) | always; the answer returns the issue to intake |
+| `needs-human` | **never** — the agent *records* the question and moves on (record-first) | always; the answer returns the issue to intake |
 | `not planned` | superseded by a **merged or closed** replacement that references this issue | an abandoned direction — a human judgement, always |
 | `leave` | **never** — the agent converts it (see above) | a human may leave with a reason |
 

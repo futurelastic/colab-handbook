@@ -253,6 +253,7 @@ python
 ```
 
 ```compat codec
+HUMAN_WAIT_ALIAS_UNTIL = "2027-01-06"
 MINIMAL_LABEL_NAMES = "in-progress,deps-checked,agent-filed,epic"
 READINESS_LABEL = "deps-checked"
 TRACKING_LABEL = "tracking"
@@ -293,7 +294,7 @@ CHECKABLE_KINDS = "issueClosed,branchLanded,trunkAt,labelPresent,after"
 WAKE_KINDS_TEXT = "review-by:<date> · #N · ruling · issueClosed:<n|owner/repo#n> · branchLanded:<ref> · trunkAt:<sha> · labelPresent:<label> · after:<date>"
 HOLD_SHAPES = "ask,task,wait"
 CLOSE_REASONS = "completed,not-planned"
-CONVENTION_LABELS = "in-progress,deps-checked,agent-filed,epic,needs-decision,decision-recorded,needs-plan,migration-granted,needs-migration-grant,ci-granted,low-priority,priority:now,priority:high,delivery:code,delivery:content,delivery:ops,delivery:docs-only,delivery:elsewhere,delivery:design,deferred:date,deferred:measurement,deferred:external-party,release-hold"
+CONVENTION_LABELS = "in-progress,deps-checked,agent-filed,epic,needs-decision,decision-recorded,needs-plan,migration-granted,needs-migration-grant,ci-granted,low-priority,priority:now,priority:high,delivery:code,delivery:content,delivery:ops,delivery:docs-only,delivery:elsewhere,delivery:design,deferred:date,deferred:measurement,deferred:external-party,release-hold,blocked:needs-human"
 ```
 
 ```compat export

@@ -243,31 +243,42 @@ test('hold: a wake standing past the proposal threshold with no movement — hum
 });
 
 // ---------------------------------------------------------------------------------------------
-// needs-owner · not planned · leave
+// needs-human · not planned · leave
 // ---------------------------------------------------------------------------------------------
 
-test('needs-owner: never an agent, on any repo, however clean the evidence', () => {
-  const v = d.classify({ ...DONE_OK, kind: 'needs-owner' });
+test('needs-human: never an agent, on any repo, however clean the evidence', () => {
+  const v = d.classify({ ...DONE_OK, kind: 'needs-human' });
   assert.equal(v.authority, d.HUMAN);
   assert.equal(v.applicable, true, 'recording it is legitimate — it is applying it that is human');
 });
 
-test('#609: the legacy needs-boss is still read, and classifies exactly like needs-owner', () => {
-  const current = d.classify({ ...DONE_OK, kind: 'needs-owner' });
-  assert.deepEqual(d.classify({ ...DONE_OK, kind: 'needs-boss' }), current, 'legacy kind');
-  assert.deepEqual(d.classify({ ...DONE_OK, kind: undefined, token: 'needs-boss' }), current, 'legacy token');
+// #683 — the alias table. These are the only lines outside the table itself that name the two
+// deprecated spellings; the grep oracle on the issue counts on that.
+const ALIASES = ['needs-owner', 'needs-boss'];
 
-  const parsed = d.parseMarker('<!-- colab:disposition proposed=needs-boss -->');
-  assert.equal(parsed.recognised, true, 'an issue marked under the old name must not read as unrecognised');
-  assert.equal(parsed.kind, 'needs-owner');
-  assert.deepEqual(d.classify({ ...DONE_OK, kind: parsed.kind }), current);
+test('#683: both deprecated aliases are still read, and classify exactly like needs-human', () => {
+  const current = d.classify({ ...DONE_OK, kind: 'needs-human' });
+  for (const alias of ALIASES) {
+    assert.deepEqual(d.classify({ ...DONE_OK, kind: alias }), current, `${alias} as a kind`);
+    assert.deepEqual(d.classify({ ...DONE_OK, kind: undefined, token: alias }), current, `${alias} as a token`);
+
+    const parsed = d.parseMarker(`<!-- colab:disposition proposed=${alias} -->`);
+    assert.equal(parsed.recognised, true, `an issue marked ${alias} must not read as unrecognised`);
+    assert.equal(parsed.kind, 'needs-human');
+    assert.equal(parsed.token, 'needs-human', 'the token reported is the current spelling');
+    assert.deepEqual(d.classify({ ...DONE_OK, kind: parsed.kind }), current);
+  }
+  assert.deepEqual(Object.keys(d.LEGACY_KINDS).sort(), [...ALIASES].sort(), 'the kind alias table is exactly the two');
+  assert.deepEqual(Object.keys(d.LEGACY_TOKENS).sort(), [...ALIASES].sort(), 'the token alias table is exactly the two');
 });
 
-test('#609: everything written says needs-owner — the legacy name is read-only', () => {
-  assert.equal(d.formatMarker('needs-owner'), '<!-- colab:disposition proposed=needs-owner -->');
-  assert.throws(() => d.formatMarker('needs-boss'), /not a disposition kind/, 'a writer may not emit the legacy kind');
-  assert.ok(!d.KINDS.includes('needs-boss'));
-  assert.ok(!d.TOKENS.includes('needs-boss'));
+test('#683: everything written says needs-human — the aliases are read-only', () => {
+  assert.equal(d.formatMarker('needs-human'), '<!-- colab:disposition proposed=needs-human -->');
+  for (const alias of ALIASES) {
+    assert.throws(() => d.formatMarker(alias), /not a disposition kind/, `a writer may not emit ${alias}`);
+    assert.ok(!d.KINDS.includes(alias));
+    assert.ok(!d.TOKENS.includes(alias));
+  }
   for (const legacy of Object.keys(d.LEGACY_TOKENS)) {
     assert.ok(d.KINDS.includes(d.LEGACY_TOKENS[legacy]), `${legacy} must map onto a current kind`);
   }
@@ -276,14 +287,14 @@ test('#609: everything written says needs-owner — the legacy name is read-only
   }
 });
 
-test('#609: an old marker and a new one on the same issue are one proposal, not a contradiction', () => {
-  const v = d.parseMarker('<!-- colab:disposition proposed=needs-boss -->\n<!-- colab:disposition proposed=needs-owner -->');
+test('#683: old markers and the new one on the same issue are one proposal, not a contradiction', () => {
+  const v = d.parseMarker(ALIASES.concat('needs-human').map((t) => `<!-- colab:disposition proposed=${t} -->`).join('\n'));
   assert.equal(v.recognised, true);
-  assert.equal(v.kind, 'needs-owner');
-  assert.equal(v.token, 'needs-owner', 'the token reported is the current spelling');
+  assert.equal(v.kind, 'needs-human');
+  assert.equal(v.token, 'needs-human', 'the token reported is the current spelling');
 
-  const clash = d.parseMarker('<!-- colab:disposition proposed=needs-boss -->\n<!-- colab:disposition proposed=hold -->');
-  assert.equal(clash.recognised, false, 'a legacy token still contradicts a genuinely different proposal');
+  const clash = d.parseMarker(`<!-- colab:disposition proposed=${ALIASES[1]} -->\n<!-- colab:disposition proposed=hold -->`);
+  assert.equal(clash.recognised, false, 'an alias still contradicts a genuinely different proposal');
 });
 
 test('not planned: superseded by a merged replacement referencing this issue — agent applies', () => {

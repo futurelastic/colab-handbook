@@ -295,7 +295,10 @@ and the audit is what catches it:
   colab labels --ensure
   ```
   This is a GitHub-side change, not a committed one, so it needs no entry in §8's
-  commit — but note it in the Issue so the back-fill is recorded. A remote-less repo
+  commit — but note it in the Issue so the back-fill is recorded. **It also reports any
+  deprecated label** still on an open issue (the person-wait aliases, #683): move them in the
+  same sitting with `colab labels --ensure --relabel-deprecated`, and once the alias window has
+  ended delete the old label with `--prune-deprecated`. A remote-less repo
   has no labels to create; say so rather than leave it looking undone.
 - **The repo predates an axis.** `room`/`exposure`/`writes`/`channels` did not always
   exist, so a repo adopted before one of them landed simply has no key for it — legal,
