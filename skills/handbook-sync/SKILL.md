@@ -295,8 +295,8 @@ and the audit is what catches it:
   colab labels --ensure
   ```
   This is a GitHub-side change, not a committed one, so it needs no entry in §8's
-  commit — but note it in the Issue so the back-fill is recorded. A remote-less repo
-  has no labels to create; say so rather than leave it looking undone.
+  commit — but note it in the Issue so the back-fill is recorded. A remote-less repo has no labels
+  to create; say so. A deprecated label it reports: [move, then prune](2-adoption-details.md#deprecated-labels--move-then-prune-683).
 - **The repo predates an axis.** `room`/`exposure`/`writes`/`channels` did not always
   exist, so a repo adopted before one of them landed simply has no key for it — legal,
   and silent everywhere else in the audit. But when the audit can also see that the

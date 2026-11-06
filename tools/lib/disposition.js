@@ -69,19 +69,21 @@ const HUMAN = 'human';
  * GitHub's close reason takes. Frozen and closed: a kind outside this list is not a disposition
  * with an unknown authority, it is not a disposition.
  */
-const KINDS = Object.freeze(['done', 'split', 'routed-out', 'hold', 'needs-owner', 'not planned', 'leave']);
+const KINDS = Object.freeze(['done', 'split', 'routed-out', 'hold', 'needs-human', 'not planned', 'leave']);
 
 /**
- * #609 — names this module still READS but never writes. `needs-owner` replaced `needs-boss`
- * ("Boss" named one deployment's human; the standard is for any owner). During the switch a
- * reader must accept both, or an issue marked under the old name reads as unrecognised — "not
- * cleared" — to a tool that only knows the new one. Each legacy name classifies exactly like the
- * kind it maps to. Kept out of KINDS / TOKENS / TOKEN_BY_KIND on purpose: those are what a writer
- * may emit, and `formatMarker` refuses a legacy kind. Drop an entry once the old name has had no
- * open use for its window (a separate issue, filed then).
+ * #609, #683 — the alias table: names this module still READS but never writes. The person-wait
+ * kind is `needs-human` — it names the wait, not a role, so it reads right on any install,
+ * whoever lifts the park. Both older names are deprecated aliases of it. During the switch a
+ * reader must accept them, or an issue marked under an old name reads as unrecognised — "not
+ * cleared" — to a tool that only knows the new one. Each alias classifies exactly like the kind
+ * it maps to. Kept out of KINDS / TOKENS / TOKEN_BY_KIND on purpose: those are what a writer may
+ * emit, and `formatMarker` refuses an alias. The window the aliases are guaranteed for is the
+ * label alias table's date (`HUMAN_WAIT_ALIAS_UNTIL`, tools/lib/codec/labels.js). Reading does
+ * not stop at that date; dropping an entry is a separate change, made after it.
  */
-const LEGACY_KINDS = Object.freeze({ 'needs-boss': 'needs-owner' });
-const LEGACY_TOKENS = Object.freeze({ 'needs-boss': 'needs-owner' });
+const LEGACY_KINDS = Object.freeze({ 'needs-owner': 'needs-human', 'needs-boss': 'needs-human' });
+const LEGACY_TOKENS = Object.freeze({ 'needs-owner': 'needs-human', 'needs-boss': 'needs-human' });
 
 /**
  * The same seven by MARKER TOKEN. No token is a prefix or a decorated variant of another — the
@@ -94,13 +96,13 @@ const TOKEN_BY_KIND = Object.freeze({
   split: 'split',
   'routed-out': 'routed-out',
   hold: 'hold',
-  'needs-owner': 'needs-owner',
+  'needs-human': 'needs-human',
   'not planned': 'not-planned',
   leave: 'leave',
 });
 const KIND_BY_TOKEN = Object.freeze({
   ...Object.fromEntries(Object.entries(TOKEN_BY_KIND).map(([kind, token]) => [token, kind])),
-  ...LEGACY_TOKENS, // read-only: a legacy token parses to the current kind (#609)
+  ...LEGACY_TOKENS, // read-only: a legacy token parses to the current kind (#609, #683)
 });
 const TOKENS = Object.freeze(Object.values(TOKEN_BY_KIND));
 
@@ -348,11 +350,11 @@ function classify(facts) {
         : verdict(kind, AGENT, true, 'the park names what it is waiting on — the agent applies', []);
     }
 
-    case 'needs-owner':
+    case 'needs-human':
       // Record-first: the pass writes the question down with the apply lever pre-filled and moves
       // on. It does not stop and wait, and it never applies this itself.
       return verdict(kind, HUMAN, true,
-        'never applied by an agent — the agent records the question, the owner answers, the issue returns to intake', []);
+        'never applied by an agent — the agent records the question, a person answers, the issue returns to intake', []);
 
     case 'not planned': {
       const sup = f.supersededBy && typeof f.supersededBy === 'object' ? f.supersededBy : {};

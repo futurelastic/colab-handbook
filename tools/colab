@@ -8022,7 +8022,7 @@ const DELIVERY_LABEL_COUNT = labels.conventionLabelNames()
 const DEFERRED_LABEL_COUNT = labels.conventionLabelNames()
   .filter((n) => n.startsWith(labels.DEFERRED_LABEL_PREFIX)).length;
 
-const HELP_LABELS = `colab labels --ensure [--refresh-descriptions [--keep a,b]] [--repo P]
+const HELP_LABELS = `colab labels --ensure [--refresh-descriptions [--keep a,b]] [--relabel-deprecated] [--prune-deprecated] [--repo P]
 
 Create every convention label this repo is missing — CONVENTIONS.md §9 step 3, the ${labels.conventionLabelNames().length}-name set
 (${NON_DELIVERY_LABEL_NAMES.map((n) => `\`${n}\``).join(', ')}, the ${DELIVERY_LABEL_COUNT} \`delivery:*\` values, and the ${DEFERRED_LABEL_COUNT} \`deferred:*\` values),
@@ -8041,6 +8041,13 @@ used to be typed out by hand (#206).
                            ${labels.MINIMAL_LABEL_NAMES.map((n) => `\`${n}\``).join(', ')}. For a repo the fleet does not own
                            (CONVENTIONS.md §9, "Working in a repo you don't own") — every other
                            label is opt-in by use there, not provisioned on someone else's tracker
+  --relabel-deprecated     move every OPEN issue carrying a deprecated label (${codec.DEPRECATED_LABELS.map((d) => `\`${d.name}\``).join(', ')})
+                           onto its replacement — add the new label, remove the old (#683). Closed
+                           issues keep the old label as history. Without this flag they are only reported
+  --prune-deprecated       delete a deprecated label from the tracker — only once its window has ended
+                           (${codec.HUMAN_WAIT_ALIAS_UNTIL}) AND a non-search read confirms no open issue still
+                           carries it. Deleting strips the label from closed issues too, so it is never
+                           implied by --relabel-deprecated
   --repo <path>            repo root (default: git root of cwd)
 
 Idempotent: a label already present is never re-created and reported under "already there" —
@@ -8062,9 +8069,15 @@ rejects) — each failure is reported by name, not just a bare non-zero.
 function cmdLabels(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--keep': 'keep' },
-    flags: { '--ensure': 'ensure', '--refresh-descriptions': 'refresh', '--minimal': 'minimal', '-h': 'help', '--help': 'help' },
+    flags: {
+      '--ensure': 'ensure', '--refresh-descriptions': 'refresh', '--minimal': 'minimal',
+      '--relabel-deprecated': 'relabel', '--prune-deprecated': 'prune', '-h': 'help', '--help': 'help',
+    },
   });
   if (opts.help || !opts.ensure) return print(HELP_LABELS);
+  if (opts.minimal && (opts.relabel || opts.prune)) {
+    throw new UserError('--relabel-deprecated / --prune-deprecated move issues onto a label --minimal does not provision — drop --minimal');
+  }
   if (opts.keep !== undefined && !opts.refresh) {
     throw new UserError('--keep only means something with --refresh-descriptions — without it no description is rewritten, so there is nothing to keep');
   }
@@ -8133,6 +8146,51 @@ function cmdLabels(argv) {
       print('Same meaning in older wording → re-run with --refresh-descriptions. A different meaning is a');
       print('divergence: drift unless declared in CLAUDE.md "Local divergences:" — keep it with --keep <name>');
       print('(CONVENTIONS.md §8, Upstream; skills/handbook-sync/SKILL.md §7).');
+    }
+  }
+  // #683: deprecated aliases (codec.DEPRECATED_LABELS). Only a label the tracker actually has is
+  // read, so a repo that never carried an old spelling costs no extra call. --minimal skips this:
+  // the replacement is outside the subset it provisions.
+  if (!opts.minimal) {
+    const have = new Set(present.map((l) => l.name));
+    const target = (name) => have.has(name) || created.includes(name);
+    const day = today();
+    for (const d of codec.DEPRECATED_LABELS) {
+      if (!have.has(d.name)) continue;
+      const v = codec.deprecatedLabelDecision(d, { today: day, open: git.ghOpenIssueNumbersByLabel(repoAbs, d.name) });
+      if (v.action === 'move') {
+        const list = v.open.map((n) => `#${n}`).join(', ');
+        if (!opts.relabel) {
+          print(`Deprecated label in use: ${d.name} on ${list} — replaced by ${d.replacedBy} (alias window ends ${d.until}).`);
+          print('  Move them: colab labels --ensure --relabel-deprecated');
+          continue;
+        }
+        if (!target(d.replacedBy)) {
+          failed.push({ name: d.name, error: `${d.replacedBy} is not on the tracker, so ${list} cannot move onto it` });
+          continue;
+        }
+        const moved = [];
+        for (const n of v.open) {
+          const r = git.ghIssueEdit(repoAbs, n, ['--add-label', d.replacedBy, '--remove-label', d.name]);
+          if (r.ok) moved.push(`#${n}`);
+          else failed.push({ name: `${d.name} on #${n}`, error: (r.stderr || '').trim() || 'gh issue edit failed' });
+        }
+        if (moved.length) print(`Relabelled ${d.name} → ${d.replacedBy}: ${moved.join(', ')}`);
+      } else if (v.action === 'delete') {
+        if (!opts.prune) {
+          print(`Deprecated label ${d.name}: no open issue carries it and its window ended ${d.until} — delete it: colab labels --ensure --prune-deprecated`);
+          continue;
+        }
+        const r = git.ghLabelDelete(repoAbs, d.name);
+        if (r.ok) print(`Deleted deprecated label: ${d.name}`);
+        else failed.push({ name: d.name, error: (r.stderr || '').trim() || 'gh label delete failed' });
+      } else if (v.reason === 'unread') {
+        const why = `could not read the open issues carrying ${d.name} — left as it is`;
+        if (opts.relabel || opts.prune) failed.push({ name: d.name, error: why });
+        else print(`Deprecated label ${d.name}: ${why}`);
+      } else {
+        print(`Deprecated label ${d.name}: no open issue carries it; kept until its window ends ${d.until}${opts.prune ? ' (--prune-deprecated deletes it only after that)' : ''}.`);
+      }
     }
   }
   if (failed.length) {
@@ -17932,7 +17990,9 @@ Commands:
   labels --ensure [--repo P]              create every missing convention label (§9 step 3, #206) —
                                         idempotent, reports created vs already-there, and names every
                                         label whose description drifted (#364); --refresh-descriptions
-                                        [--keep a,b] rewrites those to the handbook's text
+                                        [--keep a,b] rewrites those to the handbook's text;
+                                        --relabel-deprecated moves open issues off a deprecated
+                                        label, --prune-deprecated deletes it after its window (#683)
   config [show|add-repo P|rm-repo P|set K V]
 
 State is machine-local at ~/.colab/ (override with COLAB_HOME). Run any command with

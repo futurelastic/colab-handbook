@@ -80,6 +80,22 @@ function fixture() {
     '  shift 3; printf "%s\\t%s\\n" "$name" "$*" >> "$FAKE_GH_EDIT_LOG"',
     '  exit 0',
     'fi',
+    // #683: the deprecated-alias step. `api` answers the non-search open-issues read from
+    // $FAKE_GH_OPEN_FILE (lines "<label>\t<number>"), or fails if $FAKE_GH_API_FAIL=1; `issue edit`
+    // and `label delete` are logged, never executed.
+    'if [ "$1" = "api" ]; then',
+    '  if [ "$FAKE_GH_API_FAIL" = "1" ]; then echo "fixture gh: api refused" >&2; exit 1; fi',
+    '  lab=""; for a in "$@"; do case "$a" in labels=*) lab="${a#labels=}";; esac; done',
+    '  [ -f "$FAKE_GH_OPEN_FILE" ] && awk -F "\t" -v l="$lab" \'$1==l{print $2}\' "$FAKE_GH_OPEN_FILE"',
+    '  exit 0',
+    'fi',
+    'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then',
+    '  if [ "$3" = "$FAKE_GH_ISSUE_EDIT_FAIL" ]; then echo "fixture gh: issue edit refused for $3" >&2; exit 1; fi',
+    '  shift 2; echo "$*" >> "$FAKE_GH_ISSUE_LOG"; exit 0',
+    'fi',
+    'if [ "$1" = "label" ] && [ "$2" = "delete" ]; then',
+    '  echo "$3" >> "$FAKE_GH_DELETE_LOG"; exit 0',
+    'fi',
     'if [ "$1" = "label" ] && [ "$2" = "create" ]; then',
     '  name="$3"',
     '  if [ "$name" = "$FAKE_GH_LABEL_CREATE_FAIL" ]; then echo "fixture gh: label create refused for $name" >&2; exit 1; fi',
@@ -104,14 +120,16 @@ function colab(fx, args, extraEnv = {}) {
     encoding: 'utf8',
     env: {
       ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '',
-      FAKE_GH_LABELS_JSON: json, FAKE_GH_EDIT_LOG: path.join(fx.root, 'edits.log'), ...extraEnv,
+      FAKE_GH_LABELS_JSON: json, FAKE_GH_EDIT_LOG: path.join(fx.root, 'edits.log'),
+      FAKE_GH_ISSUE_LOG: path.join(fx.root, 'issue-edits.log'), FAKE_GH_DELETE_LOG: path.join(fx.root, 'deletes.log'),
+      FAKE_GH_OPEN_FILE: path.join(fx.root, 'open.tsv'), ...extraEnv,
     },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
-function edits(fx) {
-  const f = path.join(fx.root, 'edits.log');
+function edits(fx, file = 'edits.log') {
+  const f = path.join(fx.root, file);
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean) : [];
 }
 
@@ -206,12 +224,13 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 // this literal. #339 moved 19 -> 20 (`release-hold`) and moved the same sites together.
 // #358/#359 moved 20 -> 21 (`delivery:design`): CONVENTIONS.md §5 ("Six labels") and §9 step 3,
 // and skills/handbook-sync/SKILL.md, together again. #537 moved 21 -> 23 (`priority:now`,
-// `priority:high`), same sites.
+// `priority:high`), same sites. #683 moved 23 -> 24 (`blocked:needs-human`): the adoption procedure's
+// step 3 and 2-adoption-details.md; tools/lib/adopt.js now derives its count from the list.
 // This assertion cannot make prose self-updating, but it is the one count a CI run
 // actually exercises — if you bump CONVENTION_LABELS.length again, this fails LOUDLY, and that
 // failure is the reminder to grep the prose sites above and move them all together.
 test('CONVENTION_LABELS is what --ensure iterates — the source this command must never restate', () => {
-  assert.strictEqual(conventionLabelNames().length, 23,
+  assert.strictEqual(conventionLabelNames().length, 24,
     'label count changed — also update the prose counts in CONVENTIONS.md §5/§9 and skills/handbook-sync/SKILL.md');
   for (const l of CONVENTION_LABELS) {
     assert.ok(l.name && l.color && l.description, `label ${JSON.stringify(l)} is missing a field --ensure needs to create it`);
@@ -306,4 +325,96 @@ test('#364: --keep without --refresh-descriptions, or naming a non-convention la
   assert.notStrictEqual(b.code, 0);
   assert.match(b.err, /outside the convention set: bug/);
   assert.deepStrictEqual(edits(fx), []);
+});
+
+// --- #683: one person-wait label, and the deprecated aliases moved off ------------------------
+
+const { DEPRECATED_LABELS, HUMAN_WAIT_ALIAS_UNTIL } = require('./codec/labels.js');
+const [OWNER_ALIAS, BOSS_ALIAS] = DEPRECATED_LABELS.map((d) => d.name);
+const HUMAN = 'blocked:needs-human';
+
+function openIssues(fx, rows) {
+  fs.writeFileSync(path.join(fx.root, 'open.tsv'), rows.map(([l, n]) => `${l}\t${n}`).join('\n') + '\n');
+}
+
+test('#683: a label sync on a fresh adopter creates blocked:needs-human', () => {
+  const fx = fixture();
+  const r = colab(fx, ['labels', '--ensure', '--repo', fx.work], { FAKE_GH_LABELS: '' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, new RegExp(`Created:.*${escapeRe(HUMAN)}`));
+  assert.doesNotMatch(r.out, /Deprecated label/, 'a tracker without an old spelling reads nothing about one');
+});
+
+test('#683: open issues on a deprecated label are REPORTED by --ensure, never moved without the flag', () => {
+  const fx = fixture();
+  openIssues(fx, [[OWNER_ALIAS, 7], [OWNER_ALIAS, 8], [BOSS_ALIAS, 9]]);
+  const r = colab(fx, ['labels', '--ensure', '--repo', fx.work],
+    { FAKE_GH_LABELS: conventionLabelNames().concat(OWNER_ALIAS, BOSS_ALIAS).join(',') });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.ok(r.out.includes(`Deprecated label in use: ${OWNER_ALIAS} on #7, #8 — replaced by ${HUMAN}`), r.out);
+  assert.ok(r.out.includes(`Deprecated label in use: ${BOSS_ALIAS} on #9 — replaced by ${HUMAN}`), r.out);
+  assert.match(r.out, /--relabel-deprecated/);
+  assert.deepStrictEqual(edits(fx, 'issue-edits.log'), [], 'report-only: no issue was edited');
+});
+
+test('#683: --relabel-deprecated moves every open issue onto blocked:needs-human — created first in the same run', () => {
+  const fx = fixture();
+  openIssues(fx, [[OWNER_ALIAS, 7], [BOSS_ALIAS, 9]]);
+  const without = conventionLabelNames().filter((n) => n !== HUMAN);
+  const r = colab(fx, ['labels', '--ensure', '--relabel-deprecated', '--repo', fx.work],
+    { FAKE_GH_LABELS: without.concat(OWNER_ALIAS, BOSS_ALIAS).join(',') });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, new RegExp(`Created: ${escapeRe(HUMAN)}`));
+  assert.deepStrictEqual(edits(fx, 'issue-edits.log'), [
+    `7 --add-label ${HUMAN} --remove-label ${OWNER_ALIAS}`,
+    `9 --add-label ${HUMAN} --remove-label ${BOSS_ALIAS}`,
+  ]);
+  assert.ok(r.out.includes(`Relabelled ${OWNER_ALIAS} → ${HUMAN}: #7`));
+  assert.ok(r.out.includes(`Relabelled ${BOSS_ALIAS} → ${HUMAN}: #9`));
+  assert.deepStrictEqual(edits(fx, 'deletes.log'), [], 'moving never deletes the old label');
+});
+
+test('#683: a failed open-issue read under --relabel-deprecated fails the run and edits nothing', () => {
+  const fx = fixture();
+  const r = colab(fx, ['labels', '--ensure', '--relabel-deprecated', '--repo', fx.work],
+    { FAKE_GH_LABELS: conventionLabelNames().concat(OWNER_ALIAS).join(','), FAKE_GH_API_FAIL: '1' });
+  assert.notStrictEqual(r.code, 0);
+  assert.ok(r.out.includes(`${OWNER_ALIAS} — could not read the open issues carrying ${OWNER_ALIAS}`), r.out);
+  assert.deepStrictEqual(edits(fx, 'issue-edits.log'), []);
+});
+
+test('#683: one failed move is reported by name and fails the run; the other moves still land', () => {
+  const fx = fixture();
+  openIssues(fx, [[OWNER_ALIAS, 7], [OWNER_ALIAS, 8]]);
+  const r = colab(fx, ['labels', '--ensure', '--relabel-deprecated', '--repo', fx.work],
+    { FAKE_GH_LABELS: conventionLabelNames().concat(OWNER_ALIAS).join(','), FAKE_GH_ISSUE_EDIT_FAIL: '7' });
+  assert.notStrictEqual(r.code, 0);
+  assert.ok(r.out.includes(`${OWNER_ALIAS} on #7 — fixture gh: issue edit refused for 7`), r.out);
+  assert.ok(r.out.includes(`Relabelled ${OWNER_ALIAS} → ${HUMAN}: #8`));
+});
+
+test('#683: --prune-deprecated deletes an unused deprecated label only after its window ends', () => {
+  const fx = fixture();
+  openIssues(fx, []);
+  const r = colab(fx, ['labels', '--ensure', '--prune-deprecated', '--repo', fx.work],
+    { FAKE_GH_LABELS: conventionLabelNames().concat(OWNER_ALIAS).join(',') });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  // The CLI reads the real clock; the decision itself is pinned for both sides of the date in
+  // labels.test.js. Here: whichever side today is on, the wiring does what that side says.
+  const today = new Date().toISOString().slice(0, 10);
+  if (today <= HUMAN_WAIT_ALIAS_UNTIL) {
+    assert.deepStrictEqual(edits(fx, 'deletes.log'), [], 'inside the window nothing is deleted');
+    assert.ok(r.out.includes(`kept until its window ends ${HUMAN_WAIT_ALIAS_UNTIL}`), r.out);
+  } else {
+    assert.deepStrictEqual(edits(fx, 'deletes.log'), [OWNER_ALIAS]);
+  }
+});
+
+test('#683: --relabel-deprecated / --prune-deprecated with --minimal is refused before any gh call', () => {
+  const fx = fixture();
+  for (const flag of ['--relabel-deprecated', '--prune-deprecated']) {
+    const r = colab(fx, ['labels', '--ensure', '--minimal', flag, '--repo', fx.work], { FAKE_GH_LABEL_LIST_FAIL: '1' });
+    assert.notStrictEqual(r.code, 0);
+    assert.match(r.err, /drop --minimal/);
+  }
 });

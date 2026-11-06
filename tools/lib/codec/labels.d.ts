@@ -22,6 +22,15 @@ export const CONVENTION_LABELS: ConventionLabel[];
 export function conventionLabelNames(): string[];
 export function missingConventionLabels(present: LabelLike[] | null | undefined): string[];
 export function staleConventionDescriptions(present: LabelLike[] | null | undefined): { name: string; have: string; want: string }[];
+/** #683: a deprecated spelling, the label replacing it, and the last day (YYYY-MM-DD) of its window. */
+export interface DeprecatedLabel { name: string; replacedBy: string; until: string; }
+export const HUMAN_WAIT_ALIAS_UNTIL: string;
+export const DEPRECATED_LABELS: ReadonlyArray<DeprecatedLabel>;
+export function deprecatedLabel(name: LabelLike): DeprecatedLabel | null;
+export function deprecatedLabelDecision(entry: DeprecatedLabel, facts?: { today?: string; open?: number[] | null }):
+  | { action: 'move'; reason: 'open'; open: number[] }
+  | { action: 'delete'; reason: 'spent'; open: [] }
+  | { action: 'keep'; reason: 'unread' | 'window' | 'bad-date'; open: [] };
 export const MINIMAL_LABEL_NAMES: string[];
 export function minimalConventionLabels(): ConventionLabel[];
 

@@ -106,6 +106,14 @@
       }
     },
     {
+      "wire": "blocked:needs-human",
+      "decoded": {
+        "kind": "convention",
+        "value": "blocked:needs-human",
+        "known": true
+      }
+    },
+    {
       "wire": "graph-empty",
       "decoded": {
         "kind": "convention",
