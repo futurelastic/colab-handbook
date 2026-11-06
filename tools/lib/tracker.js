@@ -19,8 +19,10 @@
  * `{ status, conclusion, sha, createdAt, databaseId, runCount, … }` (tools/lib/git.js
  * `summarizeRunsForCommit`'s shape, the one ship's CI rows and the docs-only row already read), or
  * null when the read failed. `status: 'none'` is "no run at this sha", never "could not read". A
- * forge that only lands code (no issue tracker the CLI writes to) implements just `CI_METHODS`:
- * tools/lib/ci-forgejo.js, Forgejo commit statuses. Which engine a repo gets is `engineFor` below.
+ * forge the CLI lands code on and releases on, but never writes issues to, implements
+ * `FORGE_METHODS` (#681): the CI verdict, a READ of the issue list, and the release object —
+ * tools/lib/ci-forgejo.js, Forgejo commit statuses and `/releases`. `CI_METHODS` stays the subset
+ * the landing path (#678) needs. Which engine a repo gets is `engineFor` below.
  *
  * Deliberately NOT in the contract yet (#501 left it so: no scenario needs them, and each would
  * pin a GitHub-only shape into a spec other trackers must satisfy): the raw CI-run lists and REST
@@ -50,8 +52,15 @@ const METHODS = Object.freeze([
   { name: 'releaseCreate', kind: 'write', returns: 'result' },
 ].map(Object.freeze));
 
-/** The methods a CI-only engine implements (#678): a forge the CLI lands code on but never writes issues to. */
+/** The methods the landing path reads on a forge (#678): the CI verdict alone. */
 const CI_METHODS = Object.freeze(['ciVerdict']);
+
+/**
+ * The methods a forge engine implements (#681): landing (`CI_METHODS`) plus what a release needs —
+ * the issue list READ (switch markers, the release hold, an existing tracking record) and the release
+ * object. No issue write is here on purpose: #678's ruling keeps the forge's tracker the adopter's.
+ */
+const FORGE_METHODS = Object.freeze([...CI_METHODS, 'issueListAll', 'releaseView', 'releaseCreate']);
 
 /**
  * Throw, naming every contract method `impl` lacks. Returns `impl` when it is complete.
@@ -156,20 +165,20 @@ function engineFor(repoAbs, { configFile = null } = {}) {
 const CI_KINDS = { forgejo: () => require('./ci-forgejo') };
 
 /**
- * The CI reader for one repo, or null when its engine is GitHub — the caller keeps its existing,
+ * The forge engine for one repo, or null when its engine is GitHub — the caller keeps its existing,
  * gh-based reads there, which `ciVerdict` on the GitHub tracker wraps one-for-one. Non-null only
- * for an engine the map names (#678).
+ * for an engine the map names (#678); it implements FORGE_METHODS (#681).
  */
 function ciFor(repoAbs, opts = {}) {
   const eng = engineFor(repoAbs, opts);
   const load = CI_KINDS[eng.engine];
   if (!load) return null;
   const impl = load().create(repoAbs, eng);
-  if (!_checked.has(`ci:${eng.engine}`)) { assertImplements(impl, `CI engine "${eng.engine}"`, CI_METHODS); _checked.add(`ci:${eng.engine}`); }
+  if (!_checked.has(`ci:${eng.engine}`)) { assertImplements(impl, `forge engine "${eng.engine}"`, FORGE_METHODS); _checked.add(`ci:${eng.engine}`); }
   return impl;
 }
 
 module.exports = {
-  METHODS, CI_METHODS, ENGINES, assertImplements, forRepo,
+  METHODS, CI_METHODS, FORGE_METHODS, ENGINES, assertImplements, forRepo,
   parseRemoteUrl, engineFromConfig, engineFor, ciFor, _resetEngineCache,
 };

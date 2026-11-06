@@ -622,7 +622,8 @@ function handoffCommand(tag) {
  *   policy       release-policy.js evaluateRelease(doc)
  *   selection    selectCandidate(...)
  *   tracking     { number|null, title|null, createdAt|null, held, wouldCreate } | { error } — `title` is the
- *                matched issue's own, shown so a record that is not `release: vX.Y.Z` is visible (#575)
+ *                matched issue's own, shown so a record that is not `release: vX.Y.Z` is visible (#575);
+ *                `none: '<why>'` (#681) names why no record is opened at all (a forge remote)
  *   supersededHeld  [issue numbers]
  *   period       periodVerdict(...)            (when there is a candidate)
  *   trunk        trunkGreenVerdict(...)
@@ -675,7 +676,8 @@ function decide(facts) {
 
   const t = f.tracking || {};
   if (t.error) { add('tracking-issue', false, t.error); return out('refused'); }
-  add('tracking-issue', true, t.number ? `#${t.number} (${t.title ? JSON.stringify(t.title) : trackingTitle(cand.version)})` : `none yet — ${t.wouldCreate ? 'this run opens' : 'a non-dry run opens'} "${trackingTitle(cand.version)}"`);
+  // #681: `none` — a remote where no run opens a tracking record (a forge: the adopter's tracker).
+  add('tracking-issue', true, t.number ? `#${t.number} (${t.title ? JSON.stringify(t.title) : trackingTitle(cand.version)})` : t.none ? `none — ${t.none}` : `none yet — ${t.wouldCreate ? 'this run opens' : 'a non-dry run opens'} "${trackingTitle(cand.version)}"`);
 
   const held = [...(t.held && t.number ? [t.number] : []), ...(f.supersededHeld || [])];
   add('release-hold', !held.length, held.length

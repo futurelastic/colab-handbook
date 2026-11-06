@@ -348,6 +348,10 @@ needs `gh`, because it reads its combined run through gh, so on a forge it refus
 no `gh` call is ever sent at a Forgejo slug. Without `gh` or a mapped forge, there is no CI read at
 all, and the stale-base row refuses as `unread` instead of passing.
 
+**Releasing on such a repo** (#681) reads the same statuses, and also reads, never writes, the
+forge's issue list. It publishes release objects through the forge. See
+[releases.md, *A Forgejo remote*](releases.md#a-forgejo-remote--candidates-by-the-workflow-finals-by-a-human-681).
+
 ## Docs-only — no CI wait (#606)
 
 The rule: [CONVENTIONS.md, *Docs-only — no CI wait (#606)*](../../CONVENTIONS.md#docs-only--no-ci-wait-606).

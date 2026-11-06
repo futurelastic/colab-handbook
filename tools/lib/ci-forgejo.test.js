@@ -170,3 +170,68 @@ test('the real read: token in the request header, never on the argument list (ch
     delete require.cache[require.resolve('./ci-forgejo')];
   }
 });
+
+// ---- #681: the release half of the forge engine ----------------------------------------------------
+
+test('#681 statusRow reads the event from a Forgejo Actions context; a context without one carries none', () => {
+  assert.strictEqual(forgejo.statusRow(SHA, st(1, 'CI / test (push)', 'success')).event, 'push');
+  assert.strictEqual(forgejo.statusRow(SHA, st(2, 'release-auto / cut (workflow_dispatch)', 'pending')).event, 'workflow_dispatch');
+  assert.strictEqual('event' in forgejo.statusRow(SHA, st(3, 'ci/woodpecker', 'success')), false);
+  assert.strictEqual(forgejo.statusRow(SHA, st(4, 'CI / test (push)', 'success', '2026-11-01T10:05:00Z')).updatedAt, '2026-11-01T10:05:00Z');
+});
+
+test('#681 withoutOwnWorkflow on a Forgejo runner drops the running workflow\'s contexts by file path or base name — not on GitHub', () => {
+  const { withoutOwnWorkflow } = require('./release-cut');
+  const rows = [{ workflowName: 'CI / test (push)' }, { workflowName: 'release-auto / cut (workflow_dispatch)' }, { workflowName: 'release-autopsy / x (push)' }];
+  const fj = { GITHUB_ACTIONS: 'true', FORGEJO_ACTIONS: 'true', GITHUB_WORKFLOW: '.forgejo/workflows/release-auto.yml' };
+  assert.deepStrictEqual(withoutOwnWorkflow(rows, fj).map((r) => r.workflowName), ['CI / test (push)', 'release-autopsy / x (push)']);
+  assert.deepStrictEqual(withoutOwnWorkflow(rows, { ...fj, GITHUB_WORKFLOW: 'release-auto' }).length, 2);
+  assert.deepStrictEqual(withoutOwnWorkflow(rows, { ...fj, FORGEJO_ACTIONS: undefined, GITEA_ACTIONS: 'true' }).length, 2);
+  // GitHub: the exact-name rule only — a context-shaped name is never matched by prefix there.
+  assert.deepStrictEqual(withoutOwnWorkflow(rows, { GITHUB_ACTIONS: 'true', GITHUB_WORKFLOW: 'release-auto' }).length, 3);
+  assert.deepStrictEqual(withoutOwnWorkflow(rows, {}).length, 3);
+});
+
+test('#681 issueListAll pages, drops pull requests, maps to the GitHub shape newest first, and reads data:null on any failed page', () => {
+  const page1 = Array.from({ length: forgejo.PAGE_LIMIT }, (_, i) => ({ number: i + 1, title: `t${i + 1}`, body: '', state: 'open', labels: [], created_at: 'x', pull_request: i === 0 ? { merged: false } : null }));
+  const page2 = [{ number: 60, title: 'closed', body: 'b', state: 'closed', labels: [{ name: 'release-hold' }], created_at: 'c', closed_at: 'd', html_url: 'u' }];
+  const urls = [];
+  const r = forgejo.withFetcher((url) => {
+    urls.push(url);
+    return { status: 200, body: JSON.stringify(/page=1&/.test(url) ? page1 : page2) };
+  }, () => forgejo.create('/r', ENG).issueListAll({ limit: 5000, fields: ['number', 'state', 'labels', 'closedAt', 'url'] }));
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(urls.length, 2);
+  assert.match(urls[0], /\/repos\/acme\/app\/issues\?state=all&type=issues&page=1&limit=50$/);
+  assert.strictEqual(r.data.length, forgejo.PAGE_LIMIT, 'the pull request (number 1) is not an issue');
+  assert.deepStrictEqual(r.data[0], { number: 60, state: 'CLOSED', labels: [{ name: 'release-hold' }], closedAt: 'd', url: 'u' });
+  assert.ok(!r.data.some((i) => i.number === 1));
+  const bad = forgejo.withFetcher((url) => (/page=2&/.test(url) ? { status: 502, body: '' } : { status: 200, body: JSON.stringify(page1) }),
+    () => forgejo.create('/r', ENG).issueListAll({ limit: 5000 }));
+  assert.deepStrictEqual([bad.ok, bad.data], [false, null]);
+});
+
+test('#681 releaseCreate: the token\'s env var is named when the forge refuses the write; 409 is "already exists"', () => {
+  const mk = (status) => forgejo.withFetcher((url, o) => ({ status, body: o.method === 'POST' ? '{}' : '' }),
+    () => forgejo.create('/r', ENG).releaseCreate('v1.0.0', { final: true }));
+  assert.match(mk(403).stderr, /FORGEJO_TOKEN cannot write releases/);
+  assert.match(mk(409).stderr, /already exists/);
+  const ok = mk(201);
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.stdout, 'https://forge.example/acme/app/releases/tag/v1.0.0');
+});
+
+test('#681 blockedBy reads an issue\'s dependencies; a failed read is null, never "no edges"', () => {
+  const edges = forgejo.withFetcher((url) => {
+    assert.match(url, /\/issues\/7\/dependencies\?limit=50$/);
+    return { status: 200, body: JSON.stringify([{ number: 9, state: 'closed', closed_at: '2026-11-02T00:00:00Z' }]) };
+  }, () => forgejo.create('/r', ENG).blockedBy(7));
+  assert.deepStrictEqual(edges, [{ number: 9, state: 'closed', closedAt: '2026-11-02T00:00:00Z' }]);
+  assert.strictEqual(forgejo.withFetcher(() => ({ status: 404, body: '' }), () => forgejo.create('/r', ENG).blockedBy(7)), null);
+});
+
+test('#681 ciVerdict takes a rowsFilter — the rows it drops are not part of the verdict', () => {
+  const body = JSON.stringify({ total_count: 2, statuses: [st(1, 'CI / test (push)', 'success'), st(2, 'release-auto / cut (workflow_dispatch)', 'pending')] });
+  const v = forgejo.withFetcher(() => ({ status: 200, body }), () => forgejo.create('/r', ENG).ciVerdict(SHA, { rowsFilter: (rows) => rows.filter((r) => !/^release-auto \//.test(r.workflowName)) }));
+  assert.deepStrictEqual([v.status, v.conclusion, v.runCount], ['completed', 'success', 1]);
+});

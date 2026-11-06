@@ -1,0 +1,220 @@
+# Release (auto), Forgejo dialect — TEMPLATE (#681). Copy me into your repo at
+# .forgejo/workflows/release-auto.yml.
+#
+# This is a starting point, not a dependency. Once you copy it, YOU OWN THIS FILE.
+# Edit it freely; nothing calls it remotely and nothing will update it for you.
+#
+# EDIT POINTS are marked `# EDIT:` — walk them once after copying.
+#
+# WHAT IT DOES. The candidate half of CONVENTIONS.md §6's release rung, on a repo hosted on Forgejo
+# (or Gitea): a green CI run on main cuts the next candidate `vX.Y.Z-rc.N`, pushes the tag and
+# publishes its pre-release on the forge.
+#
+#   trigger                                         step
+#   ----------------------------------------------  ---------------------------------------------
+#   your CI workflow finished green on main and     colab ci-wait --sha <sha>, then
+#   dispatched this one (source=ci-completed)        colab release cut --auto --sha <sha>
+#   a daily schedule                                colab ci-wait, then colab release cut --auto
+#                                                    at main's head (a head a missed dispatch
+#                                                    left uncut)
+#
+# THE FINAL IS A HUMAN ACT ON A FORGE. There is no finalize step here: an automatic final leans on
+# the release tracking issue, and the handbook writes no issue on a forge (#678). A human finalizes:
+#   COLAB_HUMAN=1 colab release finalize --tag vX.Y.Z-rc.N --answered-by <name>
+# which tags the final and publishes its release object itself, so no separate tag-push workflow
+# (the GitHub `release-tag.yml`) is needed here. A route that tags finals on its own
+# (`release.route: deploy-tag-fast` / `library-fast`) is refused on a forge for the same reason.
+#
+# HOW IT DIFFERS FROM templates/release-auto.yml (the GitHub workflow), and why:
+#   - no `workflow_run` — Forgejo has none. Your CI dispatches this workflow when it ends green
+#     (the job to add is below, CI DISPATCH), with `source=ci-completed` and the sha it tested.
+#   - no `permissions:` blocks — Forgejo does not read them. The token is a secret you set
+#     (RELEASE_TOKEN), falling back to the job's own token.
+#   - full-URL `uses:` — a bare `actions/checkout` resolves against the instance's default action
+#     host, which differs between instances; the URL says which one.
+#   - the runner label comes from an Actions variable (RELEASE_RUNNER), not a literal.
+#   - verdicts are printed to the log — Forgejo drops `$GITHUB_STEP_SUMMARY`.
+#   - no `jq`: the verdict JSON is read with node, which the CLI needs anyway.
+#
+# THE CLI IGNORES THIS WORKFLOW'S OWN STATUSES when it reads CI at a commit (#425, #681): on a
+# Forgejo runner a status context reads `<workflow> / <job> (<event>)`, and the CLI drops the ones
+# whose `<workflow>` is this file's — by its path or its base name. So keep `name:` below equal to
+# this file's base name (`release-auto` for release-auto.yml), and never fold these steps into the
+# workflow that runs your test suite: that suite's statuses would be ignored with it.
+#
+# A REFUSAL IS NOT A FAILURE. `colab release cut --auto` refusing (nothing owed, a check failed) is
+# the ordinary output of most runs: it is printed as a warning and the job stays green, because a
+# red run at main's head reads as "main not green" to `colab ship`. A FAILED CLI STEP FAILS THE
+# JOB: no verdict at all (a crash, bad flags, a CLI too old for Forgejo) is a red run, and a missing
+# verdict is never read as "no candidate cut". CI that is red at the sha is not a candidate (exit 0,
+# said so); CI still running when the wait's deadline passes is a warning — the next run cuts it.
+#
+# WHAT THE MACHINE CONFIG SAYS. The CLI knows a remote is Forgejo from `forges` in its machine
+# config ($COLAB_HOME/config.json, never a tracked file). This workflow writes one for the run,
+# naming this instance (github.server_url) — nothing to edit.
+#
+# CI DISPATCH — add this job to the END of your CI workflow (.forgejo/workflows/ci.yml):
+#
+#   release-dispatch:
+#     needs: [test]                       # EDIT: every other job of your CI workflow
+#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+#     runs-on: ${{ vars.RELEASE_RUNNER || 'docker' }}
+#     steps:
+#       - name: Dispatch the release workflow at this sha
+#         env:
+#           TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+#           URL: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/actions/workflows/release-auto.yml/dispatches
+#           SHA: ${{ github.sha }}
+#         run: |
+#           node -e '
+#             const body = { ref: "main", inputs: { source: "ci-completed", sha: process.env.SHA } };
+#             fetch(process.env.URL, { method: "POST", body: JSON.stringify(body),
+#               headers: { authorization: "token " + process.env.TOKEN, "content-type": "application/json" } })
+#               .then(async (r) => { if (r.status >= 300) { console.error(r.status, await r.text()); process.exit(1); } });'
+#
+# It runs only after every other CI job passed (`needs:`), so a red CI run dispatches nothing. Its
+# own status (`CI / release-dispatch (push)`) is part of CI: the release run's `ci-wait` waits for
+# it, and it finishes seconds after the dispatch.
+#
+# SECRETS AND VARIABLES (repository or organisation settings → Actions):
+#   RELEASE_TOKEN    secret, recommended — a token that may push tags, create releases and dispatch
+#                    workflows on this repo (write:repository). Without it the job's own token is
+#                    used, which some instances do not let create releases or dispatch.
+#   RELEASE_RUNNER   variable, optional — the runner label (default `docker`).
+#
+# The tag this run pushes starts no other workflow (a tag pushed with an Actions token never does),
+# which is why the cut publishes the pre-release itself.
+
+name: release-auto
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Who dispatched this run: ci-completed (your CI, at the sha it tested) or manual"
+        required: false
+        default: "manual"
+        type: string
+      sha:
+        description: "The main commit CI tested (ci-completed sets it); empty = main's head"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Dry run: decide everything, write nothing (no tag, no release)"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # EDIT: when the daily catch-up cut runs (UTC). Off the hour on purpose.
+    - cron: "17 3 * * *"
+
+env:
+  # EDIT: the handbook ref whose colab CLI makes the release decisions — `stable` (the newest final),
+  # `next` (the newest candidate) or an exact vX.Y.Z. It must carry #681 (Forgejo support): the
+  # "Fetch the colab CLI" step refuses an older CLI rather than letting it refuse every cut.
+  HANDBOOK_REF: "stable"
+  HANDBOOK_REPO: "https://github.com/futurelastic/colab-handbook.git"
+  # EDIT: how long the run waits for CI at the sha to finish before giving up for this run.
+  CI_WAIT_TIMEOUT: "30m"
+
+jobs:
+  release:
+    name: Cut a candidate
+    runs-on: ${{ vars.RELEASE_RUNNER || 'docker' }}
+    env:
+      FORGEJO_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+      SOURCE: ${{ inputs.source || github.event_name }}
+      RUN_SHA: ${{ inputs.sha }}
+      # A dispatch on any ref other than main is dry whether or not dry_run is set.
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref_name != 'main') }}
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          ref: main # EDIT: your trunk, if it is not main
+          # Full history plus tags: versions, bumps and "previous final" are read from git, and the
+          # on-trunk check refuses a shallow checkout outright.
+          fetch-depth: 0
+          # `colab release cut` pushes its tag over the checkout's origin with this token.
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Fetch the colab CLI
+        run: |
+          set -eu
+          rm -rf "$RUNNER_TEMP/colab-handbook"
+          git clone --quiet --depth 1 --branch "$HANDBOOK_REF" "$HANDBOOK_REPO" "$RUNNER_TEMP/colab-handbook"
+          COLAB="$RUNNER_TEMP/colab-handbook/tools/colab"
+          # A CLI older than #681 reads every Forgejo cut as "gh not usable" and refuses it forever.
+          if ! node "$COLAB" release cut --help | grep -q 'On a Forgejo remote'; then
+            echo "::error::HANDBOOK_REF \"$HANDBOOK_REF\" carries a colab CLI without Forgejo release support (#681) — set HANDBOOK_REF to a ref that has it"
+            exit 1
+          fi
+          echo "COLAB=$COLAB" >> "$GITHUB_ENV"
+          # The machine config naming this instance as a Forgejo forge (tools/lib/tracker.js engineFor).
+          COLAB_HOME="$RUNNER_TEMP/colab-home"
+          mkdir -p "$COLAB_HOME"
+          SERVER="${{ github.server_url }}" node -e '
+            const u = new URL(process.env.SERVER);
+            const api = process.env.SERVER.replace(/\/+$/, "") + "/api/v1";
+            require("fs").writeFileSync(process.argv[1], JSON.stringify({ forges: { [u.hostname]: { engine: "forgejo", api, tokenEnv: "FORGEJO_TOKEN" } } }));
+          ' "$COLAB_HOME/config.json"
+          echo "COLAB_HOME=$COLAB_HOME" >> "$GITHUB_ENV"
+          # The tags are annotated; git needs an identity to write one.
+          git config user.name "forgejo-actions"
+          git config user.email "forgejo-actions@noreply.invalid"
+
+      - name: Wait for CI at the sha (colab ci-wait)
+        id: wait
+        run: |
+          set -u
+          SHA="${RUN_SHA:-}"
+          [ -n "$SHA" ] || SHA="$(git rev-parse origin/main)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "release-auto ($SOURCE): waiting for CI at $SHA"
+          rc=0
+          node "$COLAB" ci-wait --sha "$SHA" --timeout "$CI_WAIT_TIMEOUT" || rc=$?
+          case "$rc" in
+            0) echo "cut=true" >> "$GITHUB_OUTPUT" ;;
+            1) echo "cut=false" >> "$GITHUB_OUTPUT"; echo "CI is red at $SHA — not a candidate, nothing to cut." ;;
+            3) echo "cut=false" >> "$GITHUB_OUTPUT"; echo "::warning::CI at $SHA did not finish within $CI_WAIT_TIMEOUT — nothing cut this run; the next dispatch or the daily run cuts it." ;;
+            *) echo "::error::colab ci-wait gave no verdict (exit $rc) — the reason is in this step's log"; exit 1 ;;
+          esac
+
+      - name: Cut a candidate (colab release cut --auto)
+        if: steps.wait.outputs.cut == 'true'
+        env:
+          SHA: ${{ steps.wait.outputs.sha }}
+        run: |
+          set -u
+          OUT="$RUNNER_TEMP/cut.json"
+          DRY=""; [ "${DRY_RUN:-false}" = "true" ] && DRY="--dry"
+          rc=0
+          # The checkout sits on main's head; a release.guard-run reads the working tree, so it is
+          # detached at the sha being cut and restored afterwards.
+          HEAD="$(git rev-parse HEAD)"
+          [ "$HEAD" = "$SHA" ] || git checkout --quiet --detach "$SHA"
+          node "$COLAB" release cut --auto --sha "$SHA" $DRY --json > "$OUT" || rc=$?
+          [ "$HEAD" = "$SHA" ] || git checkout --quiet main
+          # A verdict is JSON carrying `ok`; anything else is a run that never decided — red.
+          node -e '
+            const fs = require("fs");
+            let v;
+            try { v = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch (_) { v = null; }
+            if (!v || typeof v !== "object" || !("ok" in v)) {
+              console.log("::error::colab release cut produced no verdict (exit " + process.argv[2] + ")");
+              process.stdout.write(fs.existsSync(process.argv[1]) ? fs.readFileSync(process.argv[1], "utf8") : "");
+              process.exit(1);
+            }
+            console.log("colab release cut --auto at " + v.sha);
+            for (const c of v.checks || []) console.log("  " + (c.checked === false ? "·" : c.ok ? "✓" : "✗") + " " + c.condition + " — " + c.detail);
+            const fail = (v.checks || []).filter((c) => c.ok === false && c.checked !== false).map((c) => c.condition + " — " + c.detail).join("; ");
+            if (process.env.DRY_RUN === "true") console.log("Dry run — would cut: " + (v.tag || "nothing"));
+            else if (v.created) {
+              console.log("Cut " + v.tag + " and pushed it.");
+              if (v.published && !v.published.ok) console.log("::warning::" + v.published.detail);
+              else if (v.published) console.log(v.published.detail);
+            } else if (v.noop) console.log("No-op: nothing owed, or a later commit already carries a candidate.");
+            else if (v.ok) console.log("Verdict ok but nothing created.");
+            else if ((v.standing || []).length) console.log("::error title=Release stalled::colab release cut refused on a condition that does not clear by itself (" + v.standing.join(", ") + "): " + fail);
+            else console.log("::warning::colab release cut refused: " + fail);
+          ' "$OUT" "$rc"

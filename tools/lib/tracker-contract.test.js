@@ -6,9 +6,9 @@
  *   - the GitHub adapter (tools/lib/tracker-github.js), with every `gh` spawn answered from the
  *     scenario's recorded transcript in tools/lib/tracker-scenarios.github.json. The transcript is
  *     strict: each spawn must be the next recorded argv, and every recorded reply must be used;
- *   - the Forgejo CI engine (tools/lib/ci-forgejo.js, #678) — a CI-only engine, so only the scenarios
- *     whose every call is in tracker.CI_METHODS — with every HTTP read answered from
- *     tools/lib/tracker-scenarios.forgejo.json, just as strictly.
+ *   - the Forgejo forge engine (tools/lib/ci-forgejo.js, #678/#681) — it implements tracker.FORGE_METHODS
+ *     only, so only the scenarios whose every call is in that set — with every HTTP request answered
+ *     from tools/lib/tracker-scenarios.forgejo.json, just as strictly (method and POST body included).
  *
  * Run: `node --test tools/lib/*.test.js` — the existing CI glob picks this file up.
  *
@@ -154,34 +154,41 @@ for (const scenario of SPEC.scenarios) {
   });
 }
 
-/** The scenarios a CI-only engine must satisfy: every call in tracker.CI_METHODS. */
-const CI_SCENARIOS = SPEC.scenarios.filter((s) => s.steps.every((st) => tracker.CI_METHODS.includes(st.call)));
+/** The scenarios a forge engine must satisfy: every call in tracker.FORGE_METHODS (#681). */
+const FORGE_SCENARIOS = SPEC.scenarios.filter((s) => s.steps.every((st) => tracker.FORGE_METHODS.includes(st.call)));
 
 /** An HTTP fetcher replaying one recorded Forgejo transcript, strictly (same rules as `replay`). */
 function replayForgejo(id) {
   const tape = RECORDED_FORGEJO.scenarios[id].map((e) => ({ ...e }));
   const problems = [];
   let next = 0;
-  const fetcher = (url, { tokenEnv }) => {
+  const fetcher = (url, { tokenEnv, method = 'GET', body }) => {
     const want = tape[next];
-    if (!want) { problems.push(`${id}: unrecorded GET ${url}`); return { status: 0, body: '' }; }
-    if (want.url !== url) problems.push(`${id}: GET ${next + 1} was ${url}, recorded ${want.url}`);
-    if (tokenEnv !== RECORDED_FORGEJO.engine.tokenEnv) problems.push(`${id}: GET ${next + 1} named token env ${tokenEnv}`);
+    if (!want) { problems.push(`${id}: unrecorded ${method} ${url}`); return { status: 0, body: '' }; }
+    const wantMethod = want.method || 'GET';
+    if (wantMethod !== method || want.url !== url) problems.push(`${id}: request ${next + 1} was ${method} ${url}, recorded ${wantMethod} ${want.url}`);
+    if (want.body !== undefined && JSON.stringify(JSON.parse(body || 'null')) !== JSON.stringify(want.body)) problems.push(`${id}: request ${next + 1} sent body ${body}, recorded ${JSON.stringify(want.body)}`);
+    if (want.body === undefined && body) problems.push(`${id}: request ${next + 1} sent an unrecorded body ${body}`);
+    if (tokenEnv !== RECORDED_FORGEJO.engine.tokenEnv) problems.push(`${id}: request ${next + 1} named token env ${tokenEnv}`);
     next += 1;
     return { status: want.status, body: want.json !== undefined ? JSON.stringify(want.json) : '' };
   };
-  const leftover = () => tape.slice(next).map((e) => `${id}: recorded GET never made: ${e.url}`);
+  const leftover = () => tape.slice(next).map((e) => `${id}: recorded ${e.method || 'GET'} never made: ${e.url}`);
   return { fetcher, problems, leftover };
 }
 
-test('the Forgejo CI engine implements the CI methods, and every CI-only scenario has a transcript', () => {
-  assert.ok(tracker.assertImplements(forgejo.create(REPO, RECORDED_FORGEJO.engine), 'forgejo', tracker.CI_METHODS));
+test('the Forgejo engine implements the forge methods (and no issue write), and every forge scenario has a transcript', () => {
+  assert.ok(tracker.assertImplements(forgejo.create(REPO, RECORDED_FORGEJO.engine), 'forgejo', tracker.FORGE_METHODS));
   assert.throws(() => tracker.assertImplements(forgejo.create(REPO, RECORDED_FORGEJO.engine), 'forgejo'), /missing/);
-  assert.ok(CI_SCENARIOS.length >= 2, 'at least the ci-verdict scenarios');
-  assert.deepStrictEqual(Object.keys(RECORDED_FORGEJO.scenarios).sort(), CI_SCENARIOS.map((s) => s.id).sort());
+  // #678's ruling, pinned: the forge engine writes no issue.
+  for (const m of tracker.METHODS.filter((x) => x.kind === 'write' && /^issue/.test(x.name))) {
+    assert.strictEqual(typeof forgejo.create(REPO, RECORDED_FORGEJO.engine)[m.name], 'undefined', `forge engine must not implement ${m.name}`);
+  }
+  assert.ok(FORGE_SCENARIOS.length >= 5, 'the ci-verdict, issue-list and releases scenarios');
+  assert.deepStrictEqual(Object.keys(RECORDED_FORGEJO.scenarios).sort(), FORGE_SCENARIOS.map((s) => s.id).sort());
 });
 
-for (const scenario of CI_SCENARIOS) {
+for (const scenario of FORGE_SCENARIOS) {
   test(`forgejo (recorded): ${scenario.id}`, () => {
     const { fetcher, problems, leftover } = replayForgejo(scenario.id);
     const failures = forgejo.withFetcher(fetcher, () => runScenario(forgejo.create(REPO, RECORDED_FORGEJO.engine), scenario));

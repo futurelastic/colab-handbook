@@ -236,11 +236,12 @@ function isReleaseTagTemplateCopy(file, text) {
  * `readFile(relPath)` returns a workflow's text (or null); `workflows` are file names under
  * .github/workflows/; `deploy` is project.yml's value. Returns [{ workflow, trigger, level, text }].
  */
-function prereleaseTagTriggers({ readFile, workflows, deploy }) {
+function prereleaseTagTriggers({ readFile, workflows, deploy, dir = ".github/workflows" }) {
+  // #681: `dir` — a Forgejo remote runs `.forgejo/workflows` when the repo has it.
   const isTagDeploy = deploy === "tag";
   const out = [];
   for (const wf of workflows || []) {
-    const text = readFile(`.github/workflows/${wf}`);
+    const text = readFile(`${dir}/${wf}`);
     if (isReleaseTagTemplateCopy(wf, text)) continue;
     const on = parseWorkflowOn(text);
     const inScope = isDeployWorkflow(wf) || (isTagDeploy && (on.pushTags !== null || on.pushTagsIgnore !== null));
@@ -255,7 +256,7 @@ function prereleaseTagTriggers({ readFile, workflows, deploy }) {
       trigger,
       level: isTagDeploy ? "fail" : "warn",
       text:
-        `.github/workflows/${wf}: ${trigger} matches the pre-release tag ${PRERELEASE_TAG_PROBE} — ` +
+        `${dir}/${wf}: ${trigger} matches the pre-release tag ${PRERELEASE_TAG_PROBE} — ` +
         "GitHub's tag glob `*` matches `-`, so a release-candidate tag " +
         (isTagDeploy ? "would deploy to production" : "would run this deploy") +
         `. Fix: add "!v*.*.*-*" after the pattern, or use a strict pattern that cannot match "-" ` +
