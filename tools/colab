@@ -262,6 +262,22 @@ function forgeCi(repoAbs) {
 }
 
 /**
+ * #681: where the workflows that run at `sha` live. GitHub reads `.github/workflows`; Forgejo runs
+ * `.forgejo/workflows` when the tree has it and falls back to `.github/workflows` when it does not.
+ */
+function releaseWorkflowDir(repoAbs, sha, forge) {
+  if (!forge) return '.github/workflows';
+  return git.git(['cat-file', '-e', `${sha}:.forgejo/workflows`], repoAbs).ok ? '.forgejo/workflows' : '.github/workflows';
+}
+
+/** #681: how a human publishes a release object the run could not — the forge's page, or the gh command. */
+function publishByHandHint(repoAbs, tag, { prerelease }) {
+  const forge = forgeCi(repoAbs);
+  if (forge) return `publish it by hand on ${forgeEngine(repoAbs).host} (Releases → new release from the existing tag ${tag}${prerelease ? ', marked pre-release' : ''})`;
+  return `publish it by hand: gh release create ${tag} --verify-tag ${prerelease ? '--prerelease --latest=false' : '--latest'}`;
+}
+
+/**
  * #344: the honest half of every "gh not usable" message — WHICH of isGhUsable's conditions failed.
  * The old fixed text "(no auth / no origin)" blamed both at once, and pointed an operator whose
  * active credential was fine at auth. Only meaningful when isGhUsable() is false.
@@ -1428,13 +1444,21 @@ alone. Best-effort like the pre-release (--json channel.ok false); the tag stand
 Needs origin reachable (the tag is recorded there) and gh usable (CI, suite and switch markers are
 read from GitHub). Exit code: 0 when a candidate was cut (or, with --dry, would be), or an --auto
 no-op; 1 when refused.
+
+On a Forgejo remote (the machine config's \`forges\` names its host, #678) no gh is used (#681): CI
+and the suite are the commit statuses at the sha, the switch markers are read from the forge's issue
+list, and the candidate's pre-release is published through the forge's /releases API with the token
+in the engine's tokenEnv (default FORGEJO_TOKEN). Workflows are read from .forgejo/workflows when
+the tree has it. A route that tags finals (deploy-tag-fast, library-fast) refuses there: its writes
+are tracker writes the handbook does not make on a forge. Template: templates/forgejo-release-auto.yml.
 `;
 
 /** Every issue with state + body, for the switch markers. null when the read failed or may be truncated. */
 function readAllIssuesForSwitches(repoAbs) {
   const LIMIT = 5000;
   // title/labels/createdAt/url are additive (#339): `release finalize` finds its tracking issue in the same read.
-  const r = tracker.forRepo(repoAbs).issueListAll({
+  // #681: on a forge remote the list is read from the forge (a READ — the forge engine writes no issue).
+  const r = (forgeCi(repoAbs) || tracker.forRepo(repoAbs)).issueListAll({
     limit: LIMIT, fields: ['number', 'state', 'stateReason', 'body', 'title', 'labels', 'createdAt', 'closedAt', 'url'],
     maxBuffer: 512 * 1024 * 1024,
   });
@@ -1486,7 +1510,8 @@ function releaseCutChanges(repoAbs, from, sha, declared) {
  */
 function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, issues: knownIssues, verifying }) {
   let ci; let suite; let switches; let issues = null;
-  if (!isGhUsable(repoAbs)) {
+  // #681: a forge remote is read through its engine (readRuns and the issue list both), never gh.
+  if (!forgeCi(repoAbs) && !isGhUsable(repoAbs)) {
     const why = ghUnusableWhy(repoAbs);
     ci = { ok: false, detail: `gh not usable (${why}) — cannot confirm CI at ${at}` };
     suite = { ok: false, detail: `gh not usable (${why}) — cannot confirm the suite ran at ${at}` };
@@ -1499,7 +1524,7 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, iss
     const note = releaseCut.verifyingNote(read);
     const rows = releaseCut.withoutSkippedOnlyWorkflows(read.rows);
     const run = git.summarizeRunsForCommit(rows, sha);
-    if (!run) ci = { ok: false, detail: `gh run list failed — cannot confirm CI at ${at}` };
+    if (!run) ci = { ok: false, detail: `${forgeCi(repoAbs) ? 'the forge\'s commit statuses could not be read' : 'gh run list failed'} — cannot confirm CI at ${at}` };
     else { const v = classifyCiRun(repoAbs, run, at); ci = { ok: v.ok, detail: v.detail + note }; }
     suite = releaseCut.fullSuiteVerdict(rows, at);
     if (note && rows) suite = { ...suite, detail: suite.detail + note };
@@ -1771,13 +1796,17 @@ function cmdReleaseCut(argv) {
     sha = r.stdout;
   }
   const at = `main@${shortSha(sha)}`;
+  // #681: a Forgejo remote — CI from commit statuses, the release object through the forge's API.
+  const forge = forgeCi(repoAbs);
 
-  const wf = git.git(['ls-tree', '--name-only', `${sha}:.github/workflows`], repoAbs);
+  const wfDir = releaseWorkflowDir(repoAbs, sha, !!forge);
+  const wf = git.git(['ls-tree', '--name-only', `${sha}:${wfDir}`], repoAbs);
   const workflows = wf.ok ? wf.stdout.split('\n').map((s) => s.trim()).filter((f) => /\.ya?ml$/.test(f)) : [];
   const triggers = workflowTriggers.prereleaseTagTriggers({
     readFile: (rel) => { const r = git.git(['show', `${sha}:${rel}`], repoAbs); return r.ok ? r.stdout : null; },
     workflows,
     deploy: doc.deploy === undefined || doc.deploy === null ? 'none' : String(doc.deploy),
+    dir: wfDir,
   });
 
   // #617: every tag this cut reads is one the push remote holds — a fresh CI checkout sees only those,
@@ -1794,7 +1823,7 @@ function cmdReleaseCut(argv) {
   const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs)).filter(onRemote);
 
   const { ci, suite, schema, switches, issues, migrations: migrationPathsSince, migrationLayout, migrationsNone, migrationsMissing } = measureCandidateConditions(repoAbs, {
-    sha, lastFinal, at, readRuns: () => releaseCut.withoutOwnWorkflow(git.ghRunsForCommit(repoAbs, 'main', sha)), // #425
+    sha, lastFinal, at, readRuns: () => releaseCut.withoutOwnWorkflow(forge ? forge.ciRunsAt(sha) : git.ghRunsForCommit(repoAbs, 'main', sha)), // #425, #681
     verifying: verifyingPolicy(repoAbs), // #624: the ship gate's rule for which runs may veto
   });
   const { manifests, ancestry } = measurePreTag(repoAbs, sha, `${remote}/main`); // #424
@@ -1809,6 +1838,12 @@ function cmdReleaseCut(argv) {
   // #446: route deploy-tag-fast — the grant, the human veto, the migration gate and the spacing are
   // measured only there, so every candidate route's run is what it was.
   const fast = releaseCut.isFastRoute(policy) && !policy.findings.length;
+  // #681: a final route's writes are tracker writes (tracking issue, "released in" announcements) and a
+  // heavy-lane dispatch — none of which the handbook performs on a forge (#678). The candidate route
+  // cuts there; a final route is refused before anything is written.
+  if (forge && (fast || (releaseCut.isLibraryRoute(policy) && !policy.findings.length))) {
+    throw new UserError(`release.route ${fast ? 'deploy-tag-fast' : 'library-fast'} tags a final that announces itself on the tracker, and on a ${forge.kind} remote (${forgeEngine(repoAbs).host}) the handbook writes no issue (#678). Drop \`release.route\` from .github/project.yml so the default route cuts candidates, then run \`colab release cut --auto\`; a final there is a human's \`COLAB_HUMAN=1 colab release finalize --tag <vX.Y.Z-rc.N> --answered-by <name>\` (#681)`);
+  }
   const fastFacts = fast ? measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: migrationPathsSince, migrationLayout, migrationsNone, migrationsMissing, remoteTags }) : {};
   if (fast && auto) auto.spacing = fastFacts.spacing;
   // #590: route library-fast — a final with nothing deployed. The release-hold veto is its one extra
@@ -1950,7 +1985,7 @@ function cmdReleaseCut(argv) {
     else {
       print(`✓ tagged the final ${verdict.tag} on ${at} and pushed it to ${remote} — route library-fast: a library released per merge, nothing deploys from it.`);
       if (published && published.ok) print(`✓ ${published.detail}`);
-      else if (published) warn(`${published.detail} — the tag stands; publish it by hand: gh release create ${verdict.tag} --verify-tag --latest`);
+      else if (published) warn(`${published.detail} — the tag stands; ${publishByHandHint(repoAbs, verdict.tag, { prerelease: false })}`);
       if (announced && announced.issues.length) print(`released in ${verdict.tag}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'}`);
     }
   } else if (verdict.final) {
@@ -1958,14 +1993,14 @@ function cmdReleaseCut(argv) {
     else {
       print(`✓ tagged the final ${verdict.tag} on ${at} and pushed it to ${remote} — route deploy-tag-fast, by the operator's grant (decision #${verdict.grant.issue}); the release workflow deploys it in this run.`);
       if (published && published.ok) print(`✓ ${published.detail}`);
-      else if (published) warn(`${published.detail} — the tag stands; publish it by hand: gh release create ${verdict.tag} --verify-tag --latest`);
+      else if (published) warn(`${published.detail} — the tag stands; ${publishByHandHint(repoAbs, verdict.tag, { prerelease: false })}`);
       if (announced && announced.issues.length) print(`released in ${verdict.tag}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'}`);
     }
   } else if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at}, push it to ${remote}, publish its GitHub pre-release and move the next channel. Nothing created.`);
   else {
     print(`✓ cut ${verdict.tag} on ${at} and pushed it to ${remote} — a candidate, not a release; finalizing it is the release skill's.`);
     if (published && published.ok) print(`✓ ${published.detail}`);
-    else if (published) warn(`${published.detail} — the tag stands; publish it by hand: gh release create ${verdict.tag} --verify-tag --prerelease --latest=false`);
+    else if (published) warn(`${published.detail} — the tag stands; ${publishByHandHint(repoAbs, verdict.tag, { prerelease: true })}`);
   }
   if (channel && channel.ok) print(`${opts.dry ? '·' : '✓'} ${channel.detail}`);
   else if (channel) warn(`${channel.detail} — the tag stands`);
@@ -1983,9 +2018,13 @@ function cmdReleaseCut(argv) {
 function publishPrerelease(repoAbs, { tag, lastFinal, message, final = false }) {
   // #446: a deploy-tag-fast final is published as a full release, marked latest.
   const kind = final ? 'release' : 'pre-release';
-  if (!isGhUsable(repoAbs)) return { ok: false, detail: `${kind} NOT published: gh not usable (${ghUnusableWhy(repoAbs)})` };
-  const view = tracker.forRepo(repoAbs).releaseView(tag);
-  if (view.ok) return { ok: true, detail: `${tag} already has a GitHub Release — left as it is` };
+  // #681: on a forge remote the release object is the forge's (`/releases`), written through its engine.
+  const forge = forgeCi(repoAbs);
+  if (!forge && !isGhUsable(repoAbs)) return { ok: false, detail: `${kind} NOT published: gh not usable (${ghUnusableWhy(repoAbs)})` };
+  const host = forge || tracker.forRepo(repoAbs);
+  const where = forge ? (forge.kind === 'forgejo' ? 'Forgejo' : forge.kind) : 'GitHub';
+  const view = host.releaseView(tag);
+  if (view.ok) return { ok: true, detail: `${tag} already has a ${where} Release — left as it is` };
   let notes;
   try {
     notes = lastFinal ? buildReleaseNotes(repoAbs, `${lastFinal}..${tag}`, lastFinal).out : `## ${tag}\n\nFirst release.\n`;
@@ -1996,9 +2035,9 @@ function publishPrerelease(repoAbs, { tag, lastFinal, message, final = false }) 
   const file = path.join(os.tmpdir(), `colab-release-notes-${process.pid}-${tag}.md`);
   fs.writeFileSync(file, notes);
   try {
-    const r = tracker.forRepo(repoAbs).releaseCreate(tag, { notesFile: file, final });
-    if (!r.ok) return { ok: false, detail: `${kind} NOT published: gh release create ${tag} failed (${(r.stderr || '').split('\n')[0] || r.code})` };
-    return { ok: true, detail: `published the GitHub ${kind} ${tag}` };
+    const r = host.releaseCreate(tag, { notesFile: file, final });
+    if (!r.ok) return { ok: false, detail: `${kind} NOT published: ${forge ? `POST /releases on ${forgeEngine(repoAbs).host} for` : 'gh release create'} ${tag} failed (${(r.stderr || '').split('\n')[0] || r.code})` };
+    return { ok: true, detail: `published the ${where} ${kind} ${tag}` };
   } finally {
     try { fs.unlinkSync(file); } catch (_) { /* best-effort */ }
   }
@@ -2128,6 +2167,13 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
 Needs origin and gh (the tracking issue, runs and edges live on GitHub). Never cuts a candidate, never
 a major, never removes a label or an edge. Exit 0 when finalized (or would be) or candidate-ready; 1
 otherwise.
+
+On a Forgejo remote (#678, #681) a final is the human bar's alone: --auto, and any run without the
+bar except --dry, is refused — an automatic final leans on the tracking record, and the handbook
+writes no issue on a forge. Under the bar: CI from commit statuses, the trunk window from the
+statuses of every commit on main since the period started, no tracking issue opened (the period
+runs from the candidate's tag), no comment, close or "Released in" announcement — and the final's
+release object is published through the forge's /releases API (--json published).
 `;
 
 /** The tracking issue's blocked_by edges as [{number, state, closedAt}], or null when unread. */
@@ -2172,7 +2218,14 @@ function cmdReleaseFinalize(argv) {
     throw new UserError('--early finalizes before the test period elapses only as a human act: run it with COLAB_HUMAN=1, --tag <vX.Y.Z-rc.N> and --answered-by <your name>');
   }
   const repoAbs = resolveRepo(opts);
-  if (!isGhUsable(repoAbs)) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — the tracking issue, runs and regression edges live on GitHub`);
+  // #681: on a forge remote a final is the human bar's alone. An automatic final (and --auto) leans on
+  // the release tracking record — the test period's start, regression edges, a grant, the announcements
+  // — and the handbook writes no issue on a forge (#678). A --dry read by hand is still allowed.
+  const forge = forgeCi(repoAbs);
+  if (forge && (opts.auto || (!humanBar && !opts.dry))) {
+    throw new UserError(`on a ${forge.kind} remote (${forgeEngine(repoAbs).host}) a final is a human act: an automatic final needs the release tracking record, and the handbook writes no issue there (#678, #681). Run it as a human: COLAB_HUMAN=1 colab release finalize --tag <vX.Y.Z-rc.N> --answered-by <your name> (add --dry to see the checks first)`);
+  }
+  if (!forge && !isGhUsable(repoAbs)) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — the tracking issue, runs and regression edges live on GitHub`);
   const doc = projectDoc(repoAbs);
   const policy = releasePolicy.evaluateRelease(doc);
   const windowBranches = releaseFinalize.windowBranches(doc && doc.trunk); // #437
@@ -2220,6 +2273,8 @@ function cmdReleaseFinalize(argv) {
     if (open.length > 1) return { error: `${open.length} open tracking issues for ${version} (${open.map((r) => `#${r.number}`).join(', ')}) — one per version; close the duplicate by hand` };
     if (open.length === 1) return { ...open[0] };
     if (isCandidate && mine.length) return { error: `the tracking issue for ${version} (#${mine[0].number}${mine[0].title ? ` ${JSON.stringify(mine[0].title)}` : ''}) is closed but ${version} is not final — reopen it; a closed record is never silently replaced` };
+    // #681: a forge keeps no tracking record — the period runs from the candidate's tag alone.
+    if (forge) return { number: null, createdAt: null, held: false, wouldCreate: false, none: `a ${forge.kind} remote keeps no tracking record (the handbook writes no issue there, #678) — the test period starts at the candidate's tag` };
     return { number: null, createdAt: null, held: false, wouldCreate: !opts.dry };
   };
   const version0 = newest ? newest.version : (selection.version || null);
@@ -2227,7 +2282,7 @@ function cmdReleaseFinalize(argv) {
   if (version0) trackings.set(version0, trackingFor(version0, { isCandidate: !!newest }));
   let trackingCreated = false;
   const t0 = version0 ? trackings.get(version0) : null;
-  if (newest && t0 && !t0.error && !t0.number && !opts.dry) {
+  if (newest && t0 && !t0.error && !t0.number && !t0.none && !opts.dry) {
     const body = releaseFinalize.trackingBody({ version: version0, row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays });
     const c = tracker.forRepo(repoAbs).issueCreate({ title: releaseFinalize.trackingTitle(version0), body });
     if (!c.number) trackings.set(version0, { error: `could not open the tracking issue for ${version0} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'})` });
@@ -2240,7 +2295,7 @@ function cmdReleaseFinalize(argv) {
   const grantDecl = policy.effective.finalGrant;
   const trust = grantDecl ? trustAt(repoAbs, `${remote}/main`) : null;
   const finalGrant = grantDecl
-    ? releasePolicy.finalGrantVerdict(git.ghIssueView(repoAbs, grantDecl.issue, ['state', 'labels', 'comments']), { issue: grantDecl.issue, trust })
+    ? releasePolicy.finalGrantVerdict(forge ? null : git.ghIssueView(repoAbs, grantDecl.issue, ['state', 'labels', 'comments']), { issue: grantDecl.issue, trust }) // #681: no grant record on a forge
     : undefined;
 
   // ---- judge one candidate: every condition at its commit, its own period, its own trunk window ----
@@ -2253,21 +2308,21 @@ function cmdReleaseFinalize(argv) {
       sha: cand.sha,
       lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha, onlyTags: remoteTags }),
       at: `${cand.tag}@${shortSha(cand.sha)}`,
-      readRuns: () => { rawRows = git.ghRunsAtCommit(repoAbs, cand.sha); rows = releaseCut.withoutOwnWorkflow(rawRows); return rows; }, // #425
+      readRuns: () => { rawRows = forge ? forge.ciRunsAt(cand.sha) : git.ghRunsAtCommit(repoAbs, cand.sha); rows = releaseCut.withoutOwnWorkflow(rawRows); return rows; }, // #425, #681
       issues,
     });
     // #566: only the run that CUT the candidate vouches for what it published — read from the rows
     // BEFORE the #425 own-workflow filter (the release workflow is the cutter), minus this run itself.
     const cutRunOpts = {
       tag: cand.tag, cutAt: cand.cutAt, ownRunId: process.env.GITHUB_ACTIONS === 'true' ? process.env.GITHUB_RUN_ID || null : null,
-      jobCount: (id) => git.ghRunJobCount(repoAbs, id),
+      jobCount: forge ? null : (id) => git.ghRunJobCount(repoAbs, id), // #681: a commit status has no jobs to count
     };
     const cutRun = releaseFinalize.cutRunVerdict(rawRows, cutRunOpts);
     // #565: a run that failed only in its deploy jobs (staging) — the three run-reading conditions
     // re-read with it counted as passed. decide() uses that reading on a human final only, and names
     // the failure either way. Jobs are read lazily: only when a condition already failed.
     let deployReport = null;
-    if (Array.isArray(rawRows) && !(conditions.ci.ok && conditions.suite.ok && cutRun.ok)) {
+    if (!forge && Array.isArray(rawRows) && !(conditions.ci.ok && conditions.suite.ok && cutRun.ok)) { // #681: no job read on a forge
       const d = releaseFinalize.deployOnlyFailures(rawRows, (id) => git.ghRunJobs(repoAbs, id));
       if (d.failures.length) {
         const at = `${cand.tag}@${shortSha(cand.sha)}`;
@@ -2281,18 +2336,18 @@ function cmdReleaseFinalize(argv) {
     const period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
     // #437: the window is main plus project.yml's trunk: when that is another branch (trunk: dev).
     const since = releaseFinalize.mergeWindowRuns(windowBranches.map((branch) => {
-      const raw = git.ghRunsSince(repoAbs, branch, period.start.slice(0, 10));
+      const raw = forge ? forge.ciRunsSince(branch, period.start.slice(0, 10), { remote }) : git.ghRunsSince(repoAbs, branch, period.start.slice(0, 10)); // #681
       return { branch, read: raw ? { ...raw, runs: releaseCut.withoutOwnWorkflow(raw.runs) } : null }; // #425
     }));
     const trunk = releaseFinalize.trunkGreenVerdict(since ? since.runs : null, {
       periodStart: period.start, periodEnd: ownClock ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated), branches: windowBranches,
     });
-    const regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? readRegressionEdges(repoAbs, tracking.number) : [], { periodStart: period.start });
+    const regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? (forge ? forge.blockedBy(tracking.number) : readRegressionEdges(repoAbs, tracking.number)) : [], { periodStart: period.start }); // #681: a hand-made record's edges, read
     const { manifests, ancestry } = measurePreTag(repoAbs, cand.sha, `${remote}/main`); // #424
     let migrations;
     if (grantDecl) {
       // #441: a migration since the last final needs a grant on THIS version's tracking issue.
-      const rec = tracking && tracking.number ? git.ghIssueView(repoAbs, tracking.number, ['state', 'labels', 'comments']) : null;
+      const rec = tracking && tracking.number && !forge ? git.ghIssueView(repoAbs, tracking.number, ['state', 'labels', 'comments']) : null; // #681
       const mg = tracking && tracking.number
         ? migrationGrant.evaluateIssue(rec, cand.version, tracking.number, labels.MIGRATION_GRANT_LABEL, { trust })
         : { ok: false, reason: 'no tracking issue yet to carry a grant' };
@@ -2350,20 +2405,26 @@ function cmdReleaseFinalize(argv) {
   // ---- writes ----
   let tagged = false;
   let channel = null; // #445: { channel, ok, action, detail } once `stable` was (or could not be) moved
+  // #681: on a forge none of these write — the forge's tracker is the adopter's (#678).
   const comment = (num, fields, text) => {
+    if (forge) return;
     const view = git.ghIssueView(repoAbs, num, ['comments']);
     if (view && releaseFinalize.hasEvent(view.comments, fields)) return;
     const r = git.ghIssueComment(repoAbs, num, `${releaseFinalize.eventMarker(fields)}\n${text}`);
     if (!r.ok) warn(`could not comment on #${num}: ${String(r.stderr || '').split('\n')[0]}`);
   };
   const close = (num) => {
+    if (forge) return;
     const r = tracker.forRepo(repoAbs).issueClose(num);
     if (!r.ok) warn(`could not close #${num}: ${String(r.stderr || '').split('\n')[0]}`);
   };
   // #426: one "Released in vX.Y.Z" comment on every issue the version carries (release-finalize.js
   // carriedIssues — the closing references in (previous final, sha]). Idempotent by event marker.
   let announced = null;
-  const announceRelease = (version, sha, early = null) => announceCarried(repoAbs, { tagNames, exclude: records.map((r) => r.number), version, sha, early });
+  const announceRelease = (version, sha, early = null) => (forge
+    ? { range: null, issues: [], posted: [], skipped: [], detail: `not announced: a ${forge.kind} remote's tracker is the adopter's (#678)` }
+    : announceCarried(repoAbs, { tagNames, exclude: records.map((r) => r.number), version, sha, early }));
+  let published = null; // #681: { ok, detail } — the final's release object, published by finalize on a forge
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
       const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1${verdict.early ? ', --early' : ''})` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}${selection.older ? `, an older candidate clean on its own clock (--tag; newest open: ${selection.newest})` : ''}`;
@@ -2376,6 +2437,10 @@ function cmdReleaseFinalize(argv) {
         throw new UserError(`git push ${remote} ${cand.version} failed — the local tag was deleted again, nothing is final (${(push.stderr || '').split('\n')[0]})`);
       }
       tagged = true;
+      // #681: on GitHub a workflow publishes the final's Release page (release-tag.yml / release-auto.yml);
+      // a forge's final is a human's run of this command, so the command publishes it. Best-effort: the
+      // tag already stands.
+      if (forge) published = publishPrerelease(repoAbs, { tag: cand.version, lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha, onlyTags: remoteTags }), message, final: true });
     }
     // #445: the `stable` channel names the newest final — moved by the run that tags it, and repaired
     // on the already-final resume (a run that died between the tag push and the move finishes it).
@@ -2441,6 +2506,7 @@ function cmdReleaseFinalize(argv) {
       periodStart: period ? period.start : null, periodEndsAt: period ? period.endsAt : null,
       state: verdict.state, tagged, finalTag: verdict.finalTag, checks: verdict.checks, handoff: verdict.handoff,
       skipped: walk ? skipped : undefined, why, next: why ? why.next : null, announced, grant: verdict.grant || null, early: verdict.early || null, channel,
+      ...(forge ? { published } : {}),
     }, null, 2));
   } else {
     print(`colab release finalize${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
@@ -2455,6 +2521,8 @@ function cmdReleaseFinalize(argv) {
     if (verdict.early) print(`early final: ${releaseFinalize.earlyLine(verdict.early)}`);
     if (why) print(`why no final: ${why.line}`);
     if (announced && announced.issues.length) print(`released in ${verdict.finalTag || version0}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'} (carried: ${announced.issues.map((n) => `#${n}`).join(', ')}${announced.skipped.length ? `; unreadable: ${announced.skipped.map((n) => `#${n}`).join(', ')}` : ''})`);
+    if (published && published.ok) print(`✓ ${published.detail}`);
+    else if (published) warn(`${published.detail} — the final tag stands; ${publishByHandHint(repoAbs, verdict.finalTag || cand.version, { prerelease: false })}`);
     if (channel && channel.ok) print(`✓ ${channel.detail}`);
     else if (channel) warn(`${channel.detail} — the final tag stands`);
     if (verdict.handoff) print(`\nThe final is a human act here. The one command, for a human to run:\n  ${verdict.handoff}`);
@@ -16706,7 +16774,9 @@ function cmdCiWait(argv) {
   }
 
   const verifyPolicy = verifyingPolicy(repoAbs);
-  const poll = fc ? () => ciWait.forgePoll(fc.ciVerdict(opts.sha, { branch: opts.branch || null }), fc.kind) : (etag) => {
+  // #681: inside a Forgejo Actions run (the release workflow waiting on CI at its own sha) the calling
+  // workflow's own contexts are dropped — a run never waits on itself (#425's rule; a no-op elsewhere).
+  const poll = fc ? () => ciWait.forgePoll(fc.ciVerdict(opts.sha, { branch: opts.branch || null, rowsFilter: (rows) => releaseCut.withoutOwnWorkflow(rows) }), fc.kind) : (etag) => {
     const r = git.ghApiConditional(repoAbs, apiPath, etag);
     if (r.kind !== 'ok') return r;
     let summary;
@@ -17705,10 +17775,13 @@ function cmdPromote(argv) {
   }
 
   let ciOk = false;
-  if (!gh) checks.push(['✗', 'trunk CI green', `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI`]);
+  // #681: a forge remote's trunk CI is its commit statuses at origin's trunk tip — what would be promoted.
+  const forge = forgeCi(repoAbs);
+  if (!gh && !forge) checks.push(['✗', 'trunk CI green', `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI`]);
   else {
-    const run = git.ghRunForSha(repoAbs, trunk);
-    if (!run) checks.push(['✗', 'trunk CI green', 'gh run list failed']);
+    const tipR = forge ? git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${trunk}^{commit}`], repoAbs) : null;
+    const run = forge ? (tipR.ok && tipR.stdout ? forge.ciVerdict(tipR.stdout.trim(), { branch: trunk }) : null) : git.ghRunForSha(repoAbs, trunk);
+    if (!run) checks.push(['✗', 'trunk CI green', forge ? `the forge's commit statuses at ${remote}/${trunk} could not be read` : 'gh run list failed']);
     else if (run.status === 'completed' && run.conclusion === 'success') { ciOk = true; checks.push(['✓', 'trunk CI green', `run for ${trunk}@${shortSha(run.sha)}: success`]); }
     else checks.push(['✗', 'trunk CI green', `${trunk}@${shortSha(run.sha)}: status=${run.status} conclusion=${run.conclusion || 'none'} (fail-to-start counts as not green)`]);
   }

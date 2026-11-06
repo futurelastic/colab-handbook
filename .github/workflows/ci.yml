@@ -246,9 +246,14 @@ jobs:
       # #607: release-tag.yml calls ./.github/workflows/ci-heavy.yml, which actionlint resolves on
       # disk — so it is linted in an adopter's layout, once per stack's heavy lane, which also checks
       # the call against each heavy template's inputs and permissions.
+      # #681: templates/forgejo-*.yml are Forgejo workflows. Forgejo takes a full-URL `uses:`
+      # (https://code.forgejo.org/actions/checkout@v4) that GitHub's schema rejects, so they are linted
+      # in their own call with ONLY that one message ignored — expressions, inputs and contexts are
+      # still checked.
       - name: actionlint templates/*.yml + this repo's own workflow
         run: |
-          actionlint -shellcheck= -pyflakes= $(ls templates/*.yml | grep -v '/release-tag\.yml$') .github/workflows/*.yml
+          actionlint -shellcheck= -pyflakes= $(ls templates/*.yml | grep -v '/release-tag\.yml$' | grep -v '/forgejo-[^/]*\.yml$') .github/workflows/*.yml
+          actionlint -shellcheck= -pyflakes= -ignore 'specifying action "https://[^"]*" in invalid format' templates/forgejo-*.yml
           for s in node python laravel; do
             d="$RUNNER_TEMP/adopter-$s"; mkdir -p "$d/.github/workflows"
             cp "templates/ci-$s-heavy.yml" "$d/.github/workflows/ci-heavy.yml"

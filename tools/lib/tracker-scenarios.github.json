@@ -58,6 +58,12 @@
       {"argv":["run","list","--branch","main","-L","1","--json","headSha"],"json":[{"headSha":"bbb2222"}]},
       {"argv":["run","list","--branch","main","--commit","aaa1111","-L","10","--json","headSha,conclusion"],"json":[{"conclusion":"success","headSha":"aaa1111"}]}
     ],
+    "issue-list-all": [
+      {"argv":["issue","list","--state","all","--limit","100","--json","number,state,body,labels"],"json":[{"body":"done","labels":[],"number":4,"state":"CLOSED"},{"body":"<!-- colab:release v1.2.0 -->","labels":[{"id":"LA_hold","name":"release-hold","description":"","color":"b60205"}],"number":3,"state":"OPEN"}]}
+    ],
+    "issue-list-all-unreadable": [
+      {"argv":["issue","list","--state","all","--limit","100","--json","number"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"}
+    ],
     "releases": [
       {"argv":["release","view","v1.1.0-rc.1","--json","tagName"],"ok":false,"code":1,"stderr":"release not found"},
       {"argv":["release","create","v1.1.0-rc.1","--verify-tag","--title","v1.1.0-rc.1","--notes-file","notes.md","--prerelease","--latest=false"],"stdout":"https://github.com/OWNER/REPO/releases/tag/v1.1.0-rc.1\n"},

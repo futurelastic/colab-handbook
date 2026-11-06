@@ -343,6 +343,7 @@ templates/deploy-xserver.yml
 templates/dist-refs.yml
 templates/docs-lint.mjs
 templates/docs-lint.yml
+templates/forgejo-release-auto.yml
 templates/gotchas-d-README.md
 templates/identity-vocabulary.example
 templates/instruction-files.yml

@@ -189,6 +189,29 @@
       ]
     },
     {
+      "id": "issue-list-all",
+      "description": "issueListAll alone — the one issue READ a forge engine implements (#681): every issue, open and closed, newest first, with the requested fields, labels as objects.",
+      "given": {
+        "login": "alice",
+        "issues": [
+          { "number": 3, "title": "release: v1.2.0", "body": "<!-- colab:release v1.2.0 -->", "state": "OPEN", "labels": ["release-hold"] },
+          { "number": 4, "title": "closed one", "body": "done", "state": "CLOSED", "stateReason": "COMPLETED" }
+        ]
+      },
+      "steps": [
+        { "call": "issueListAll", "args": [{ "limit": 100, "fields": ["number", "state", "body", "labels"] }],
+          "expect": { "ok": true, "data": [{ "number": 4, "state": "CLOSED", "body": "done", "labels": [] }, { "number": 3, "state": "OPEN", "body": "<!-- colab:release v1.2.0 -->", "labels": [{ "name": "release-hold" }] }] } }
+      ]
+    },
+    {
+      "id": "issue-list-all-unreadable",
+      "description": "issueListAll on an unreachable tracker: ok false and data null — could not read, never an empty list a caller would take for no issues.",
+      "given": { "login": "alice", "offline": true, "issues": [{ "number": 1, "title": "exists, unreachable", "state": "OPEN" }] },
+      "steps": [
+        { "call": "issueListAll", "args": [{ "limit": 100, "fields": ["number"] }], "expect": { "ok": false, "data": null } }
+      ]
+    },
+    {
       "id": "offline",
       "description": "An unreachable tracker never throws: every read is `could not read` (null, data: null, or an error), every write is ok:false — and none of them is mistaken for `none`.",
       "given": { "login": "alice", "offline": true, "issues": [{ "number": 1, "title": "exists, unreachable", "state": "OPEN", "labels": ["bug"] }] },

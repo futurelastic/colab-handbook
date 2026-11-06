@@ -781,7 +781,26 @@ function withoutOwnWorkflow(rows, env = process.env) {
   if (!Array.isArray(rows)) return rows;
   const own = env && env.GITHUB_ACTIONS === 'true' ? String(env.GITHUB_WORKFLOW || '') : '';
   if (!own) return rows;
-  return rows.filter((r) => (r && r.workflowName) !== own);
+  const prefixes = forgeOwnPrefixes(own, env);
+  return rows.filter((r) => {
+    const name = (r && r.workflowName) || '';
+    return name !== own && !prefixes.some((p) => name.startsWith(p));
+  });
+}
+
+/**
+ * #681: inside Forgejo (or Gitea) Actions a row is a commit status whose name is the context
+ * `<workflow> / <job> (<event>)`, not the workflow's name — so the exact match above never fires
+ * there. Forgejo also sets `github.workflow` (GITHUB_WORKFLOW) to the workflow FILE's path, while the
+ * context carries the workflow's `name:` (the file's base name when it has none). Both spellings are
+ * matched as a `<x> / ` prefix: the full value and its base name without `.yml`/`.yaml`. Keep the
+ * release workflow's `name:` equal to its file's base name (templates/forgejo-release-auto.yml does).
+ * Empty off a Forgejo runner — GitHub rows keep the exact rule.
+ */
+function forgeOwnPrefixes(own, env) {
+  if (!(env && (env.FORGEJO_ACTIONS === 'true' || env.GITEA_ACTIONS === 'true'))) return [];
+  const base = own.replace(/^.*\//, '').replace(/\.ya?ml$/i, '');
+  return [...new Set([own, base].filter(Boolean))].map((x) => `${x} / `);
 }
 
 // ---- §6 condition 3: schema changes are additive -----------------------------------------------

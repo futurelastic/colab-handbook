@@ -112,6 +112,33 @@ candidate: [`templates/release-tag.yml`](../../templates/release-tag.yml) publis
 as pre-releases, the audit flags a deploy trigger that matches one, and every
 current-release read skips them.
 
+## A Forgejo remote — candidates by the workflow, finals by a human (#681)
+
+On a remote the machine config's `forges` map names as Forgejo ([ci-gate.md, *A Forgejo remote*](ci-gate.md#a-forgejo-remote--ci-from-commit-statuses-landing-only-678)),
+the release commands run without `gh`. The owner approved #681 as filed: an exception to #608's item 10 for Forgejo,
+while #678's ruling still holds — **the handbook writes no issue on a forge**. So:
+
+| Command | On a Forgejo remote |
+|---|---|
+| `colab release cut` (by hand or `--auto`) | the four conditions as on GitHub. CI and the suite are the commit statuses at the sha. A status's `<event>` lets the verifying-runs rule set aside a dispatched or scheduled run, which includes the release workflow itself. Switch markers come from a **read** of the forge's issue list, and workflows from `.forgejo/workflows` when the tree has one. The candidate's pre-release is published through `POST /releases` with the token named by `tokenEnv`. A route that tags finals (`deploy-tag-fast`, `library-fast`) is refused before anything is written, because its announcements and tracking record are tracker writes. |
+| `colab release finalize` | **only under the human bar** (`COLAB_HUMAN=1`, `--tag`, `--answered-by`); `--dry` may read without it. `--auto` and an automatic final refuse and say why: they need the tracking issue. No tracking issue is opened, so the test period runs from the candidate's tag. No comment, close or `Released in` announcement is written. An existing record that someone made by hand is still **read**, for its `release-hold` and its dependencies. The trunk window is the statuses of every commit on `main` since the period started. The final's release object is published by the command itself (`--json published`): on a forge no workflow fires on a tag pushed with an Actions token. |
+| `colab promote` | trunk CI is the commit status at the remote trunk tip. |
+| `colab ci-wait --sha`, on a Forgejo runner | the calling workflow's own contexts are dropped, so a run never waits on itself (#425's rule). |
+
+**Gotcha — a combined status has no start time.** It keeps only the newest status per context, so a
+finished row's time is when it finished. Finalize's cut-run check (#566) therefore finds no run "in
+progress at the cut" and reports the candidate as cut by hand. That is the honest reading, not a
+pass the forge earned.
+
+**Not on a forge yet — the heavy lane (#610).** Its read (`heavyLaneAt`, shared with gated landing)
+still asks `gh` for `.github/workflows/ci-heavy.yml`'s runs. A forge repo with no such file is
+unaffected. A forge repo that has one fails the heavy condition closed (`unread`), and never passes.
+
+**The workflow** is [`templates/forgejo-release-auto.yml`](../../templates/forgejo-release-auto.yml).
+Your CI dispatches it when CI ends green, with `source=ci-completed` and the sha (the job to add is
+in its header). It waits for CI at that sha (`colab ci-wait`) and runs `colab release cut --auto
+--sha`. A refusal stays green. A run with no verdict fails.
+
 ## An operator-granted automatic final (#441)
 
 The rule: [CONVENTIONS.md §6, the release contract](../../CONVENTIONS.md#6-releases). (item 4)
