@@ -80,6 +80,7 @@ low-priority
 priority:now
 priority:high
 release-hold
+blocked:needs-human
 graph-empty
 delivery:code
 delivery:docs-only

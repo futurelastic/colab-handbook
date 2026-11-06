@@ -34,6 +34,7 @@ const yaml = require('./yaml.js');
 const { consumerEvidence, describeEvidence } = require('./consumer-evidence.js');
 const { evaluateExposure } = require('./exposure-shape.js');
 const { UserError } = require('./util.js');
+const labels = require('./codec/labels.js');
 
 const ROW_NAMES = ['tier', 'room', 'exposure', 'writes', 'channels'];
 
@@ -397,7 +398,7 @@ function remainingSteps(ctx = {}) {
   const steps = [];
   if (ctx.migrations) steps.push({ n: 2, text: migrationsStepText(ctx.migrations) });
   steps.push(
-    { n: 3, text: 'Create the full label set (21 names) — `colab labels --ensure`, CONVENTIONS.md §9 step 3 (#206)' },
+    { n: 3, text: `Create the full label set (${labels.conventionLabelNames().length} names) — \`colab labels --ensure\`, CONVENTIONS.md §9 step 3 (#206)` },
     { n: 4, text: 'Optional: add the tier topic to the GitHub repo — `gh repo edit --add-topic tier-<b|c|a>`, step 4. Needs repo ADMIN (push access alone gets `HTTP 404 …/topics`); nothing in colab or the audit reads it, so skip it when you are not one (#522)' },
   );
   if (ctx.fork) {

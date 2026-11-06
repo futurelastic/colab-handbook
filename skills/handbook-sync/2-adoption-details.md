@@ -52,7 +52,7 @@ colab labels --ensure
 ```
 
 Only `in-progress` is ordering-critical (the claim below needs it), but `--ensure`
-creates the whole twenty-three-name set in one idempotent call (#206) — reading it from
+creates the whole twenty-four-name set in one idempotent call (#206) — reading it from
 `tools/lib/labels.js`'s `CONVENTION_LABELS`, never restated here — and creating a
 subset is the exact bug this leads to: a `deps-checked` never created leaves a
 readiness column that can never fill, and nothing downstream can tell *free* from
@@ -246,3 +246,14 @@ when the fleet can see it, and this is the evidence for it.
 
 Then return to §1. Anything you copied in [the procedure](2-adoption-procedure.md)'s step 6 is now a stamped artifact, and
 the rest of this skill applies to it in the ordinary way.
+
+## Deprecated labels — move, then prune (#683)
+
+`colab labels --ensure` also reports every deprecated convention label still on an open issue
+(today the person-wait aliases, replaced by `blocked:needs-human`). Move them in the same sitting
+with `colab labels --ensure --relabel-deprecated`: it adds the new label and removes the old one
+on every open issue, and closed issues keep the old label as history. Once the alias window has
+ended, `colab labels --ensure --prune-deprecated` deletes the old label, but only when a
+non-search read confirms no open issue still carries it. Before relabelling, check that nothing
+outside the repo still reads only the old name (a dashboard, a hook), or the park disappears
+from it.

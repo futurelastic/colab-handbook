@@ -416,3 +416,29 @@ test('a parent is never written as a dependency: no marker in this codec reads a
   assert.strictEqual(codec.parseWake(codec.encodeParentRef({ number: 12 })).kind, 'edge',
     'the same `#N` spelled on a Hold line IS an edge — which is why a parent lives on its own marker, never there');
 });
+
+// #683 — the deprecated-label decision: the clock and the tracker read are inputs, so both sides
+// of the window are pinned here without a fake clock.
+test('#683: deprecatedLabelDecision — move while open, delete only after the window with a confirmed empty read', () => {
+  const [entry] = codec.DEPRECATED_LABELS;
+  const until = entry.until;
+  assert.equal(entry.replacedBy, 'blocked:needs-human');
+  assert.ok(codec.conventionLabelNames().includes(entry.replacedBy), 'the replacement is a provisioned label');
+  for (const d of codec.DEPRECATED_LABELS) {
+    assert.ok(!codec.conventionLabelNames().includes(d.name), `${d.name} is never provisioned`);
+    assert.equal(codec.deprecatedLabel(d.name), d);
+    assert.equal(codec.deprecatedLabel({ name: d.name }), d);
+  }
+  assert.equal(codec.deprecatedLabel('blocked:needs-human'), null);
+
+  const D = (today, open) => codec.deprecatedLabelDecision(entry, { today, open });
+  assert.deepEqual(D('2026-11-06', [3, 4]), { action: 'move', reason: 'open', open: [3, 4] });
+  assert.equal(D('2099-01-01', [3]).action, 'move', 'moving is allowed after the window too');
+  assert.deepEqual(D('2099-01-01', null), { action: 'keep', reason: 'unread', open: [] }, 'an unread is never "none open"');
+  assert.equal(D('2099-01-01', undefined).reason, 'unread');
+  assert.deepEqual(D(until, []), { action: 'keep', reason: 'window', open: [] }, 'the last day is still inside');
+  assert.equal(D('2026-11-06', []).reason, 'window');
+  assert.deepEqual(D('2099-01-01', []), { action: 'delete', reason: 'spent', open: [] });
+  assert.equal(D('soon', []).reason, 'bad-date', 'a malformed clock keeps');
+  assert.equal(codec.deprecatedLabelDecision({ ...entry, until: 'never' }, { today: '2099-01-01', open: [] }).reason, 'bad-date');
+});
