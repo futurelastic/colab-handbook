@@ -51,7 +51,7 @@ function forge(t) {
 
 const st = (id, context, status) => ({ id, context, status, target_url: null, created_at: '2026-11-06T05:00:00Z', updated_at: '2026-11-06T05:00:00Z' });
 
-function fixture(port) {
+function fixture(port, { mapped = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-forgejo-branch-ci-'));
   TMP.push(root);
   const origin = path.join(root, 'origin.git');
@@ -60,7 +60,7 @@ function fixture(port) {
   const bin = path.join(root, 'bin');
   fs.mkdirSync(home);
   fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ forges: { [HOST]: { engine: 'forgejo', api: `http://127.0.0.1:${port}/api/v1` } } }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify(mapped ? { forges: { [HOST]: { engine: 'forgejo', api: `http://127.0.0.1:${port}/api/v1` } } } : {}));
   fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\necho "fixture gh: refusing $*" >&2\nexit 1\n', { mode: 0o755 });
   const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
@@ -195,4 +195,14 @@ test('#682 ship --dry (prose table): the red branch head is a ✗ row, and the d
   assert.match(r.stdout, /✗\s+branch CI green at its head \(#682\)\s+feat\/forge-x@\S+ \(forgejo commit status\) is red — failing: CI \/ smoke \(push\) \(failure\)/);
   assert.match(r.stdout, /→ NOT READY/);
   assert.notStrictEqual(r.code, 0, r.stdout);
+});
+
+test('#682 the same repo with no forges entry reads as GitHub: no branch-head row, the forge never asked — unchanged', async (t) => {
+  const f = await forge(t);
+  const fx = fixture(f.port, { mapped: false });
+  f.statuses[fx.headSha] = [st(3, 'CI / smoke (push)', 'failure')];
+  const { body, stale, head } = await shipRows(fx);
+  assert.strictEqual(head, undefined, JSON.stringify(body.checks.map((c) => c.name)));
+  assert.ok(stale, 'the code branch reaches the #395 row, not the docs-only one');
+  assert.deepStrictEqual(f.seen, [], 'no request reached the forge');
 });
