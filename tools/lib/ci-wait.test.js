@@ -24,6 +24,20 @@ function clock() {
 
 const ok = (state, etag = '"e1"') => ({ kind: 'ok', status: 200, etag, state, summary: { status: state === 'pending' ? 'in_progress' : 'completed' } });
 
+test('#682 forgePoll: a forge summary becomes a poll — no ETag, its state; a failed read ends UNKNOWN, never waits', () => {
+  assert.deepStrictEqual(cw.forgePoll({ status: 'completed', conclusion: 'success' }, 'forgejo').state, 'green');
+  assert.strictEqual(cw.forgePoll({ status: 'completed', conclusion: 'failure' }).state, 'red');
+  assert.strictEqual(cw.forgePoll({ status: 'none' }).state, 'pending');
+  assert.strictEqual(cw.forgePoll({ status: 'in_progress' }).etag, null);
+  const failed = cw.forgePoll(null, 'forgejo');
+  assert.deepStrictEqual([failed.kind, failed.detail], ['error', 'forgejo commit-status read failed']);
+  const c = clock();
+  const seq = [{ status: 'in_progress' }, { status: 'in_progress' }, { status: 'completed', conclusion: 'success' }];
+  const res = cw.waitLoop({ poll: () => cw.forgePoll(seq.shift()), sleep: c.sleep, now: c.now });
+  assert.deepStrictEqual([res.outcome, res.polls, res.notModified, res.forced], ['GREEN', 3, 0, 0]);
+  assert.strictEqual(cw.waitLoop({ poll: () => cw.forgePoll(null), sleep: c.sleep, now: c.now }).outcome, 'UNKNOWN');
+});
+
 test('delayFor: 0 first, then 30 → 60 → 120, and 120 repeats', () => {
   assert.deepStrictEqual([0, 1, 2, 3, 4, 9].map((i) => cw.delayFor(i)), [0, 30, 60, 120, 120, 120]);
 });

@@ -77,4 +77,50 @@ function staleBaseVerdict(a) {
       'push, wait on the new run (15-minute bound), then re-run ship' };
 }
 
-module.exports = { staleBaseVerdict };
+/**
+ * #682: is the branch head's OWN CI green? Read on a forge the engine map names (#678), where no
+ * `colab ci-wait` used to exist for code-ship B1a to classify the branch with — so a red or running
+ * branch head passed `colab ship --dry` as READY on the stale-base row alone (that row asks only
+ * whether the run saw the base). The forge's summary is the same `ciVerdict` the trunk row reads.
+ *
+ *   completed / success  -> green, passes
+ *   completed / other    -> red, human-gated: a branch lands only on its own green (C7.contract.03);
+ *                           whether it is red:infra (one re-run) or red:finding (send back) is B1a's
+ *   anything unfinished  -> pending, self-clearing: wait (`colab ci-wait`), then ship again
+ *
+ * Returns null where this row says nothing: no head on the remote, an unread run (the stale-base
+ * row already refuses that as `unread`), or no status at all (the `none` row of Branch CI governs).
+ * `run.notGreen` (tools/lib/ci-forgejo.js) names the contexts that keep the sha from green.
+ *
+ * @param {object} a
+ * @param {string|null} a.headSha - the branch head on the remote
+ * @param {object|null} a.run     - the forge's ciVerdict summary at headSha
+ * @param {string} a.branch
+ * @param {string} [a.engine]     - for the detail line, e.g. 'forgejo'
+ * @returns {null|{ok:boolean, verdict:'green'|'red'|'pending', selfClearing:boolean, detail:string}}
+ */
+function branchHeadCiVerdict(a) {
+  const run = a && a.run;
+  if (!a || !a.headSha || !run || run.status === 'none') return null;
+  const at = `${a.branch}@${String(a.headSha).slice(0, 7)} (${a.engine || 'forge'} commit status)`;
+  const ng = Array.isArray(run.notGreen) ? run.notGreen : [];
+  const name = (x) => `${x.name} (${x.status === 'completed' ? (x.conclusion || 'none') : x.status})`;
+  if (run.status === 'completed' && run.conclusion === 'success') {
+    const n = run.runCount == null ? 1 : run.runCount;
+    return { ok: true, verdict: 'green', selfClearing: false, detail: `${n} context${n === 1 ? '' : 's'} at ${at}: ${n === 1 ? 'success' : 'all success'}` };
+  }
+  if (run.status === 'completed') {
+    const red = ng.filter((x) => x.status === 'completed');
+    const still = ng.filter((x) => x.status !== 'completed');
+    return { ok: false, verdict: 'red', selfClearing: false,
+      detail: `${at} is red — failing: ${red.length ? red.map(name).join(', ') : `conclusion=${run.conclusion || 'none'}`}` +
+        `${still.length ? `; still running: ${still.map(name).join(', ')}` : ''}. A branch lands only on its own green (C7.contract.03): ` +
+        'red:infra → re-run once; red:finding → send it back (code-ship B1a)' };
+  }
+  const still = ng.filter((x) => x.status !== 'completed');
+  return { ok: false, verdict: 'pending', selfClearing: true,
+    detail: `${at} has not finished — still running: ${still.length ? still.map(name).join(', ') : `status=${run.status}`}. ` +
+      `Wait with \`colab ci-wait --sha ${a.headSha} --branch ${a.branch}\`, then run ship again` };
+}
+
+module.exports = { staleBaseVerdict, branchHeadCiVerdict };

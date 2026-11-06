@@ -119,6 +119,17 @@ function runState(s) {
 }
 
 /**
+ * #682: one poll on a forge the engine map names, from its `ciVerdict` summary (tools/lib/ci-forgejo.js)
+ * — the waitLoop result shape, with no ETag (a forge read is never conditional, so no 304 can pin a
+ * stale state). A null summary is a failed read: `error`, which ends the wait UNKNOWN, never "keep
+ * waiting". Pure.
+ */
+function forgePoll(summary, engine = 'forge') {
+  if (!summary) return { kind: 'error', status: null, detail: `${engine} commit-status read failed` };
+  return { kind: 'ok', status: 200, etag: null, summary, state: runState(summary) };
+}
+
+/**
  * #505: how many 304s in a row may stand for the state before the next poll re-reads without
  * `If-None-Match`. Measured: the runs-list read kept answering 304 for ten minutes while every run
  * at the sha had completed green — the validator never changed, so a loop that trusted it would
@@ -223,6 +234,6 @@ function sleepSync(ms) {
 
 module.exports = {
   EXIT, DEFAULT_SCHEDULE_SEC, DEFAULT_DEADLINE_SEC, DEFAULT_MAX_NOT_MODIFIED,
-  delayFor, parseHttp, classifyResponse, restRow, runState, waitLoop, fmtDuration, parseDuration,
+  delayFor, parseHttp, classifyResponse, restRow, runState, forgePoll, waitLoop, fmtDuration, parseDuration,
   acquireLock, sleepSync,
 };

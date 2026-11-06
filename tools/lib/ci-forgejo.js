@@ -122,9 +122,22 @@ function create(repoAbs, eng) {
         if (page === MAX_PAGES) return null; // more statuses than we read: never a partial verdict
       }
       const rows = rowsFromPages(full, pages);
-      return rows === null ? null : require('./git').summarizeRunsForCommit(rows, full);
+      if (rows === null) return null;
+      const summary = require('./git').summarizeRunsForCommit(rows, full);
+      // #682: additive — the contexts that keep this sha from green, so a refusal can name them.
+      const ng = notGreen(rows);
+      return ng.length ? { ...summary, notGreen: ng } : summary;
     },
   };
 }
 
-module.exports = { create, withFetcher, statusRow, rowsFromPages, PAGE_LIMIT };
+/**
+ * #682: every context that is not `success` — still pending, or finished red — in the compact
+ * `{name, status, conclusion}` shape a verdict detail names them by. Pure; [] when all are green.
+ */
+function notGreen(rows) {
+  return (rows || []).filter((x) => !(x.status === 'completed' && x.conclusion === 'success'))
+    .map((x) => ({ name: x.workflowName || 'unnamed', status: x.status, conclusion: x.conclusion || null }));
+}
+
+module.exports = { create, withFetcher, statusRow, rowsFromPages, notGreen, PAGE_LIMIT };
