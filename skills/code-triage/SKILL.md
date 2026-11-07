@@ -230,9 +230,7 @@ looked* · trunk CI alive — `colab trunk-ci` must print `GREEN` for trunk's cu
 never a `gh run list` filter of your own; red with no patch ⇒ §5.2, once per repo · no live
 branch on this work or a `contention.coupled` path it edits (other overlap prints, #630) · no
 pending `needs-decision` (look for a recorded or unrecorded ruling first; a second question is
-`colab decision --reopen`; an ask in neither shape — a `decision:options` block or a body
-`Mockup:` line — is a finding, and so is a design question on a build issue, whose fix is a
-`delivery:design` issue plus a `blocked_by` edge, #685) · delivery code, docs-only or not asked · not held. Full text: [5-gates.md](5-gates.md).
+`colab decision --reopen`; an ask in neither shape, or a design question on a build issue (#685), is a finding) · delivery code, docs-only or not asked · not held. Full text: [5-gates.md](5-gates.md).
 
 ### Every label that affects a start — who sets it, who clears it (#360)
 

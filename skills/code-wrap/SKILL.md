@@ -260,15 +260,13 @@ fire-and-forget; no `colab` ⇒ skip. Full text: [a3-notify-dashboard.md](a3-not
 
 ### A3b. Request a migration grant, if this branch needs one
 
-**Rule:** diff `<base>...HEAD` for `database/migrations/`, `prisma/migrations/` and every
-declared `migrations:` prefix. No match, or every carried issue holds `needs-migration-grant`
-or `migration-granted` ⇒ A4. Else add `needs-migration-grant` **before declaring hand-off
-complete**, read it back, and report that a human still runs `colab migration-grant` (a
-reviewer grant is voided by any later commit). Granting or reviewing is never yours.
-**Stop:** label absent after the add ⇒ never create it; report the request could **not** be
-filed, pointing at `colab labels --ensure`. The request carries its evidence in the hand-off
-comment: each migration file, what it changes, its rollback, and screenshots of the built
-screens when the branch touches UI (#685). Full text: [a3b-migration-grant.md](a3b-migration-grant.md).
+**Rule:** diff `<base>...HEAD` for `database/migrations/`, `prisma/migrations/` and every declared
+`migrations:` prefix. No match, or every carried issue holds `needs-migration-grant` or `migration-granted`
+⇒ A4. Else add `needs-migration-grant` **before declaring hand-off complete**, read it back, put its evidence
+in the hand-off comment (each file, what it changes, its rollback, screenshots if UI — #685), and report that
+a human still runs `colab migration-grant` (a reviewer grant is voided by any later commit). Granting or
+reviewing is never yours. **Stop:** label absent after the add ⇒ never create it; report the request could
+**not** be filed, pointing at `colab labels --ensure`. Full text: [a3b-migration-grant.md](a3b-migration-grant.md).
 
 ### A4. Commit only the deliverable paths
 
@@ -352,11 +350,10 @@ never by trusting this session's word for it:
 
 ### Post the hand-off comment — the last word on its head (#586)
 
-**Rule:** after A5, post A1's distill as one comment per issue naming the branch, the **full**
-head sha and A5's class, opening with `<!-- colab:handoff branch=<branch> head=<full sha> -->`
-(#685) — the **last** comment you write for that head. Later news on the same
-head ⇒ **edit** it or post a complete new hand-off, never a follow-up comment; a new head ⇒ a new
-hand-off naming the new sha. Full text: [handoff-last-word.md](handoff-last-word.md).
+**Rule:** after A5, post A1's distill as one comment per issue, opening with its `colab:handoff` marker
+(#685) and naming the branch, the **full** head sha and A5's class — the **last** comment you write for
+that head. Later news on the same head ⇒ **edit** it or post a complete new hand-off, never a follow-up
+comment; a new head ⇒ a new hand-off naming the new sha. Full text: [handoff-last-word.md](handoff-last-word.md).
 
 State this checklist, filled in, as the last thing you report. A box you cannot
 check is not a reason to force it true — say what is missing and why, and let
@@ -372,21 +369,13 @@ missing — rung <1|2> work wrapped without one`, not hand-off complete.
 **Stop:** never back-fill a plan after the code. Full text, with the check script:
 [handoff-missing-plan.md](handoff-missing-plan.md).
 
-### An ask you raised — readable, and never on your own build issue (#685)
-
-**Rule:** a surface found mid-work to need a design that does not exist (a new surface,
-`CONVENTIONS.md` §5 *Design work splits by size*) ⇒ file a `delivery:design` issue, run
-`colab blocked <N> --by <design>`, keep the claim, and ship the part that does not depend on
-the look; never add `needs-decision` to your own build issue. Every ask you raised is in one
-of the two readable shapes — a `decision:options` block or a body `Mockup:` line.
-**Stop:** an ask in neither shape is not raised; fix it before ending the turn. Full text, with
-the check: [handoff-readable-ask.md](handoff-readable-ask.md).
-
 ### A partial wrap is a checkpoint, not the end of your turn (#486)
 
 **Rule:** unfinished work on a still-claimed issue ⇒ keep working, same turn. End the turn only
 with a `Blocked: <what is missing> — <who or what clears it> (<link>)` line on the Issue per
-unfinished item, reported first, or with the remainder moved to its own issue and unclaimed.
+unfinished item, reported first, or with the remainder moved to its own issue and unclaimed. A new
+surface with no design ⇒ a `delivery:design` issue + `colab blocked <N> --by <design>`, keep the claim, ship the
+rest; never `needs-decision` on your build issue; asks in a readable shape (#685, [handoff-readable-ask.md](handoff-readable-ask.md)).
 **Stop:** "the rest is follow-up" is not a blocker; nor is a person-only check — no hold, it becomes a
 `Human verify:` row and the branch hands off finished (#541, [handoff-human-verify.md](handoff-human-verify.md)). Full text: [handoff-partial-wrap.md](handoff-partial-wrap.md).
 
