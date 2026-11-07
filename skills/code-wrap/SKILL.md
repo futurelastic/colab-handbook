@@ -266,7 +266,9 @@ or `migration-granted` ⇒ A4. Else add `needs-migration-grant` **before declari
 complete**, read it back, and report that a human still runs `colab migration-grant` (a
 reviewer grant is voided by any later commit). Granting or reviewing is never yours.
 **Stop:** label absent after the add ⇒ never create it; report the request could **not** be
-filed, pointing at `colab labels --ensure`. Full text: [a3b-migration-grant.md](a3b-migration-grant.md).
+filed, pointing at `colab labels --ensure`. The request carries its evidence in the hand-off
+comment: each migration file, what it changes, its rollback, and screenshots of the built
+screens when the branch touches UI (#685). Full text: [a3b-migration-grant.md](a3b-migration-grant.md).
 
 ### A4. Commit only the deliverable paths
 
@@ -334,8 +336,8 @@ never by trusting this session's word for it:
       `live-env`) recorded beside it, or `branch-ci <sha7>` when a green branch-CI run at
       the head sha stood in for it (A3, #408). A `live-env` verdict is a red gate, not a pass (#403)
 - [ ] migration-grant REQUEST filed on every carried issue whose branch touches a
-      migration path and didn't already carry the signal (A3b) — or N/A, no migration
-      files on this branch
+      migration path and didn't already carry the signal, its evidence in the hand-off
+      comment (A3b) — or N/A, no migration files on this branch
 - [ ] claim(s) still held — nothing here releases them; `code-ship` B3 does
 - [ ] plan file present at `$PLANS_DIR/issue-$N.md` (`$MAIN_REPO/.plans/` unless
       `COLAB_PLANS_DIR` says otherwise) or the legacy `$MAIN_REPO/.claude/plans/issue-$N.md`
@@ -351,7 +353,8 @@ never by trusting this session's word for it:
 ### Post the hand-off comment — the last word on its head (#586)
 
 **Rule:** after A5, post A1's distill as one comment per issue naming the branch, the **full**
-head sha and A5's class — the **last** comment you write for that head. Later news on the same
+head sha and A5's class, opening with `<!-- colab:handoff branch=<branch> head=<full sha> -->`
+(#685) — the **last** comment you write for that head. Later news on the same
 head ⇒ **edit** it or post a complete new hand-off, never a follow-up comment; a new head ⇒ a new
 hand-off naming the new sha. Full text: [handoff-last-word.md](handoff-last-word.md).
 
@@ -368,6 +371,16 @@ Absent, real rung 0 ⇒ `rung 0 because <one line>`. Absent otherwise ⇒ report
 missing — rung <1|2> work wrapped without one`, not hand-off complete.
 **Stop:** never back-fill a plan after the code. Full text, with the check script:
 [handoff-missing-plan.md](handoff-missing-plan.md).
+
+### An ask you raised — readable, and never on your own build issue (#685)
+
+**Rule:** a surface found mid-work to need a design that does not exist (a new surface,
+`CONVENTIONS.md` §5 *Design work splits by size*) ⇒ file a `delivery:design` issue, run
+`colab blocked <N> --by <design>`, keep the claim, and ship the part that does not depend on
+the look; never add `needs-decision` to your own build issue. Every ask you raised is in one
+of the two readable shapes — a `decision:options` block or a body `Mockup:` line.
+**Stop:** an ask in neither shape is not raised; fix it before ending the turn. Full text, with
+the check: [handoff-readable-ask.md](handoff-readable-ask.md).
 
 ### A partial wrap is a checkpoint, not the end of your turn (#486)
 

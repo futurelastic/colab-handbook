@@ -13,12 +13,18 @@ to look past such comments; the skill still makes the hand-off unambiguous on it
 
 ### What it carries
 
+- **First line, a marker** (#685): `<!-- colab:handoff branch=<branch> head=<full sha> -->`. It
+  costs a human reader nothing in the rendered comment, and it lets a tool find the hand-off
+  without matching the branch name and sha in prose. The newest marker whose `head=` equals the
+  branch's remote head is the live hand-off; an older one names a head that no longer lands.
 - The branch, as a whole token, and the **full** head sha — `git rev-parse HEAD`, never a short
   form. `colab ship --handoff` accepts any 7–40 hex prefix of the remote head, but a full sha
   can never be ambiguous and reads the same on every tool that parses the thread.
 - A1's distill: what was done, decided and left open.
 - A5's branch-CI class at that head, with the run id where there is one
   (`branch-ci <sha7> run <databaseId>`), and the gate / hermetic verdict word (A3).
+- The migration-grant request's evidence, when A3b filed one on this issue
+  ([a3b-migration-grant.md](a3b-migration-grant.md#the-request-carries-its-evidence-685)).
 
 That is why it is posted at *Hand off*, after A5, and not at A1: at A1 the deliverable is not
 committed yet (A4), so the head the comment would name does not exist, and neither does its CI
@@ -33,8 +39,8 @@ class.
 | nothing | nothing — no "still green", no "done" line after it |
 
 Never a separate follow-up comment after the hand-off on the same head. A new hand-off must be
-complete on its own: whoever reads only the last comment must find branch, full sha, class and
-the distill there.
+complete on its own: whoever reads only the last comment must find the marker, branch, full sha,
+class and the distill there.
 
 Prefer a **new** comment over an edit whenever the head moved: `code-ship` §0 looks for a distill
 comment *newer than the head*, and an edit does not change when a comment was created.
