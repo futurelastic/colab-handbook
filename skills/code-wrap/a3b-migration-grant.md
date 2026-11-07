@@ -57,6 +57,29 @@ git diff --name-only <base>...HEAD | grep -E '^backend/migrations/'
     `handbook-sync`, `CONVENTIONS.md` §9 step 3) to provision the convention label set —
     never claim success on a write that did not land.
 
+#### The request carries its evidence (#685)
+
+A label alone asks a human to rule on file names. Measured: a grant request whose card listed
+only the migration file names — no list of what they change, no rollback, no screenshots — left
+the grantor nothing to rule on. So the request is filed **together with** its evidence, in the
+hand-off comment ([handoff-last-word.md](handoff-last-word.md)), on each issue that got the label:
+
+```
+Migration grant requested (needs-migration-grant) for <branch> @ <full sha>:
+- <migration file> — <what it changes: tables, columns, indexes, data> — rollback: <its down migration | the restore step>
+- …
+Screens: <screenshot of each built screen the branch touches> | none — no UI on this branch
+```
+
+- **One line per migration file** in the diff above, every one of them.
+- **The rollback is concrete**: the down migration that reverses it, or, where none can (a data
+  migration, a dropped column), the restore step and the backup it restores from. "Irreversible"
+  is an answer only with the reason.
+- **Screenshots are of the app built from this head**, never a mockup, and only when the branch
+  touches UI. No UI ⇒ say `none`, so the reader knows it was not forgotten.
+- It lives in the hand-off comment because that comment names the head the grant will be bound
+  to; evidence posted before A5 would describe a head that may still move.
+
 This is mechanical, not a judgement call — a file-path diff, and a label *application*
 gated on nothing but ordinary `gh` access, no `COLAB_HUMAN`, no schema review. It never
 defines the label and never substitutes for the grant; only a human minting

@@ -114,6 +114,17 @@ with the blocker named:
       ```
       This lists the unshaped ones among **every** open `needs-decision` issue. Skip an
       epic here: §2's epic finding already covers it, with a different fix.
+      **A design question on a build issue is misplaced, shaped or not** (#685). When the
+      pending question is what a new surface should look like ("which design for the new
+      admin screen?") and the issue is the one that builds it — not a `delivery:design`
+      issue — the question belongs on a `delivery:design` issue the build issue is
+      `blocked_by` (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two),
+      *Design work splits by size*). Its blocked line gains `finding: design question on a
+      build issue — filer files a delivery:design issue (its ask in one of the two shapes) and
+      runs colab blocked <N> --by <design>` and names the filer. The build issue's
+      `needs-decision` is lifted by its filer the way every gate is (*Decision gate*), never
+      by triage. Triage files no issue: that is not a §0.2 write. If both issues already
+      exist and only the edge is missing, triage may write the edge (§0.2 write 1).
 - [ ] **Delivery type is code, docs-only, or not asked** — no `delivery:content` /
       `delivery:ops` / `delivery:elsewhere` / `delivery:design` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). This issue was
       already filtered out at §2 if it carries one; this bullet is the reminder for a

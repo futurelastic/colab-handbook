@@ -127,13 +127,16 @@ Four states. The first three mirror the ruling's table exactly. The fourth is ab
 the ruling's record, not the artifact:
 
 - **present** — name the file(s) found under `docs/design/` for this slug/issue.
-- **absent** — say so plainly. If nothing has applied `needs-decision` to this
-  group yet, that is worth a human's attention before the session starts building
-  — but absence is not a new gate to enforce here, it is the same `needs-decision`
-  gate §5 above already checks. **Before you print `absent`, run the check below.**
+- **absent** — say so plainly. Absence is not a gate here, and it never calls for adding
+  `needs-decision` to the build issue: a small change builds and `code-wrap` A2 promotes
+  its artifact, and a new surface takes the design issue below. **Before you print
+  `absent`, run the check below.**
   If the group looks like a **new surface** under §5's size test and no
   `delivery:design` issue exists for it, say so on the line and leave the group ready:
-  `design: absent — looks like a new surface, no design issue filed`. Filing the design
+  `design: absent — looks like a new surface, no design issue filed — file a delivery:design
+  issue, then colab blocked <N> --by <design>`. That is the whole fix: never
+  `needs-decision` on this build issue, whose question would then sit on the wrong issue
+  (§5's *design question on a build issue* finding, #685). Filing the design
   issue and applying the label belong to the filer; neither is a §0.2 write. If both
   issues exist and the edge between them is missing, triage may write it (§0.2 write 1,
   `colab blocked <build> --by <design>`).

@@ -1704,6 +1704,11 @@ issue it is working, and **keeps its claim**. **This is not licence to
 stop on any fork** — the default-exists case above is unchanged and still the ordinary
 rule; this path exists only for the genuinely blocking, no-default case.
 
+**An ask is readable in two shapes only — a `decision:options` block or a `Mockup:` line in the
+body ([`tools/docs/decisions.md`](tools/docs/decisions.md#design-approval-ask--the-mockup-line-379));
+a new surface with no design is a `delivery:design` issue the build issue is `blocked_by`
+(*Design work splits by size*, below), never `needs-decision` on the build issue (#685).**
+
 A ruling clears the gate only once it is recorded where the tracker reads it — who ruled, and what
 it answers; the label's absence is never the answer — the [claims and decisions
 contract](#5-claiming-work--how-to-say-im-on-this), item 7. How a ruling is recorded and reopened,
