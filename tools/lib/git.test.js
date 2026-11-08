@@ -748,6 +748,97 @@ test('#461 + #451: a dynamic row is excluded before the per-workflow reduction',
   assert.strictEqual(r.superseded.length, 1);
 });
 
+// --- #688: a workflow whose every run was skipped does not decide the sha ------------------------
+// Measured shape: every job of a workflow gated on an unset repository variable, firing on a trunk
+// push. It concludes `skipped`, and the sha read not-green beside a green CI — every later ship refused.
+
+const gated = (over = {}) => ({ ...wf('Windows install', 'skipped', '2026-10-03T12:00:00Z', 30), event: 'push', ...over });
+const ci = (conclusion, over = {}) => ({ ...wf('CI', conclusion, '2026-10-03T10:00:00Z', 10), event: 'push', ...over });
+const POLICY = { gate: null, ignore: [] };
+
+for (const [label, opts] of [['no policy', {}], ['the verifying policy', { verifying: POLICY }]]) {
+  test(`#688: a wholly skipped workflow beside a green CI reads green, and is named — ${label}`, () => {
+    const r = git.summarizeRunsForCommit([gated(), ci('success')], S461, opts);
+    assert.strictEqual(r.status, 'completed');
+    assert.strictEqual(r.conclusion, 'success');
+    assert.strictEqual(r.databaseId, 10);
+    assert.strictEqual(r.runCount, 1, 'runCount counts what was judged');
+    assert.deepStrictEqual(r.skippedOnly.map((x) => x.workflowName), ['Windows install']);
+    assert.ok(!('allSkipped' in r));
+  });
+}
+
+test('#688: beside a failure it names the failure, wherever the rows sort', () => {
+  for (const rows of [[gated(), ci('failure')], [ci('failure'), gated()]]) {
+    const r = git.summarizeRunsForCommit(rows, S461);
+    assert.strictEqual(r.conclusion, 'failure');
+    assert.strictEqual(r.databaseId, 10);
+  }
+});
+
+test('#688: beside a CI still running it reads pending, never red', () => {
+  const r = git.summarizeRunsForCommit([gated(), ci(null, { status: 'in_progress' })], S461);
+  assert.strictEqual(r.status, 'in_progress');
+  assert.strictEqual(r.conclusion, null);
+});
+
+test('#688: beside a CI whose only run was cancelled it stays #628\'s refusal, naming CI', () => {
+  const r = git.summarizeRunsForCommit([gated(), ci('cancelled')], S461);
+  assert.strictEqual(r.conclusion, 'cancelled');
+  assert.deepStrictEqual(r.cancelledOnly, { workflowName: 'CI', databaseId: 10 });
+});
+
+test('#688: only skipped workflows at the sha — not green, nothing verified it, flagged allSkipped', () => {
+  const r = git.summarizeRunsForCommit([gated(), gated({ workflowName: 'macOS install', databaseId: 31 })], S461, { verifying: POLICY });
+  assert.strictEqual(r.conclusion, 'skipped');
+  assert.strictEqual(r.allSkipped, true);
+  assert.strictEqual(r.runCount, 2);
+  assert.ok(!('skippedOnly' in r));
+});
+
+test('#688: skipped over a cancelled attempt of itself ran something — never set aside', () => {
+  const r = git.summarizeRunsForCommit([
+    gated(), gated({ conclusion: 'cancelled', createdAt: '2026-10-03T11:00:00Z', databaseId: 29 }), ci('success'),
+  ], S461);
+  assert.notStrictEqual(r.conclusion, 'success');
+  assert.ok(!('skippedOnly' in r));
+});
+
+test('#688: a workflow named in ship-gate-workflows must run — a skip there stays not-green', () => {
+  const r = git.summarizeRunsForCommit([gated(), ci('success')], S461, { verifying: { gate: ['CI', 'Windows install'], ignore: [] } });
+  assert.strictEqual(r.conclusion, 'skipped');
+  assert.ok(!('skippedOnly' in r));
+});
+
+test('#688: with no policy a workflow_run success verifies nothing, so a skipped CI still decides', () => {
+  const r = git.summarizeRunsForCommit([
+    { ...wf('Release', 'success', '2026-10-03T12:00:00Z', 40) },
+    { ...wf('CI', 'skipped', '2026-10-03T10:00:00Z', 10), event: 'push' },
+  ], S461);
+  assert.strictEqual(r.conclusion, 'skipped');
+  assert.ok(!('skippedOnly' in r));
+});
+
+test('#688: the verifying policy sets the release run aside first, so it cannot carry a skipped CI either', () => {
+  const r = git.summarizeRunsForCommit([
+    { ...wf('Release', 'success', '2026-10-03T12:00:00Z', 40) },
+    { ...wf('CI', 'skipped', '2026-10-03T10:00:00Z', 10), event: 'push' },
+  ], S461, { verifying: POLICY });
+  assert.strictEqual(r.conclusion, 'skipped');
+  assert.strictEqual(r.allSkipped, true);
+});
+
+test('#688: a row with no workflowName is never set aside (#92), and a row with no event can verify', () => {
+  const unnamed = git.summarizeRunsForCommit([
+    { headSha: S461, status: 'completed', conclusion: 'skipped' }, ci('success'),
+  ], S461);
+  assert.strictEqual(unnamed.conclusion, 'skipped');
+  const noEvent = git.summarizeRunsForCommit([
+    gated(), { headSha: S461, status: 'completed', conclusion: 'success', workflowName: 'CI' },
+  ], S461);
+  assert.strictEqual(noEvent.conclusion, 'success');
+});
+
 // --- ghRunForCommit (#293) — the same verdict, for a sha that is NOT necessarily the branch's
 // current remote head (the merge-base a feature branch was cut from, almost always trunk history).
 

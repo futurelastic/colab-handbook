@@ -168,8 +168,10 @@ test('#616: a workflow whose only run at the sha was skipped is not run — full
   assert.strictEqual(rc.fullSuiteVerdict(judged, 'main@abc').ok, true);
   const ci = git.summarizeRunsForCommit(judged, S);
   assert.strictEqual(ci.conclusion, 'success');
-  // the ship gate is untouched: unfiltered, the same rows still read not-green there (#514)
-  assert.strictEqual(git.summarizeRunsForCommit(rows, S).conclusion, 'skipped');
+  // #688: the ship gate reads these rows the same way unfiltered, and names what it set aside
+  const unfiltered = git.summarizeRunsForCommit(rows, S);
+  assert.strictEqual(unfiltered.conclusion, 'success');
+  assert.deepStrictEqual(unfiltered.skippedOnly.map((x) => x.workflowName), ['Load']);
 });
 
 test('#616: skipped beside a red run of the same workflow stays red; cancelled-only and all-skipped stay refused', () => {

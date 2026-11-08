@@ -193,7 +193,9 @@ function create(repoAbs, eng) {
       if (typeof rowsFilter === 'function') rows = rowsFilter(rows);
       const summary = require('./git').summarizeRunsForCommit(rows, full);
       // #682: additive — the contexts that keep this sha from green, so a refusal can name them.
-      const ng = notGreen(rows);
+      // #688: a context the verdict set aside as skipped is not one of them.
+      const aside = new Set((summary.skippedOnly || []).map((x) => x.workflowName));
+      const ng = notGreen(rows).filter((x) => !aside.has(x.name));
       return ng.length ? { ...summary, notGreen: ng } : summary;
     },
 

@@ -107,6 +107,20 @@ test('#682 ciVerdict names the contexts that keep the sha from green, and only t
   assert.strictEqual('notGreen' in at([]), false, 'no statuses: nothing to name');
 });
 
+test('#688 ciVerdict: a skipped context beside a verifying success reads green and is not named as holding it', () => {
+  const at = (sts) => forgejo.withFetcher(pagedFetcher(sts), () => forgejo.create('/r', ENG).ciVerdict(SHA));
+  const g = at([st(1, 'Gated / install (push)', 'skipped'), st(2, 'CI / test (push)', 'success')]);
+  assert.strictEqual(g.conclusion, 'success');
+  assert.deepStrictEqual(g.skippedOnly.map((x) => x.workflowName), ['Gated / install (push)']);
+  assert.strictEqual('notGreen' in g, false);
+  const only = at([st(1, 'Gated / install (push)', 'skipped')]);
+  assert.strictEqual(only.conclusion, 'skipped');
+  assert.deepStrictEqual(only.notGreen.map((x) => x.name), ['Gated / install (push)']);
+  const red = at([st(1, 'Gated / install (push)', 'skipped'), st(2, 'CI / test (push)', 'failure')]);
+  assert.strictEqual(red.conclusion, 'failure');
+  assert.deepStrictEqual(red.notGreen.map((x) => x.name), ['CI / test (push)']);
+});
+
 test('ciVerdict: reads every page, and a red context on page 2 is not missed', () => {
   const sts = Array.from({ length: 60 }, (_, i) => st(i + 1, `ctx-${i}`, i === 55 ? 'failure' : 'success'));
   const calls = [];

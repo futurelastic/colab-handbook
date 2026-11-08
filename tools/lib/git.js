@@ -1254,6 +1254,10 @@ function excludedRunSummary(rows) {
  * along as `setAside`, each with its reason. #567: a `workflow_dispatch` run the policy's
  * `dispatchVerifies` resolver rescues (lost push event) is counted and named in `dispatchCounted`. Opt-in: without `opts.verifying` nothing changes, so
  * readers that never asked (release finalize, the base-ci advisory, ci-grant) read exactly as before.
+ *
+ * #688: a workflow whose every run at the sha was skipped is then set aside beside a run that can
+ * verify the code (setAsideWhollySkipped, below); the rows ride along as `skippedOnly`, and `allSkipped`
+ * says nothing but such workflows ran here. `runCount` no longer counts them (#461's rule).
  */
 function summarizeRunsForCommit(allForSha, sha, opts = {}) {
   if (allForSha === null) return null;
@@ -1268,15 +1272,18 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
     dispatchCounted = split.dispatchCounted || [];
   }
   const { heads, superseded } = newestRunPerWorkflow(owned);
+  const { judged, skippedOnly, allSkipped } = setAsideWhollySkipped(heads, superseded, opts && opts.verifying);
   const extra = {
     ...(dropped.length ? { excluded: excludedRunSummary(dropped) } : {}),
     ...(superseded.length ? { superseded: excludedRunSummary(superseded) } : {}),
+    ...(skippedOnly.length ? { skippedOnly: excludedRunSummary(skippedOnly) } : {}),
+    ...(allSkipped ? { allSkipped: true } : {}),
     ...(setAside.length ? { setAside: excludedRunSummary(setAside) } : {}),
     ...(dispatchCounted.length ? { dispatchCounted: excludedRunSummary(dispatchCounted) } : {}),
     // #651: the rows came from the unfiltered listing because the forge's filter index was empty.
     ...(allForSha.some((x) => x && x.readVia === 'unfiltered-listing') ? { readVia: 'unfiltered-listing' } : {}),
   };
-  const r = summarizeRepoOwnedRuns(heads, sha);
+  const r = summarizeRepoOwnedRuns(judged, sha);
   return { ...r, ...extra };
 }
 
@@ -1316,7 +1323,7 @@ function isNewerRun(a, b) {
  * nothing (a same-repo `pull_request` run gated off by a fork-PR `if:`, a `workflow_run` that
  * declined), so a newer `skipped` row never stands for a workflow that has a run that ran: push
  * `failure` + newer `skipped` reads red, push `success` + newer `skipped` reads green. A workflow
- * whose runs are ALL skipped still reads not-green, as before.
+ * whose runs are ALL skipped is setAsideWhollySkipped's question (#688).
  *
  * Newest = later createdAt, then higher databaseId; when neither key separates two rows, gh's
  * newest-first order decides (the first row seen is kept). An unfinished newest run still blocks
@@ -1347,6 +1354,39 @@ function newestRunPerWorkflow(rows) {
     if (!name || best.get(name) === i) heads.push(x); else superseded.push(x);
   });
   return { heads, superseded };
+}
+
+/**
+ * #688: a NAMED workflow whose every run at the sha concluded `skipped` executed nothing, so it does
+ * not decide the sha once another run there can. Measured: a workflow with every job gated on an
+ * unset repository variable fires on a trunk push, concludes `skipped`, and the sha read
+ * `conclusion=skipped` beside a green CI — every later ship refused, by a merge that passed every
+ * check. The rest of the heads then decide as usual: success is green, a failure is named, a run in
+ * flight is pending (a skipped sibling used to read red while CI ran), cancelled-only is #628's.
+ *
+ * Nothing is set aside when:
+ *   - no other head can verify the code. All-skipped stays not-green (#514): nothing verified it.
+ *     With no policy, only a verifying trigger counts, so a `workflow_run` success never carries a
+ *     skipped CI; with one, its counted rows are already that set.
+ *   - `ship-gate-workflows` is declared. That list says exactly these workflows must count, so a
+ *     skip there is the owner's named gate not running.
+ *   - the workflow has a `cancelled` attempt at the sha: a run started and never finished (#628).
+ *   - the row is unnamed: it cannot be told apart from a straggler of another run (#92).
+ *
+ * `allSkipped` marks a sha where such workflows are all that exist, whichever of the above held:
+ * nothing ran there, which is not a red, so the docs-only door (#606) may read past it.
+ */
+function setAsideWhollySkipped(heads, superseded, policy) {
+  const isSkipped = (x) => !!x && x.status === 'completed' && x.conclusion === 'skipped';
+  const otherAttempt = new Set(superseded.filter((x) => x && x.workflowName && !isSkipped(x)).map((x) => x.workflowName));
+  const wholly = heads.filter((x) => isSkipped(x) && x.workflowName && !otherAttempt.has(x.workflowName));
+  const allSkipped = wholly.length > 0 && wholly.length === heads.length;
+  const unchanged = { judged: heads, skippedOnly: [], allSkipped };
+  if (!wholly.length || allSkipped || (policy && policy.gate)) return unchanged;
+  const rest = heads.filter((x) => !wholly.includes(x));
+  const canVerify = policy ? () => true : (x) => require('./verify-runs').setAsideReason(x, null) === null;
+  if (!rest.some(canVerify)) return unchanged;
+  return { judged: rest, skippedOnly: wholly, allSkipped: false };
 }
 
 function summarizeRepoOwnedRuns(forSha, sha) {

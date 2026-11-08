@@ -47,8 +47,9 @@ if (a[0] === 'run' && a[1] === 'list') {
   const s = commit ? (st.commits || {})[commit] ?? st.commitDefault : (st.branches || {})[br];
   const r = s === undefined ? { status: 'completed', conclusion: 'success' } : s;
   if (r === 'none') out('[]');
-  out([{ headSha: sha, status: r.status, conclusion: r.conclusion, databaseId: 7, workflowName: 'CI', event: 'push',
-    createdAt: '2026-10-14T00:00:00Z', updatedAt: '2026-10-14T00:01:00Z', attempt: 1 }]);
+  const row = (x, i) => ({ headSha: sha, status: x.status, conclusion: x.conclusion, databaseId: 7 + i, workflowName: x.workflowName || 'CI', event: 'push',
+    createdAt: '2026-10-14T00:00:00Z', updatedAt: '2026-10-14T00:01:00Z', attempt: 1 });
+  out((Array.isArray(r) ? r : [r]).map(row));
 }
 if (a[0] === 'issue' && a[1] === 'view') out({ state: 'OPEN', labels: [], comments: [{ body: 'fixture' }], body: '' });
 if (a[0] === 'issue' || a[0] === 'label') process.exit(0);
@@ -272,6 +273,53 @@ test('#606: the trunk door never overrides a finished red tip, a red code commit
   const off = verdict(fx);
   assert.notStrictEqual(off.verdict, 'GREEN');
   assert.doesNotMatch(off.detail, /#606/);
+});
+
+// ---- #688: a workflow gated on an unset repository variable ---------------------------------------
+
+const GATED = { status: 'completed', conclusion: 'skipped', workflowName: 'Windows install' };
+const GREEN = { status: 'completed', conclusion: 'success' };
+
+test('#688: a variable-gated workflow skipped beside a green CI leaves trunk green, names it, and the next ship lands', () => {
+  const fx = fixture();
+  fx.setState({ branches: { main: [GATED, GREEN] } });
+  const t = JSON.parse(colab(fx, ['trunk-ci', '--repo', fx.work, '--json']).out);
+  assert.strictEqual(t.verdict, 'GREEN', JSON.stringify(t));
+  assert.match(t.detail, /1 run at main@\S+: success — not judged, every run skipped so it ran nothing here \(#688; .*\): Windows install \(run 7\)/);
+  branch(fx, 'docs/after-gated-72', 72, { 'docs/a.md': 'a\n' });
+  assert.strictEqual(dry(fx, 'docs/after-gated-72').row('trunk CI green').ok, true);
+  const r = colab(fx, ['ship', '--branch', 'docs/after-gated-72', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+});
+
+test('#688: ship-gate-workflows in project.yml keeps a named workflow\'s skip refusing', () => {
+  const fx = fixture(`${YML}ship-gate-workflows: [CI, Windows install]\n`);
+  fx.setState({ branches: { main: [GATED, GREEN] } });
+  const t = JSON.parse(colab(fx, ['trunk-ci', '--repo', fx.work, '--json']).out);
+  assert.notStrictEqual(t.verdict, 'GREEN', JSON.stringify(t));
+  assert.match(t.detail, /conclusion=skipped/);
+});
+
+test('#688: a tip with ONLY a skipped workflow refuses on a code commit, and on a docs-only one reads the code commit below', () => {
+  const fx = fixture();
+  const code = fx.g(fx.work, 'rev-parse', 'HEAD');
+  fx.setState({ branches: { main: [GATED] } });
+  const onCode = JSON.parse(colab(fx, ['trunk-ci', '--repo', fx.work, '--json']).out);
+  assert.notStrictEqual(onCode.verdict, 'GREEN', JSON.stringify(onCode));
+  assert.match(onCode.detail, /conclusion=skipped/);
+
+  fs.writeFileSync(path.join(fx.work, 'README.md'), 'docs\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'docs: readme');
+  fx.g(fx.work, 'push', '-q', 'origin', 'main');
+  // The adopter's CI paths-ignores docs, so the gated workflow is all that fired on the tip.
+  fx.setState({ branches: { main: [GATED] }, commits: { [code]: GREEN } });
+  const onDocs = JSON.parse(colab(fx, ['trunk-ci', '--repo', fx.work, '--json']).out);
+  assert.strictEqual(onDocs.verdict, 'GREEN', JSON.stringify(onDocs));
+  assert.match(onDocs.detail, new RegExp(`docs-only tip \\(#606\\).*1 run at main@${code.slice(0, 7)}: success`));
+
+  fx.setState({ branches: { main: [GATED] }, commits: { [code]: { status: 'completed', conclusion: 'failure' } } });
+  assert.notStrictEqual(JSON.parse(colab(fx, ['trunk-ci', '--repo', fx.work, '--json']).out).verdict, 'GREEN', 'the door never turns a red code commit green');
 });
 
 // ---- #626: docs-only-paths — a content-image path the adopter declares ---------------------------

@@ -40,6 +40,13 @@ The rule: [CONVENTIONS.md §4](../../CONVENTIONS.md#4-branches-and-commits), and
   (#307) — except that a `cancelled` run never supersedes, because it ran nothing (#92). Runs of
   *different* workflows are never reduced: a failing one beside a passing one is still not
   green, and a workflow whose **only** run was cancelled verified nothing, so it blocks green (#628).
+  A workflow whose runs at the sha were **all `skipped`** ran nothing, so it does not decide the sha
+  once a run that can verify the code is there (#688): beside a green CI the sha is green and the detail
+  names the workflow, beside a failure it reads that failure, and beside a run in flight it is pending. This is
+  why a job gated behind a repository variable cannot close trunk while the variable is unset. It
+  still reads not green when only skipped workflows ran (nothing verified the code), when the workflow also has
+  a `cancelled` attempt at the sha, and when `ship-gate-workflows` is declared, since that list names what must
+  run. A docs-only tip where only skipped workflows ran is read like `none` (#606, below).
   `colab trunk-ci` prints that verdict for trunk's head, read-only and from the same function
   (#463); a skill that needs it calls the verb instead of restating the rule as a `gh run
   list` filter ([why](../../docs/adr/539-schema-checks-and-gates-rationale.md)).
@@ -244,8 +251,9 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   3. **Do not deduplicate any other way.** A shared push/PR group (`head_ref || ref_name`) can
      leave the merge-ref run as the survivor, lets a promotion PR cancel the trunk's own
      in-flight run, and leaves a `cancelled` run at the head. An `if:` that skips jobs on a
-     same-repo PR, or `paths-ignore`, leaves a `skipped` or absent run: `colab ship` reads
-     `skipped` as not green and a docs-only squash with no trunk run as `none`.
+     same-repo PR, or `paths-ignore`, leaves a `skipped` or absent run: `colab ship` reads a
+     code commit where only `skipped` runs exist as not green, and a docs-only squash with no trunk
+     run as `none`.
   **Fork PRs are opt-in.** A push to a fork never runs a workflow in the base repository, so
   a repo that takes fork PRs needs `pull_request`. The templates carry it commented out, and
   every suite job already carries `github.event_name != 'pull_request' ||
@@ -322,6 +330,7 @@ the same rule as GitHub runs (tools/lib/git.js `summarizeRunsForCommit`):
 
 - `pending` has not finished, so it is not green yet.
 - Only `success` counts as green. `failure`, `error` and `warning` are all red.
+- A `skipped` context beside one that can verify the code does not decide the sha (#688, as above).
 - A commit with no status reads `none`.
 - A failed read is never green: no response, an HTTP error, unparseable JSON, or more statuses
   than ten pages.
@@ -371,9 +380,9 @@ decides this; the CI templates do not.** Why: [ADR 606](../../docs/adr/606-docs-
   `docs-only: CI not required (<n> files)`. **A run that exists at the pushed head and finished red
   still refuses** — ship never overrides a red verdict.
 - **Trunk CI on a docs-only tip is read at the newest code commit.** A trunk tip with no finished
-  run that is itself docs-only takes the verdict of its newest first-parent ancestor that is not
-  (50 commits back at most), for every ship and for `colab trunk-ci`. A tip whose run finished red
-  stays red.
+  run, or with only `skipped` workflows (#688), that is itself docs-only takes the verdict of its
+  newest first-parent ancestor that is not (50 commits back at most), for every ship and for
+  `colab trunk-ci`. A tip whose run finished red stays red.
 - **A secret check runs before the merge.** Ship scans the lines a docs-only change **adds** for
   credential shapes (private keys, cloud and API tokens, `password=`-style assignments) and for the
   terms in `.github/secret-scan-terms` when the target has one (`tools/lib/secret-scan.js`). A hit

@@ -725,9 +725,10 @@ function isSkippedOnly(runs) {
  * #616: the run rows minus every workflow whose runs at the sha were ALL `skipped` — an opt-in
  * workflow gated off by an `if:` (a scheduled load profile waiting for its runner) records a skipped
  * run on every tick, and one landing on the candidate's commit made ci-green read
- * "conclusion=skipped" and refused every finalize older than one schedule period. Release-only on
- * purpose: the ship gate (git.summarizeRunsForCommit, #514) keeps reading an all-skipped workflow
- * as not-green, so this filter is applied by the release callers, never inside git.js.
+ * "conclusion=skipped" and refused every finalize older than one schedule period. Wider than the ship
+ * gate's own rule (git.js setAsideWhollySkipped, #688) on purpose: this drops such a workflow even
+ * when nothing else ran, and fullSuiteVerdict then refuses by name; a declared gate list does not
+ * apply. So it stays a filter the release callers apply, never inside git.js.
  * A workflow with a skipped run AND any other run keeps all its rows (skipped + failure stays red;
  * cancelled-only is untouched and still fails full-suite). null passes through.
  */
