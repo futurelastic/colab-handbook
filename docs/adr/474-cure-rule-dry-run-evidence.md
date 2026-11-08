@@ -41,7 +41,8 @@ promote, cut and finalize against `ref: main`, for real.
 - **D2** — every step that ran on trunk, the failing step included, concluded
   `success` in the dry run.
 - **D3** — every other non-success step in the dry run is a skipped `[publish]`
-  step.
+  step. #694 adds two named template steps every dry run skips:
+  [`694-dry-run-conditional-steps.md`](694-dry-run-conditional-steps.md).
 
 When a green ordinary instance exists, it outranks the dry one.
 
@@ -79,9 +80,10 @@ waits.
 
 - A red in a `[publish]` step, or in the npm/deploy jobs, still needs a
   ci-grant. A dry run never executes those steps.
-- A red job that ran zero steps (a runner that never picked it up) has no usable
+- A red job that ran zero steps with equal or missing timestamps has no usable
   duration. On the carve-out path, 4c refuses it. Relaxing 4c for that case is
   left unmade, for the same reason as the timeout relaxation in the #321 ADR: it
   is one `if`, and it should be added when the refusal is observed, not before.
+  #694 measured the common zero-step shape, and it has a usable duration.
 - A dry run proves the steps ran. Like the carve-out, it cannot prove what they
   asserted.

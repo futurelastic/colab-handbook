@@ -124,11 +124,12 @@
 # (`colab ship` dispatches it for you when a red in this workflow is what stands between the branch
 # and trunk). A dispatch on any ref other than main is ALWAYS dry, input or not. A dry run checks out
 # the branch, runs every step with `--dry` — the same decisions, nothing promoted, tagged, released,
-# pushed or dispatched — and skips only the steps whose names end in `[publish]`. The step
+# pushed or dispatched — and turns off the steps whose names end in `[publish]`. The step
 # "Dry run — nothing is tagged, released or published" runs only then; it is how the cure rule
 # recognises the run. Keep both names as they are: the cure rule matches steps BY NAME, and accepts
 # a dry run only if every step that ran in trunk's red run passed in it and every step it skipped
-# ends in `[publish]`. So a red INSIDE a `[publish]` step, or in the npm or deploy jobs (which never
+# ends in `[publish]` or is one of the two steps a dry run never runs: the #547 retry and the
+# heavy-lane start. So a red INSIDE a `[publish]` step, or in the npm or deploy jobs (which never
 # run without a tag), cannot be cured by a dry run — that stays a human ci-grant.
 #
 # DOWNLOADS — EVERY FINAL, NOT ONLY THE ONES THIS RUN TAGGED (#669). A repo whose finals carry files

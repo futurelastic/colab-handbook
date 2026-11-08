@@ -1119,7 +1119,7 @@ test('#468 finalize: an older CLI with no why and no skipped prints exactly what
 
 // --- #474: the dry run on a fix branch ------------------------------------------------------
 
-const { DRY_RUN_STEP, PUBLISH_STEP_MARKER } = require('./ci-cure.js');
+const { DRY_RUN_STEP, PUBLISH_STEP_MARKER, DRY_RUN_CONDITIONAL_STEPS } = require('./ci-cure.js');
 const PROMOTE = 'Promote unattended (colab promote --auto)';
 
 /** Like runWithStub, but records the stub colab's argv and every `gh` call, with DRY_RUN set. */
@@ -1200,6 +1200,31 @@ test('#474 dry run: promote passes --dry and never dispatches CI, even on a prom
   const real = runDry(PROMOTE, { stdout: out, dry: false });
   assert.ok(real.calls.some((c) => /^gh workflow run CI --ref main$/.test(c)), real.calls.join('\n'));
   assert.strictEqual(real.output.promoted, 'true');
+});
+
+// #694: #547 added a step a dry run skips, nothing went red, and D3 then refused every dry run of the
+// template. So every conditional step of the release job has to be classified here.
+test('#694 every conditional release-job step is a [publish] step, one every dry run skips, or runs on a dispatch', () => {
+  const job = TEXT.slice(TEXT.indexOf('\n  release:\n'), TEXT.search(/\n {2}npm:\n/));
+  const conditional = job.split(/\n {6}- /).slice(1)
+    .filter((st) => /\n {8}if: /.test(st)).map((st) => st.match(/^name: (.*)/)[1])
+    .filter((n) => !n.endsWith(PUBLISH_STEP_MARKER) && !DRY_RUN_CONDITIONAL_STEPS.includes(n));
+  assert.deepStrictEqual(conditional.sort(), [
+    DRY_RUN_STEP,
+    'Promote unattended (colab promote --auto)',
+    'Cut a candidate (colab release cut --auto)',
+    'Heavy lane green at the candidate?',
+    'Finalize the newest clean candidate (colab release finalize --auto)',
+  ].sort(), 'a new conditional step: decide how a dry run reads it (ci-cure D3), then classify it here');
+});
+
+test('#694 the steps D3 admits by name exist byte for byte, under the conditions that make every dry run skip them', () => {
+  assert.deepStrictEqual([...DRY_RUN_CONDITIONAL_STEPS], [
+    'Retry a refused cut once the CLI moved (#547)', 'Start the heavy lane at the new candidate']);
+  const [retry, heavy] = DRY_RUN_CONDITIONAL_STEPS;
+  assert.ok(TEXT.includes(`- name: ${retry}\n        id: retry\n        if: env.RETRY_RUN == 'true'\n`), 'runs only on a retry run');
+  assert.match(TEXT, /RETRY_RUN: \$\{\{ github\.event_name == 'schedule' && github\.event\.schedule == '47 \* \* \* \*' \}\}/, 'a dispatch is never a retry run');
+  assert.ok(TEXT.includes(`- name: ${heavy}\n        if: steps.cut.outputs.tag != ''\n`), 'needs a tag, and a dry run hands none on');
 });
 
 // #480: a HANDBOOK_REF the handbook does not carry falls back — newest final tag, else `next` — with a

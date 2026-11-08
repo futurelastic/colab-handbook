@@ -164,18 +164,32 @@
  *       This is the not-a-back-door proof: a red INSIDE a publishing step can never be cured this way,
  *       because the dry run skips exactly that step. It is 4b, applied to dry-run instances on every
  *       path, not only the carve-out's;
- *   D3. every step the dry run did NOT run to success is a skipped publishing step. A dry run that
- *       also skipped some ordinary step past trunk's failure point has not run the job, it has run
- *       part of it.
+ *   D3. every step the dry run did NOT run to success is a skipped publishing step, or one of the
+ *       template's steps that every dry run skips by construction (`DRY_RUN_CONDITIONAL_STEPS`, #694).
+ *       A dry run that also skipped some other step past trunk's failure point has not run the job, it
+ *       has run part of it.
  *
  * Why a NAME marker and not a list declared in the workflow: steps are matched by exact name (D2/4b),
  * so marking the very step that failed on trunk renames it, and D2 then reads it as absent and
  * refuses. A list inside the workflow would be read from the branch, which is the party being graded.
  *
- * Limit, stated: a red in a publishing step, or in a later job that only runs after a tag (npm,
- * deploy), cannot be cured by a dry run. That stays a ci-grant. So does a red job that ran ZERO steps
- * (a runner that never picked it up) on the carve-out path: 4c has no usable duration for it and
- * refuses, which is the safe direction and a deliberately unmade loosening, like the timeout case.
+ * Why D3's second arm is a fixed list of exact names in this module (#694), not "also skipped on trunk"
+ * and not a second marker. Steps past trunk's failure point are always skipped on trunk, and on a red
+ * that ran zero steps every step was, so "also skipped on trunk" admits exactly what D3 refuses. A marker
+ * needs a template change and a sync in every adopter's copy before it helps anyone. The list is read
+ * from the CLI, never from the branch being graded, and it works on every copy already in the field; an
+ * adopter who renames one of those steps gets a refusal, the safe direction. A branch that edits its
+ * workflow can rename a step to a listed name, as it can append `[publish]` or gut a `run:` body: that is
+ * the carve-out's stated content-blindness, and D2 still refuses for any step that ran on trunk.
+ *
+ * Limits, stated: a red in a publishing step, or in a later job that only runs after a tag (npm,
+ * deploy), cannot be cured by a dry run. That stays a ci-grant. So does a red on a run where a listed
+ * step RAN on trunk (the retry step on an hourly retry run, the heavy-lane start after a cut): D2 requires
+ * it to pass in the dry run, and the dry run skips it. So does a dry run that skipped its Finalize step
+ * because the heavy lane is not green at the candidate. And so does a red job that ran ZERO steps whose
+ * timestamps are equal or missing, on the carve-out path: 4c has no usable duration for it. Measured, a
+ * job the runner service refused has 2-6 s between its timestamps, so 4c passes it; relaxing 4c stays
+ * unmade until the unusable shape is observed, like the timeout case.
  *
  * DISPATCH EVIDENCE FOR A JOB A BRANCH PUSH SKIPS (#510). One level below #474: the WORKFLOW runs on a
  * branch push, but one of its JOBS is trunk-only by its own `if:` (true on trunk, on a schedule and on
@@ -264,8 +278,29 @@ const PUBLISH_STEP_MARKER = '[publish]';
  *  step name byte for byte. */
 const DRY_RUN_STEP = 'Dry run — nothing is tagged, released or published';
 
+/** The template steps every dry run skips on their own `if:` (#694), admitted by D3 by exact name.
+ *  The retry step runs only on the hourly retry run (`RETRY_RUN`, a schedule); the heavy-lane start needs
+ *  a tag, and a dry run hands none on. tools/lib/release-auto-template.test.js pins these names and
+ *  conditions against the template, and fails on a new conditional step nobody has classified. */
+const DRY_RUN_CONDITIONAL_STEPS = Object.freeze([
+  'Retry a refused cut once the CLI moved (#547)',
+  'Start the heavy lane at the new candidate',
+]);
+
 function isPublishStepName(name) {
   return typeof name === 'string' && name.trimEnd().endsWith(PUBLISH_STEP_MARKER);
+}
+
+/** A step D3 lets a dry run skip: a publishing step, or one every dry run skips by construction. */
+function dryRunMaySkip(name) {
+  return isPublishStepName(name) || DRY_RUN_CONDITIONAL_STEPS.includes(name);
+}
+
+/** A step the job's own definition ran, as against the runner's bookkeeping, which GitHub reports as
+ *  `success` even when every step of the job was skipped. */
+function ranOwnStep(s) {
+  return !!s && s.conclusion === 'success' && s.name !== 'Set up job' && s.name !== 'Complete job'
+    && !String(s.name).startsWith('Post ');
 }
 
 /** A job instance is a dry run iff its sentinel step concluded `success`. A skipped sentinel is an
@@ -432,9 +467,10 @@ function dryRunEvidence(red, mine) {
   }
   for (const s of mine.steps) {
     if (!s || s.conclusion === 'success') continue;
-    if (s.conclusion === 'skipped' && isPublishStepName(s.name)) continue;
+    if (s.conclusion === 'skipped' && dryRunMaySkip(s.name)) continue;
     return `step \`${s && s.name}\` concluded \`${s && s.conclusion}\` in the branch's dry run of job \`${label}\` and is not a publishing step ` +
-      `(name ending \`${PUBLISH_STEP_MARKER}\`) — a dry run may skip only the steps that write outside the run`;
+      `(name ending \`${PUBLISH_STEP_MARKER}\`) or a step every dry run skips (${DRY_RUN_CONDITIONAL_STEPS.map((n) => `\`${n}\``).join(', ')}) — ` +
+      'a dry run may skip only those';
   }
   return '';
 }
@@ -604,6 +640,13 @@ function workflowCarveOut(jobEvidence) {
       }
     }
 
+    // 4b leaves nothing to compare when the job ran no step on trunk, and GitHub reports a job whose
+    // steps were all skipped as `success` (#694) — so the branch must show one step of its own that ran.
+    if (!red.ranSteps.length && !mine.steps.some(ranOwnStep)) {
+      return { ok: false, jobs: [],
+        reason: `job \`${red.name}\` ran no step on trunk and no step of its own on the branch's run — a job whose steps were all skipped reports success without having run anything` };
+    }
+
     // 4c — duration floor, relative to the failure it replaces.
     if (!usableMs(red.durationMs) || !usableMs(mine.durationMs)) {
       return { ok: false, jobs: [],
@@ -656,10 +699,10 @@ function manifestStepProof(jobEvidence, { noLateSkip = false } = {}) {
       if (at > last) last = at;
     }
     if (noLateSkip) {
-      // A dry run (#474) skips its `[publish]` steps by design, and D3 already refused any OTHER skip
-      // in it — so those, and only those, are not a dropped tool.
+      // A dry run (#474) skips the steps `dryRunMaySkip` names by design, and D3 already refused any
+      // OTHER skip in it — so those, and only those, are not a dropped tool.
       const late = mine.steps.slice(last + 1)
-        .find((s) => s && s.conclusion === 'skipped' && !(mine.dryRun && isPublishStepName(s.name)));
+        .find((s) => s && s.conclusion === 'skipped' && !(mine.dryRun && dryRunMaySkip(s.name)));
       if (late) {
         return { ok: false,
           reason: `step \`${late.name}\` in job \`${jobLabel(red)}\` comes after trunk's failure point and was skipped on the branch — ` +
@@ -1009,4 +1052,4 @@ function admittedText(admitted) {
 module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, manifestStepProof, shapeJobEvidence, dryRunDispatchPlan,
   cureDispatchPlan, dispatchEvidence,
   priorRedShaFromMessage, redJobSet, redSetShrank,
-  WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL, PYTHON_MANIFEST_REFUSAL, PUBLISH_STEP_MARKER, DRY_RUN_STEP };
+  WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL, PYTHON_MANIFEST_REFUSAL, PUBLISH_STEP_MARKER, DRY_RUN_STEP, DRY_RUN_CONDITIONAL_STEPS };
