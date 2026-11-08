@@ -161,7 +161,9 @@ still cure when, on top of 1-3 (2b included) and 5, **all** of:
   **ran** on trunk (reached a terminal, non-skipped conclusion) is present on the
   branch's job and concluded `success`. Steps *after* the failing one are `skipped` on
   trunk and so constrain nothing — only steps that demonstrably ran do. *"I made it exit
-  early"* fails here.
+  early"* fails here. A job that ran **no** step on trunk leaves nothing to compare, so the
+  branch's job must show one step of its own that ran: GitHub reports a job whose steps
+  were all skipped as `success` (#694).
 - **[Hard — gate: colab ship refuses (cure rule)]** **4c — duration floor.** Each of those jobs cost at least the wall time its failure did on trunk.
 
 **[Hard — gate: colab ship refuses (cure rule)]** Anything unmeasurable — no job evidence, an empty red-job set, an unreadable
@@ -173,15 +175,15 @@ branch at all. The template therefore offers a **dry run**: dispatched on the fi
 (`gh workflow run release-auto.yml --ref <branch> -f dry_run=true`; a dispatch on any
 ref other than `main` is dry with or without the input), it checks out the branch and
 runs the same job with every external write off. Each decision runs with `--dry`. No
-promotion, tag, Release, push or dispatch happens. Only steps whose names end in
-`[publish]` are skipped. A sentinel step, *Dry run — nothing is tagged, released or
+promotion, tag, Release, push or dispatch happens. Steps whose names end in
+`[publish]` are turned off. A sentinel step, *Dry run — nothing is tagged, released or
 published*, runs only in that mode, and it is what marks a job instance as a dry run.
 Such an instance is the job's 2b (and 4a) evidence only when, on top of 2b:
 
 - **[Hard — gate: colab ship refuses (cure rule)]** **D1** — both step lists are measurable: trunk's ran-steps and the dry run's steps.
 - **[Hard — gate: colab ship refuses (cure rule)]** **D2** — every step that **ran** on trunk, the failing one included, concluded
   `success` in the dry run. This is 4b, applied to dry-run instances on every path.
-- **[Hard — gate: colab ship refuses (cure rule)]** **D3** — every step the dry run did not run to success is a skipped `[publish]` step.
+- **[Hard — gate: colab ship refuses (cure rule)]** **D3** — every step the dry run did not run to success is a skipped `[publish]` step, or one of the two template steps every dry run skips by construction: *Retry a refused cut once the CLI moved (#547)* (hourly retry runs only) and *Start the heavy lane at the new candidate* (a dry run hands no tag on). The two names are held in `tools/lib/ci-cure.js`, never read from the branch (#694).
 
 A green ordinary instance of the same job outranks a dry one, so the D-rules apply only
 when a dry run is the sole evidence.
@@ -195,10 +197,14 @@ wait). Dispatch is gated on a static read of the **branch's** copy: it must have
 `name:`, a `dry_run` input and the sentinel step. A copy older than #474 has no
 forced dry mode and would really publish if dispatched. The **limit**: a red in a
 `[publish]` step, or in the `npm`/`deploy` jobs (which never run without a tag),
-cannot be cured by a dry run and stays a ci-grant. So does a red job that ran
-**zero** steps (a runner that never picked it up) on the carve-out path, because
-4c has no usable duration for it. Reasoning:
-[`docs/adr/474-cure-rule-dry-run-evidence.md`](../../docs/adr/474-cure-rule-dry-run-evidence.md).
+cannot be cured by a dry run and stays a ci-grant. So does a red on a run where one
+of those two steps ran on trunk (D2 requires it to pass in a dry run that skips it), a
+dry run that skipped its Finalize step because the heavy lane is not green at the
+candidate, and, on the carve-out path, a red job that ran **zero** steps with equal or
+missing timestamps (4c has no usable duration for it; a job the runner service refused
+has a few seconds between its timestamps, so 4c passes it). Reasoning:
+[`docs/adr/474-cure-rule-dry-run-evidence.md`](../../docs/adr/474-cure-rule-dry-run-evidence.md),
+[`docs/adr/694-dry-run-conditional-steps.md`](../../docs/adr/694-dry-run-conditional-steps.md).
 
 **Dispatch evidence for a job a branch push skips (#510).** The same gap one level down.
 A **dispatch instance** — a job row from a `workflow_dispatch` run that is not a #474
