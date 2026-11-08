@@ -377,7 +377,7 @@ unfinished item, reported first, or with the remainder moved to its own issue an
 surface with no design ⇒ a `delivery:design` issue + `colab blocked <N> --by <design>`, keep the claim, ship the
 rest; never `needs-decision` on your build issue; asks in a readable shape (#685, [handoff-readable-ask.md](handoff-readable-ask.md)).
 **Stop:** "the rest is follow-up" is not a blocker; nor is a person-only check — no hold, it becomes a
-`Human verify:` row and the branch hands off finished (#541, [handoff-human-verify.md](handoff-human-verify.md)). Full text: [handoff-partial-wrap.md](handoff-partial-wrap.md).
+`Human verify:` row and the branch hands off finished (#541, [handoff-human-verify.md](handoff-human-verify.md)); a check tied to one OS is a runner job, never a row (#687). Full text: [handoff-partial-wrap.md](handoff-partial-wrap.md).
 
 ## Verify complete
 

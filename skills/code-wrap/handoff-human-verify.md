@@ -25,6 +25,13 @@ run. For example:
 Tests against a fake server or a stub do not change this. They are the code's oracle, and they
 passed. The leftover is what a fake cannot prove.
 
+**Not a row: a check tied to one operating system.** An install, launch, service, update or
+uninstall check on Windows, macOS or Linux is a CI job on a runner of that OS — a runner reset
+after every job for real installers and elevation. A missing runner is an infrastructure request,
+not a row: write the job now, gated behind a repository variable until the runner exists. "It
+needs Windows" is never what makes a check person-only (`CONVENTIONS.md`
+[§5 *Human verify*](../../CONVENTIONS.md#human-verify--a-person-only-check-closes-the-issue-and-becomes-one-row-491), #687).
+
 **What the wrap does — all in this step:**
 
 1. **No hold, no human-wait label.** Do not add `blocked:needs-human`, the repo's `holds:` label,
