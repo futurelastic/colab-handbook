@@ -1375,6 +1375,13 @@ Why, with the measurements: [ADR 491](docs/adr/491-human-verify-rationale.md).
   the `Human verify:` issue with `colab close`, and the next ship that needs one files a
   fresh one.
 
+**A check tied to one operating system is a runner job, never a row (#687).**
+- An install, launch, service, update or uninstall check on one OS (Windows, macOS, Linux) is a **CI job on a
+  runner of that OS**: a long-lived runner for builds and tests, one reset after every job for real installers and elevation.
+- A row is only for what no runner can do: a signed-in browser identity, a physical authenticator, a real third
+  party, a person's judgement of look and feel. "It needs Windows" (or macOS, or Linux) is never the reason.
+- A missing runner is requested at filing, never a reason to park: write the job, gated behind a repository variable.
+
 What this does **not** change:
 
 - **A code remainder** still takes `Remainder: #M` (or `--refs` plus a hold), as in §4
