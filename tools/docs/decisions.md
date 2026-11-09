@@ -61,6 +61,28 @@ over the pair unless `--answers <ref>` says which question the new record answer
 
 Why, with the measurement: [ADR 539](../../docs/adr/539-decision-gate-rationale.md).
 
+## An open question stops the ship, not only the start (#695)
+
+The rule: [CONVENTIONS.md, *Decision gate — a human must answer first (#122)*](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122) — an issue that "cannot start, or cannot finish" until a human answers.
+
+**[Hard — gate: colab ship refuses an open needs-decision]** **A ship that would close or reference an
+issue with an open question refuses.** `colab ship` — real, `--dry`, `--dry --json`, `--direct` and
+each `--batch` member — reads every carried issue (closing and `--refs` alike) at ship time and adds the
+row `no open decision on carried issues (#695)`. The reading is the one above: `needs-decision` with no
+live record, or the pair whose ask is newer than the record, or a pair it cannot resolve, is open; only
+an interrupted write reads as answered. The row refuses `HUMAN_GATED`, links each issue and names what
+clears it (`colab decision <N> --record --ruled-by <name>`, with `--answers` over the pair). An issue
+the tracker could not return fails the row `SELF_CLEARING`; with `gh` unusable there is no row.
+
+A person may take the decision at the ship's human door, and only with a name: an open door plus
+`--answered-by <name>` passes the row, and the 🚢 / ✅ comment says the question was passed by the human
+door and names that person. A door with no name does not pass it, and a `--batch` member never passes it
+— land that member serially through the door. Measured: on an `auto-trunk` repo, `--reopen` restored
+`needs-decision` and the same ship pass landed the branch 22 minutes later, with every row green; the
+coordinator had read the thread before the reopen. The reference reading is `shipOpenQuestion` and
+`shipDecisionRow` in `tools/lib/decision-record.js`, fed by the same `decisionPairFor` that
+`colab decision --record` and `--list` use.
+
 ## Decision options — what a ruling chooses between (#126)
 
 The rule: [CONVENTIONS.md, *Decision options — what a ruling chooses between (#126)*](../../CONVENTIONS.md#decision-options--what-a-ruling-chooses-between-126).

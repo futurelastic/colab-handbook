@@ -367,3 +367,38 @@ test('openAsks: a ⚖ record cancelled by a later reopen no longer answers the a
   ];
   assert.deepStrictEqual(openAsks(c).map((a) => a.id), ['a1']);
 });
+
+// ---- #695: the ship door's read ----
+const { shipOpenQuestion, shipDecisionRow, shipDecisionEvidence, SHIP_DECISION_ROW } = require('./decision-record.js');
+
+test('#695 shipOpenQuestion: no needs-decision → null; gated alone → open; interrupted write → null; a newer ask → open', () => {
+  assert.equal(shipOpenQuestion({ issue: 1, labels: ['decision-recorded'], pair: null }), null);
+  const open = shipOpenQuestion({ issue: 2, url: 'https://example.invalid/2', labels: [{ name: 'needs-decision' }], pair: null });
+  assert.equal(open.verdict, PAIR_VERDICTS.OPEN_QUESTION);
+  assert.equal(open.clear, 'colab decision 2 --record --ruled-by "<name>"');
+  assert.equal(shipOpenQuestion({ issue: 3, labels: ['needs-decision', 'decision-recorded'],
+    pair: { verdict: PAIR_VERDICTS.INTERRUPTED_WRITE } }), null);
+  const second = shipOpenQuestion({ issue: 4, labels: ['needs-decision', 'decision-recorded'],
+    pair: { verdict: PAIR_VERDICTS.OPEN_QUESTION, askAt: LATER, decidedAt: NOW, why: 'newer ask' } });
+  assert.equal(second.verdict, PAIR_VERDICTS.OPEN_QUESTION);
+  assert.match(second.clear, /--answers <ask id>$/);
+  const und = shipOpenQuestion({ issue: 5, labels: ['needs-decision', 'decision-recorded'], pair: { verdict: PAIR_VERDICTS.UNDETERMINED } });
+  assert.equal(und.verdict, PAIR_VERDICTS.UNDETERMINED, 'what the reader cannot prove stays open');
+});
+
+test('#695 shipDecisionRow: refuses human-gated; unread is self-clearing; the door passes only WITH a name', () => {
+  const f = shipOpenQuestion({ issue: 9, url: 'https://example.invalid/9', labels: ['needs-decision'] });
+  const refused = shipDecisionRow({ findings: [f] });
+  assert.deepEqual([refused.ok, refused.class, refused.passedBy], [false, 'human-gated', null]);
+  assert.match(refused.detail, /#9 \(https:\/\/example\.invalid\/9\).*colab decision 9 --record/);
+  assert.deepEqual([shipDecisionRow({ unread: [3] }).ok, shipDecisionRow({ unread: [3] }).class], [false, 'self-clearing']);
+  assert.deepEqual([shipDecisionRow({}).ok, shipDecisionRow({}).class], [true, null]);
+  const openDoor = { open: true, how: 'colab-human', why: 'COLAB_HUMAN=1, answered by Ada' };
+  assert.equal(shipDecisionRow({ findings: [f], door: openDoor, answeredBy: null }).ok, false, 'no name, no pass');
+  assert.equal(shipDecisionRow({ findings: [f], door: { open: false }, answeredBy: 'Ada' }).ok, false, 'a closed door never passes');
+  const passed = shipDecisionRow({ findings: [f], door: openDoor, answeredBy: 'Ada' });
+  assert.deepEqual([passed.ok, passed.passedBy], [true, 'Ada']);
+  assert.match(shipDecisionEvidence(passed), /#9 passed by the human door \(#695\): decided by Ada$/);
+  assert.equal(shipDecisionEvidence(refused), '');
+  assert.equal(SHIP_DECISION_ROW, 'no open decision on carried issues (#695)');
+});

@@ -39,6 +39,8 @@ if (a[0] === 'run' && a[1] === 'list') {
   console.log(JSON.stringify(rows)); process.exit(0);
 }
 if (a[0] === 'workflow' && a[1] === 'run') process.exit(0);
+// #695: the open-decision row reads every carried issue.
+if (a[0] === 'issue' && a[1] === 'view') { console.log(JSON.stringify({ state: 'OPEN', labels: [], comments: [], body: '' })); process.exit(0); }
 console.error('fixture gh: refusing ' + a.join(' ')); process.exit(1);
 `;
 

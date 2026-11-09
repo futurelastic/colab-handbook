@@ -341,7 +341,73 @@ function openAsks(comments) {
     .map(({ id, version, at, ns }) => ({ id, version, at, ns }));
 }
 
+/**
+ * #695: the ship door's read of one carried issue. Measured: on an `auto-trunk` repo a reviewer
+ * escalated an issue to its owner, `colab decision --reopen` put `needs-decision` back, and 22
+ * minutes later `colab ship` squashed the branch onto trunk and closed the issue — no precondition
+ * row read the label, so the merge took a decision that was the owner's. A ship pass can run for an
+ * hour; a question raised mid-pass is the ordinary case, so the label is read AT SHIP TIME.
+ *
+ * Same verdict as `colab decision` (the caller passes decisionPairFor's result, so ship and
+ * `--list` cannot disagree): `needs-decision` absent → null; present with the pair resolving to an
+ * interrupted write → null (the question is answered); anything else — no record, a newer ask,
+ * UNDETERMINED — is an open question. Pure: `labels` + `pair` in, a finding or null out.
+ *
+ * Returns null or `{ issue, url, verdict, askAt, decidedAt, why, clear }`; `clear` is the command
+ * that settles it.
+ */
+function shipOpenQuestion({ issue, url = null, labels, pair = null } = {}) {
+  const names = new Set((labels || []).map((l) => (l && typeof l === 'object' ? l.name : l)));
+  if (!names.has('needs-decision')) return null;
+  if (pair && pair.verdict === PAIR_VERDICTS.INTERRUPTED_WRITE) return null;
+  const clear = `colab decision ${issue} --record --ruled-by "<name>"${pair ? ' --answers <ask id>' : ''}`;
+  return {
+    issue, url: url || null,
+    verdict: pair ? pair.verdict : PAIR_VERDICTS.OPEN_QUESTION,
+    askAt: pair ? pair.askAt : null, decidedAt: pair ? pair.decidedAt : null,
+    why: pair ? pair.why : 'needs-decision is applied and no ⚖ decision is recorded',
+    clear,
+  };
+}
+
+const SHIP_DECISION_ROW = 'no open decision on carried issues (#695)';
+
+/**
+ * #695: the precondition row from the per-issue findings. `unread` lists issues whose labels could
+ * not be read — fail closed, self-clearing (the read, not the issue, failed). `door` is the human
+ * door verdict (lib/ship-human-door.js) and `answeredBy` the name given with it: an open question
+ * passes ONLY through an open door WITH a name, so the person who took the decision is on the
+ * record (ruling on #695: the issue's stated default). A batch member passes no door (`door` null).
+ *
+ * Returns `{ ok, class: null|'human-gated'|'self-clearing', detail, passedBy, findings, unread }`;
+ * `passedBy` is the name when the door carried an open question through, else null.
+ */
+function shipDecisionRow({ findings = [], unread = [], door = null, answeredBy = null } = {}) {
+  const where = (f) => (f.url ? `#${f.issue} (${f.url})` : `#${f.issue}`);
+  if (findings.length && door && door.open && answeredBy) {
+    return { ok: true, class: null, passedBy: answeredBy, findings, unread,
+      detail: `open question on ${findings.map(where).join(', ')} — passed by the human door: ${answeredBy} takes this decision, named on the 🚢 record` };
+  }
+  if (findings.length) {
+    const rows = findings.map((f) => `${where(f)}: ${f.why} — clears with \`${f.clear}\``).join('; ');
+    return { ok: false, class: 'human-gated', passedBy: null, findings, unread,
+      detail: `${rows}. The question is the owner's: this ship would take it. A person may take it at the human door with --answered-by "<name>"` };
+  }
+  if (unread.length) {
+    return { ok: false, class: 'self-clearing', passedBy: null, findings, unread,
+      detail: `could not read ${unread.map((n) => '#' + n).join(' ')} from the tracker — an open needs-decision cannot be ruled out; re-run` };
+  }
+  return { ok: true, class: null, passedBy: null, findings, unread, detail: 'no carried issue has an open needs-decision' };
+}
+
+/** #695: the clause the 🚢 / ✅ evidence comment carries when the human door passed an open question. */
+function shipDecisionEvidence(row) {
+  if (!row || !row.passedBy) return '';
+  return ` · open needs-decision on ${row.findings.map((f) => '#' + f.issue).join(' ')} passed by the human door (#695): decided by ${row.passedBy}`;
+}
+
 module.exports = {
+  shipOpenQuestion, SHIP_DECISION_ROW, shipDecisionRow, shipDecisionEvidence,
   DECISION_MARK, REOPEN_MARK, DECISION_RE, REOPEN_RE,
   decisionCommentBody, reopenCommentBody,
   liveDecisions, TRUSTED_ASSOCIATIONS, trustedDecisions,
