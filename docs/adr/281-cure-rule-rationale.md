@@ -91,7 +91,8 @@ It is also what keeps the dry run from being a back door: a red **inside** a
 that step.
 
 A dry run that also skipped an ordinary step past trunk's failure point
-has run part of the job, not the job.
+has run part of the job, not the job. The two template steps every dry run skips
+by construction are the named exception (#694).
 
 The marker is a step **name** on purpose. Steps are matched by exact name, so
 marking the very step that failed on trunk renames it, and D2 then reads it as

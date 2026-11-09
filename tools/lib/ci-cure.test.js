@@ -869,10 +869,121 @@ test('#474 (h) cureVerdict attaches dryRunWanted on the 2b refusal only when eve
   }
 });
 
+// --- #694: the template's conditional steps, and a red whose jobs never started -------------------
+// Rows copy `gh run view --json jobs` for a job the runner service refused: no steps, and a few seconds
+// between its timestamps (measured 2-6 s, no runner assigned).
+
+const { DRY_RUN_CONDITIONAL_STEPS } = require('./ci-cure.js');
+const RETRY_STEP = 'Retry a refused cut once the CLI moved (#547)';
+const HEAVY_START_STEP = 'Start the heavy lane at the new candidate';
+const PUSH_WF = 'CI';
+const CI_JOB = 'Test';
+
+function neverStarted(name, workflowName) {
+  return { name, workflowName, status: 'completed', conclusion: 'failure',
+    startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:03Z', steps: [] };
+}
+function templateDryRun() {
+  return withSteps(dryRelease(), (ss) => {
+    const at = ss.findIndex((s) => s.name === 'Fetch the colab CLI') + 1;
+    ss.splice(at, 0, step(RETRY_STEP, 'skipped'));
+    const cut = ss.findIndex((s) => s.name.startsWith('Cut a candidate')) + 1;
+    ss.splice(cut, 0, step(HEAVY_START_STEP, 'skipped'));
+    return ss;
+  });
+}
+function ciGreen(over = {}) {
+  return { name: CI_JOB, workflowName: PUSH_WF, status: 'completed', conclusion: 'success',
+    startedAt: T0, completedAt: '2026-01-01T00:02:00Z',
+    steps: [step('Set up job'), step('Run tests'), step('Complete job')], ...over };
+}
+
+test('#694 D3: a dry run with the #547 retry and the heavy-lane start skipped cures, on both paths', () => {
+  for (const workflowsTouched of [false, true]) {
+    const v = cureVerdict(base({ jobEvidence: relEvidence(trunkRelease(), [templateDryRun()]), workflowsTouched }));
+    assert.equal(v.ok, true, v.reason);
+    assert.deepEqual(v.dryRun, { jobs: [REL_JOB] });
+    assert.equal(!!v.carveOut, workflowsTouched);
+  }
+});
+
+test('#694 D3 admits each listed step on its own, and nothing resembling one', () => {
+  assert.deepEqual([...DRY_RUN_CONDITIONAL_STEPS], [RETRY_STEP, HEAVY_START_STEP]);
+  for (const name of [RETRY_STEP, HEAVY_START_STEP]) {
+    const dry = withSteps(dryRelease(), (ss) => [...ss, step(name, 'skipped')]);
+    assert.equal(redJobsProvenOnBranch(relEvidence(trunkRelease(), [dry])).ok, true);
+    const near = withSteps(dryRelease(), (ss) => [...ss, step(`${name} (edited)`, 'skipped')]);
+    const v = redJobsProvenOnBranch(relEvidence(trunkRelease(), [near]));
+    assert.equal(v.ok, false);
+    assert.match(v.reason, /not a publishing step/);
+  }
+});
+
+test('#694 D3: a listed step that FAILED in the dry run is not admitted, only a skipped one', () => {
+  const dry = withSteps(templateDryRun(), (ss) => ss.map((s) => (s.name === HEAVY_START_STEP ? { ...s, conclusion: 'failure' } : s)));
+  const v = redJobsProvenOnBranch(relEvidence(trunkRelease(), [dry]));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /not a publishing step/);
+});
+
+test('#694 D2 still comes first: a listed step that RAN on trunk and is skipped in the dry run refuses', () => {
+  const trunk = trunkRelease();
+  trunk.steps = [step('Set up job'), step(RETRY_STEP), step('Fetch the colab CLI', 'failure')];
+  const v = redJobsProvenOnBranch(relEvidence(trunk, [templateDryRun()]));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /a dry run cannot cure a red in a step it does not execute/);
+});
+
+test('#694 a dry run that skipped Finalize (heavy lane not green) still refuses, on top of the listed skips', () => {
+  const dry = withSteps(templateDryRun(), (ss) => ss.map((s) => (s.name.startsWith('Finalize') ? { ...s, conclusion: 'skipped' } : s)));
+  const v = cureVerdict(base({ jobEvidence: relEvidence(trunkRelease(), [dry]) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /Finalize/);
+  assert.match(v.reason, /not a publishing step/);
+});
+
+test('#694 the pin late-skip test exempts the listed steps on a dry run, and not on an ordinary run', () => {
+  const ev = relEvidence(trunkRelease(), [templateDryRun()]);
+  assert.equal(manifestStepProof(ev, { noLateSkip: true }).ok, true);
+  ev.branchJobs[0].dryRun = false;
+  const proof = manifestStepProof(ev, { noLateSkip: true });
+  assert.equal(proof.ok, false);
+  assert.match(proof.reason, /after trunk's failure point/);
+});
+
+test('#694 the measured shape: every red job never started, the branch moved its workflows, CI green and a template dry run green → cures', () => {
+  const jobEvidence = shapeJobEvidence({
+    redRunJobs: [neverStarted(CI_JOB, PUSH_WF), neverStarted(REL_JOB, REL_WF)],
+    branchRunJobs: [ciGreen(), templateDryRun()],
+  });
+  const v = cureVerdict(base({ jobEvidence, workflowsTouched: true }));
+  assert.equal(v.ok, true, v.reason);
+  assert.deepEqual(v.carveOut.jobs.map((j) => [j.name, j.redMs]), [[CI_JOB, 3000], [REL_JOB, 3000]]);
+  assert.deepEqual(v.dryRun, { jobs: [REL_JOB] });
+});
+
+test('#694 carve-out: a job that never started on trunk and only skipped on the branch refuses', () => {
+  const allSkipped = ciGreen({ steps: [step('Set up job'), step('Run tests', 'skipped'), step('Post Run tests'), step('Complete job')] });
+  const jobEvidence = shapeJobEvidence({ redRunJobs: [neverStarted(CI_JOB, PUSH_WF)], branchRunJobs: [allSkipped] });
+  const v = cureVerdict(base({ jobEvidence, workflowsTouched: true }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /ran no step on trunk and no step of its own/);
+  // The test belongs to the carve-out: with the workflow unchanged the same job is judged as before.
+  assert.equal(cureVerdict(base({ jobEvidence, workflowsTouched: false })).ok, true);
+});
+
+test('#694 4c is not relaxed: a job that never started with equal timestamps still refuses on the carve-out', () => {
+  const red = { ...neverStarted(CI_JOB, PUSH_WF), completedAt: '2026-01-01T00:00:00Z' };
+  const jobEvidence = shapeJobEvidence({ redRunJobs: [red], branchRunJobs: [ciGreen()] });
+  const v = cureVerdict(base({ jobEvidence, workflowsTouched: true }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /no usable wall-clock duration/);
+});
+
 // --- #475/#476 × #474: a manifest admission whose red job is proven only by a dry run -------------
 // Ruling: a dry-run instance is the job's branch evidence like any other. 2b already held it to D1–D3,
-// which imply the manifest step proof; the pin's late-skip test ignores the dry run's `[publish]`
-// skips (by design, and D3 refused every other skip) — and nothing else.
+// which imply the manifest step proof; the pin's late-skip test ignores the dry run's skips D3 admits
+// (by design, and D3 refused every other skip) — and nothing else.
 
 test('#475 × #474: add-only scripts + a red main-only job proven by a dry run → cures, both named', () => {
   const v = cureVerdict(base({ jobEvidence: relEvidence(), manifestScriptsTouched: true, manifestPaths: ['package.json'],
