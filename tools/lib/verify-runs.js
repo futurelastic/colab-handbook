@@ -214,4 +214,15 @@ function setAsideNote(rows) {
   return ` — set aside ${list.length} run${list.length === 1 ? '' : 's'} that do${list.length === 1 ? 'es' : ''} not verify the code (post-CI release/deploy lane, #503): ${names.join(', ')}`;
 }
 
-module.exports = { VERIFYING_EVENTS, GATE_KEY, IGNORE_KEY, parsePolicy, setAsideReason, splitVerifying, setAsideNote, workflowTriggers, dispatchCountedNote };
+/**
+ * #688: the wholly skipped workflows a verdict did not judge (git.js setAsideWhollySkipped), named so a
+ * reader can see a gated workflow did not run. '' when none.
+ */
+function skippedOnlyNote(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return '';
+  const names = list.map((x) => `${x.workflowName || 'unnamed'}${x.databaseId ? ` (run ${x.databaseId})` : ''}`);
+  return ` — not judged, every run skipped so it ran nothing here (#688; name a workflow in ship-gate-workflows if it must run): ${names.join(', ')}`;
+}
+
+module.exports = { VERIFYING_EVENTS, GATE_KEY, IGNORE_KEY, parsePolicy, setAsideReason, splitVerifying, setAsideNote, skippedOnlyNote, workflowTriggers, dispatchCountedNote };

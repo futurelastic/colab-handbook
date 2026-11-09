@@ -384,7 +384,9 @@ function wiring(fires) {
  * least one success. `attempt` is the highest run attempt seen — how many times it was re-run.
  * Unlike summarizeRunsForCommit it does NOT reduce to the newest run per workflow (#461): a batch
  * ref is built fresh and re-run in place (same run, higher `attempt`), so it carries no superseded
- * attempts of a workflow for that reduction to set aside.
+ * attempts of a workflow for that reduction to set aside. Nor does it set a wholly skipped workflow
+ * aside (#688): a skip here reads red, so a workflow gated off on `ship-batch/**` costs a split or
+ * a serial landing rather than a refusal of trunk.
  */
 function combinedVerdict(rows) {
   const list = Array.isArray(rows) ? rows : null;

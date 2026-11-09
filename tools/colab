@@ -12060,7 +12060,8 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
   // #606: trunk's tip has no FINISHED run and is a docs-only commit (an adopter's CI `paths-ignore`s
   // docs, or the run is simply not done) — docs change no code, so trunk's CI is the verdict of the
   // newest trunk commit that is NOT docs-only. A finished red run at the tip is never overridden.
-  if (target === trunk && (run.status === 'none' || run.status !== 'completed')) {
+  // #688: a tip where every workflow skipped ran nothing, which is not a red: read it like `none`.
+  if (target === trunk && (run.status === 'none' || run.status !== 'completed' || run.allSkipped)) {
     const door = docsOnlyTipDoor(repoAbs, trunk, run.sha, readOpts);
     if (door) return door;
   }
@@ -12190,7 +12191,7 @@ function treeGreenVerdict(repoAbs, run, verdict) {
  */
 function classifyCiRun(repoAbs, run, at) {
   const v = classifyCiRunRaw(repoAbs, run, at);
-  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) + verifyRuns.dispatchCountedNote(run && run.dispatchCounted) + readViaNote(run) };
+  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.skippedOnlyNote(run && run.skippedOnly) + verifyRuns.setAsideNote(run && run.setAside) + verifyRuns.dispatchCountedNote(run && run.dispatchCounted) + readViaNote(run) };
 }
 
 /** #682: a forge verdict's not-green contexts, named — '' on GitHub, or when every context is green. */
