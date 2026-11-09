@@ -198,14 +198,34 @@ jobs:
       # Pinned binary instead of gitleaks-action v2: the action requires a
       # GITLEAKS_LICENSE for org-owned repos; the binary is MIT and free.
       - name: Install gitleaks (pinned binary)
+        env:
+          # Authenticated: an anonymous release download is what GitHub sheds under load (#698).
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Why these curl flags: the same step in templates/ci-node.yml (#690).
-          curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 10 --max-time 120 -o gitleaks.tar.gz \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          tar -xzf gitleaks.tar.gz gitleaks
-          chmod +x gitleaks
-          sudo mv gitleaks /usr/local/bin/gitleaks
-          rm -f gitleaks.tar.gz
+          # Why each part — the curl flags, the API asset lookup, the sha256 check: the same step
+          # in templates/ci-node.yml (#690, #698). Linux x64 only: this job runs on ubuntu-latest.
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          tmp="$(mktemp -d)"
+          fetch() {
+            curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 10 --max-time 120 \
+              -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: $1" -o "$3" "$2"
+          }
+          fetch application/vnd.github+json \
+            "https://api.github.com/repos/gitleaks/gitleaks/releases/tags/v${GITLEAKS_VERSION}" "$tmp/release.json"
+          for f in "$asset" "$sums"; do
+            url="$(tr ',{[' '\n\n\n' < "$tmp/release.json" | awk -F'"' -v want="$f" '
+              $2 == "url" && $4 ~ /\/releases\/assets\/[0-9]+$/ { u = $4 }
+              $2 == "name" && $4 == want && !found { print u; found = 1 }')"
+            if [ -z "$url" ]; then echo "::error::gitleaks release v${GITLEAKS_VERSION} has no asset $f"; exit 1; fi
+            fetch application/octet-stream "$url" "$tmp/$f"
+          done
+          (cd "$tmp" && awk -v f="$asset" '$2 == f' "$sums" | sha256sum -c --strict -) \
+            || { echo "::error::$asset failed its sha256 check against $sums"; exit 1; }
+          tar -xzf "$tmp/$asset" -C "$tmp" gitleaks
+          chmod +x "$tmp/gitleaks"
+          sudo mv "$tmp/gitleaks" /usr/local/bin/gitleaks
+          rm -rf "$tmp"
       - name: gitleaks detect
         run: gitleaks detect --source . --no-banner
 

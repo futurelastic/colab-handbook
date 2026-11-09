@@ -274,6 +274,12 @@ jobs:
           key: gitleaks-${{ env.GITLEAKS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install gitleaks (pinned release binary)
+        env:
+          # Authenticated (#698). Under load GitHub sheds ANONYMOUS release downloads first:
+          # measured 2026-11-09, ~90 min of instant 504s from github.com/…/releases/download,
+          # while the API asset path below answered 200 with the same file. The job's own token
+          # is enough — reading a public release needs an identity, not a permission.
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Deliberately NOT gitleaks/gitleaks-action@v2: that action requires a paid
           # GITLEAKS_LICENSE for repositories owned by an organization (free only for
@@ -309,14 +315,48 @@ jobs:
             mkdir -p "$dir"
             tmp="$(mktemp -d "$dir.XXXXXX")"
             trap 'rm -rf "$tmp"' EXIT
+            asset="gitleaks_${GITLEAKS_VERSION}_${os}_${arch}.tar.gz"
+            sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+            # fetch <accept> <url> <file> — every request of this step, one curl line.
             # --fail: on an HTTP error curl otherwise saves the error page and exits 0, and tar
             # then fails with "not in gzip format", naming neither the download nor the host.
             # --retry: a re-run during the same upstream error spends the one re-run branch CI
             # allows, so a brief error is retried here first. A longer outage still fails, at
             # curl, naming the status (#690).
-            curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 10 --max-time 120 -o "$tmp/gitleaks.tar.gz" \
-              "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${os}_${arch}.tar.gz"
-            tar -xzf "$tmp/gitleaks.tar.gz" -C "$tmp" gitleaks
+            # The token reaches api.github.com only: curl drops an -H Authorization header when
+            # the asset's 302 leads to another host, so the download CDN never sees it.
+            fetch() {
+              curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 10 --max-time 120 \
+                -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: $1" -o "$3" "$2"
+            }
+            # The API serves an asset by id, not by name, so look the ids up in the release. No jq:
+            # a self-hosted runner need not have it. Splitting on , { [ leaves one key per line
+            # whether the JSON comes pretty or compact; within an asset, "url" precedes "name". Were
+            # that order ever to change, the wrong file would arrive and the sha256 check below
+            # would refuse it — a loud failure, never a wrong binary.
+            fetch application/vnd.github+json \
+              "https://api.github.com/repos/gitleaks/gitleaks/releases/tags/v${GITLEAKS_VERSION}" "$tmp/release.json"
+            for f in "$asset" "$sums"; do
+              url="$(tr ',{[' '\n\n\n' < "$tmp/release.json" | awk -F'"' -v want="$f" '
+                $2 == "url" && $4 ~ /\/releases\/assets\/[0-9]+$/ { u = $4 }
+                $2 == "name" && $4 == want && !found { print u; found = 1 }')"
+              if [ -z "$url" ]; then
+                echo "::error::gitleaks release v${GITLEAKS_VERSION} has no asset $f"; exit 1
+              fi
+              fetch application/octet-stream "$url" "$tmp/$f"
+            done
+            # Verified before tar (#698): an error page, a truncated file or a wrong archive stops
+            # here, naming the file, instead of reaching tar — or, for a valid archive, the PATH.
+            want="$(awk -v f="$asset" '$2 == f { print $1 }' "$tmp/$sums")"
+            if command -v sha256sum >/dev/null; then got="$(sha256sum "$tmp/$asset" | awk '{ print $1 }')"
+            else got="$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }')"; fi # macOS self-hosted
+            if [ -z "$want" ]; then
+              echo "::error::$sums does not list $asset, so it cannot be verified"; exit 1
+            fi
+            if [ "$got" != "$want" ]; then
+              echo "::error::sha256 mismatch for $asset: got $got, $sums lists $want"; exit 1
+            fi
+            tar -xzf "$tmp/$asset" -C "$tmp" gitleaks
             chmod +x "$tmp/gitleaks"
             # One rename on one filesystem: a job sharing this tool cache sees no binary or a
             # whole one, never half of one.
