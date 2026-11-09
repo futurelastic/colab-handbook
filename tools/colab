@@ -12409,17 +12409,27 @@ function shipStaleBaseCheck(repoAbs, gh, base, branch) {
   // the trunk-CI row reads (commit statuses on Forgejo) — never keyed on the gh flag, so a stale or red
   // branch head cannot pass here as `unread` while the CI row passes on the forge's statuses.
   const fc = forgeCi(repoAbs);
+  let verifiedRun = null;
   if (headSha && fc) run = fc.ciVerdict(headSha, { branch });
-  else if (headSha && gh) run = git.ghRunForCommit(repoAbs, branch, headSha);
+  else if (headSha && gh) {
+    // #691: one read, two summaries. `run` stays exactly what the stale-base and docs-only rows have
+    // always read; `verifiedRun` applies the verifying-runs policy (#503) the trunk row uses, so the
+    // head row below never refuses on a run that policy sets aside (a release lane, an ignored workflow).
+    const rows = git.ghRunsForCommit(repoAbs, branch, headSha);
+    run = git.summarizeRunsForCommit(rows, headSha);
+    verifiedRun = git.summarizeRunsForCommit(rows, headSha, { verifying: verifyingPolicy(repoAbs), finishedRed: true });
+  }
   // #606: `run`/`headSha` are additive — the docs-only row reads whether that run finished red.
   // #682: on a forge, `headCi` is the branch head's own CI verdict (green / red / pending), its own
-  // row — the class code-ship B1a reads through `colab ci-wait` on GitHub. null on GitHub, and where
-  // the head has no run to judge (the stale-base row speaks for those).
-  const headCi = fc ? staleBase.branchHeadCiVerdict({ headSha, run, branch, engine: fc.kind }) : null;
+  // row. #691: on GitHub it is emitted only for a head whose run FINISHED red — waiting on a running
+  // one stays code-ship B1a's `colab ci-wait` — and is null otherwise, as it is wherever the head has
+  // no run to judge (the stale-base row speaks for those).
+  const headCi = fc ? staleBase.branchHeadCiVerdict({ headSha, run, branch, engine: fc.kind })
+    : (gh ? staleBase.githubBranchHeadRedVerdict({ headSha, run: verifiedRun, branch }) : null);
   return { ...staleBase.staleBaseVerdict({ headSha, run, baseTip, contains, behind, base, ciReadable: !!(fc || gh) }), run, headSha, headCi };
 }
 
-/** #682: the forge branch-head CI row's name — one spelling for the JSON and the prose table. */
+/** #682: the branch-head CI row's name (forge; on GitHub a finished-red head only, #691) — one spelling for the JSON and the prose table. */
 const BRANCH_HEAD_CI_ROW = 'branch CI green at its head (#682)';
 
 /**
@@ -13243,7 +13253,7 @@ function cmdShipDryJson(opts) {
   } else {
     checks.push({ name: 'branch run contains current base (#395)', ok: staleJson.ok,
       class: staleJson.ok ? null : SELF_CLEARING, verdict: staleJson.verdict, detail: staleJson.detail });
-    const hc = staleJson.headCi; // #682: forge only — a red head needs a person, a running one clears
+    const hc = staleJson.headCi; // #682 forge, #691 GitHub (red only) — a red head needs a person, a running one clears
     if (hc) checks.push({ name: BRANCH_HEAD_CI_ROW, ok: hc.ok, class: hc.ok ? null : (hc.selfClearing ? SELF_CLEARING : HUMAN_GATED), verdict: hc.verdict, detail: hc.detail });
   }
   // #610: the same gated heavy-lane read as the prose path. A missing or running heavy run clears on

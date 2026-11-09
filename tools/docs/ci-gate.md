@@ -131,6 +131,17 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   head with no run at all is not stale (the `none` row above governs it). Skipping the
   re-run because the base's new commits "touch nothing the branch's tests import" is only
   ever allowed on a measurement, never on a guess — and no generic measurement exists today. Why: [ADR 539](../../docs/adr/539-branch-ci-rationale.md).
+- **[Hard — gate: colab ship refuses a head that finished red]** **On GitHub too, a branch head whose
+  run finished red refuses (#691).** `colab ship`, dry and real, adds the row
+  `branch CI green at its head (#682)` when a run at the pushed head finished red: completed, and
+  not `success`, `cancelled` or `skipped` (the same rule the docs-only row below uses). It refuses
+  `HUMAN_GATED` and names each failing workflow; whether that is `red:infra` or `red:finding` is
+  still `code-ship` B1a's read. Only the runs that verify the code count, under the same
+  verifying-runs rule as trunk's (#503), so a run that rule sets aside never refuses. Every other
+  state adds no row on GitHub and reads as before: no run, a run in flight (`colab ci-wait` is still
+  how B1a waits on it), a run that cannot arrive, and a `green` head. The cure and ci-grant doors
+  already demand a green head, so this row never changes them. Measured before the fix: a head
+  whose required secret-scan job had failed before scanning read READY on every row.
 - **The quantifiers are the trunk rule's, unchanged (#92, #307).** `every … completed`: a
   fast sibling already green never answers for a slow one still running — that sha is
   `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
@@ -345,7 +356,7 @@ expectations as the GitHub adapter.
 |---|---|
 | trunk CI green, and B1's re-check before the merge | trunk's remote head, by commit status. The GitHub-only doors are not offered: by-commit re-read, docs-only tip, batch substitute, tree-green citation, no-workflow trunk, and the ci-grant and cure exemptions, which live on the tracker. A failed read is `SELF_CLEARING`. |
 | branch run contains current base (#395) | the branch head's commit status, through the same method. A branch behind trunk is `stale-base`. An unreadable status refuses as `unread`. |
-| branch CI green at its head (#682) | the same read, judged on its own: a failing context refuses `HUMAN_GATED` and is named; a context still running is not ready (`SELF_CLEARING`) and the row names the `colab ci-wait` to run. A head with no status adds no row: Branch CI's `none` governs it, as on GitHub. On GitHub this row does not exist; code-ship B1a reads the class through `colab ci-wait`. |
+| branch CI green at its head (#682) | the same read, judged on its own: a failing context refuses `HUMAN_GATED` and is named; a context still running is not ready (`SELF_CLEARING`) and the row names the `colab ci-wait` to run. A head with no status adds no row: Branch CI's `none` governs it, as on GitHub. On GitHub the row appears only for a head whose run finished red (#691); a running or green head adds none, and code-ship B1a reads the class through `colab ci-wait`. |
 | tracker writes after the push (🚢 evidence, group-label and container teardown, PR close) | skipped. One `B4:` line names the issues the adopter's tracker should close. Skipping never fails the ship. |
 
 **`colab ci-wait --sha` on such a repo** polls the same commit status until it is green, red, or the

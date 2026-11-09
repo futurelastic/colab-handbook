@@ -1365,3 +1365,20 @@ test('#585: a spawn error with no stderr becomes the detail — ENOBUFS names it
   assert.match(missing.stderr, /^ENOENT: /);
   assert.strictEqual(git.spawnErrorLine(null), '');
 });
+
+test('#691: summarizeRunsForCommit (opts.finishedRed) lists every judged run that finished red as finishedRed — skipped, cancelled and superseded rows excluded', () => {
+  const row = (workflowName, status, conclusion, createdAt = '2026-11-09T00:00:00Z') => ({ headSha: 'f691', workflowName, status, conclusion, event: 'push', createdAt });
+  const r = git.summarizeRunsForCommit([
+    row('Preview', 'completed', 'skipped'),
+    row('CI', 'completed', 'failure'),
+    row('Lint', 'completed', 'cancelled'),
+    row('Scan', 'completed', 'success', '2026-11-09T00:05:00Z'),
+    row('Scan', 'completed', 'failure', '2026-11-09T00:01:00Z'), // superseded by the newer success
+    row('E2E', 'in_progress', null),
+  ], 'f691', { finishedRed: true });
+  assert.deepStrictEqual((r.finishedRed || []).map((x) => [x.workflowName, x.conclusion]), [['CI', 'failure']]);
+  const green = git.summarizeRunsForCommit([row('CI', 'completed', 'success')], 'f691', { finishedRed: true });
+  assert.strictEqual(green.finishedRed, undefined, 'absent when nothing finished red');
+  const notAsked = git.summarizeRunsForCommit([row('CI', 'completed', 'failure')], 'f691');
+  assert.strictEqual(notAsked.finishedRed, undefined, 'opt-in — a reader that never asked sees no new field');
+});

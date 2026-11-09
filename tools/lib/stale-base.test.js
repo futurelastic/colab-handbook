@@ -127,3 +127,39 @@ test('#682 nothing to judge is null: no head, an unread run, or no status at all
   assert.strictEqual(hc(null), null);
   assert.strictEqual(hc({ status: 'none', conclusion: null, runCount: 0 }), null);
 });
+
+// #691: the GitHub half of #682's row — a head whose run FINISHED red refuses; everything else adds no row.
+const { githubBranchHeadRedVerdict } = require('./stale-base.js');
+const ghHead = { headSha: 'cccccccc3', branch: 'fix/x-1' };
+
+test('#691: a completed failure at the head is red, human-gated, named', () => {
+  const r = githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'completed', conclusion: 'failure', finishedRed: [{ workflowName: 'Secret scan', conclusion: 'failure' }] } });
+  assert.deepStrictEqual([r.ok, r.verdict, r.selfClearing], [false, 'red', false]);
+  assert.match(r.detail, /^fix\/x-1@ccccccc \(GitHub Actions\) finished red — failing: Secret scan \(failure\)\./);
+});
+
+test('#691: green, in flight, none, unread and an unpushed head add no row', () => {
+  for (const run of [GREEN, { status: 'in_progress', conclusion: null }, { status: 'none', conclusion: null }, null]) {
+    assert.strictEqual(githubBranchHeadRedVerdict({ ...ghHead, run }), null, JSON.stringify(run));
+  }
+  assert.strictEqual(githubBranchHeadRedVerdict({ ...ghHead, headSha: null, run: { status: 'completed', conclusion: 'failure' } }), null);
+});
+
+test('#691: cancelled and skipped are not finished red (#606 docs-only rule)', () => {
+  for (const conclusion of ['cancelled', 'skipped']) {
+    assert.strictEqual(githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'completed', conclusion } }), null, conclusion);
+  }
+});
+
+test('#691: finishedRed decides when the summary names a skipped row first, or a run is still in flight', () => {
+  const r = githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'completed', conclusion: 'skipped', finishedRed: [{ workflowName: 'CI', conclusion: 'failure' }] } });
+  assert.strictEqual(r && r.verdict, 'red');
+  assert.match(r.detail, /failing: CI \(failure\)/);
+  const s = githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'in_progress', conclusion: null, finishedRed: [{ workflowName: 'Lint', conclusion: 'timed_out' }] } });
+  assert.match(s && s.detail, /failing: Lint \(timed_out\)/);
+});
+
+test('#691: without finishedRed (a hand-built summary) the summary conclusion decides', () => {
+  const r = githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'completed', conclusion: 'timed_out' } });
+  assert.match(r.detail, /failing: conclusion=timed_out\./);
+});

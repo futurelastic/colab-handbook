@@ -123,4 +123,43 @@ function branchHeadCiVerdict(a) {
       `Wait with \`colab ci-wait --sha ${a.headSha} --branch ${a.branch}\`, then run ship again` };
 }
 
-module.exports = { staleBaseVerdict, branchHeadCiVerdict };
+/**
+ * #691: the GitHub half of #682's row. On GitHub the branch head's class used to be left wholly to
+ * code-ship B1a (`colab ci-wait`), so `colab ship --dry --json` read READY on a head whose run had
+ * FINISHED red — measured on a required secret-scan job that failed before scanning anything. The
+ * row now refuses that one state, human-gated, in dry and real ship alike; everything else stays as
+ * it was on GitHub (null — no row):
+ *
+ *   a run at the head finished red       -> red, human-gated (red:infra or red:finding is B1a's call)
+ *   green / in flight / no run / unread  -> null: B1a's ci-wait still owns the wait, the stale-base
+ *                                           row still speaks for `none` and an unread run
+ *
+ * "Finished red" is #606's docs-only rule (`docsOnlyBranchRow`): completed, and not success,
+ * cancelled or skipped — so a code branch is never held to a weaker rule than a docs-only one.
+ * `run` is the head's summary read under the verifying-runs policy (#503), the same rule the trunk
+ * row uses, so a run that policy sets aside (a release lane, a `ship-ignore-workflows` entry) never
+ * refuses here. `run.finishedRed` (tools/lib/git.js) lists every judged red run; without it the
+ * summary's own status/conclusion decides.
+ *
+ * @param {object} a
+ * @param {string|null} a.headSha - the branch head on the remote
+ * @param {object|null} a.run     - summarizeRunsForCommit's verdict at headSha, verifying policy applied
+ * @param {string} a.branch
+ * @returns {null|{ok:false, verdict:'red', selfClearing:false, detail:string}}
+ */
+function githubBranchHeadRedVerdict(a) {
+  const run = a && a.run;
+  if (!a || !a.headSha || !run || run.status === 'none') return null;
+  const listed = Array.isArray(run.finishedRed) ? run.finishedRed : [];
+  const summaryRed = run.status === 'completed' && run.conclusion !== 'success' && run.conclusion !== 'cancelled' && run.conclusion !== 'skipped';
+  if (!listed.length && !summaryRed) return null;
+  const at = `${a.branch}@${String(a.headSha).slice(0, 7)} (GitHub Actions)`;
+  const failing = listed.length
+    ? listed.map((x) => `${x.workflowName || 'run'} (${x.conclusion || 'none'})`).join(', ')
+    : `conclusion=${run.conclusion || 'none'}`;
+  return { ok: false, verdict: 'red', selfClearing: false,
+    detail: `${at} finished red — failing: ${failing}. A branch lands only on its own green (C7.contract.03): ` +
+      'red:infra → re-run once; red:finding → send it back (code-ship B1a)' };
+}
+
+module.exports = { staleBaseVerdict, branchHeadCiVerdict, githubBranchHeadRedVerdict };

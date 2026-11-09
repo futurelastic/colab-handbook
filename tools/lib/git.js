@@ -1280,11 +1280,22 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
     ...(allSkipped ? { allSkipped: true } : {}),
     ...(setAside.length ? { setAside: excludedRunSummary(setAside) } : {}),
     ...(dispatchCounted.length ? { dispatchCounted: excludedRunSummary(dispatchCounted) } : {}),
+    // #691: opt-in (`opts.finishedRed`), so no reader that never asked sees a new field — every
+    // JUDGED run that finished red: completed, and not success, cancelled or skipped (neither of
+    // those two executed anything). The summary's single `conclusion` names only the first not-green
+    // row it meets, which can be a `skipped` one beside a real failure; a caller asking "did any run
+    // finish red here" reads this list instead. Absent when none did.
+    ...(opts && opts.finishedRed && judged.some(isFinishedRed) ? { finishedRed: excludedRunSummary(judged.filter(isFinishedRed)) } : {}),
     // #651: the rows came from the unfiltered listing because the forge's filter index was empty.
     ...(allForSha.some((x) => x && x.readVia === 'unfiltered-listing') ? { readVia: 'unfiltered-listing' } : {}),
   };
   const r = summarizeRepoOwnedRuns(judged, sha);
   return { ...r, ...extra };
+}
+
+/** #691: a run that ran and failed — completed, and not success, cancelled or skipped. */
+function isFinishedRed(x) {
+  return !!x && x.status === 'completed' && x.conclusion !== 'success' && x.conclusion !== 'cancelled' && x.conclusion !== 'skipped';
 }
 
 /** Sort key for "which run of one workflow is newer": createdAt, then databaseId; null = unknown. */
