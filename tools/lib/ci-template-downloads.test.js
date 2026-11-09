@@ -12,6 +12,10 @@
  *     `--retry` and both timeouts (line scan, no YAML dependency, as the other template tests);
  *   - each CI template's real install step, run under `bash -e` as GitHub runs it, against a local
  *     server: a brief 504 installs the binary, a lasting 504 stops at curl naming the status.
+ *
+ * And kept between jobs (#696): a release download that answers 504 for hours outlasts any retry, so
+ * the step installs into the runner's tool cache and reuses what it finds there — a runner that has the
+ * pinned binary installs it with no request at all, even while the host answers 504 to everything.
  */
 
 const test = require('node:test');
@@ -106,22 +110,35 @@ function fakeHost(statuses, bytes) {
   })));
 }
 
-// Runs a template's real step under `bash -e` (GitHub's default for `run:`), repointed at the fake
-// host. Only the wait is shortened, so a run costs seconds: the flags themselves stay the template's.
-function runStep(file, origin) {
+// The platform directory the step resolves from uname, as this machine would.
+const PLATFORM = `${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
+
+// A fresh runner: its own temp dir, and a tool cache that persists only if the caller passes the same
+// `toolCache` to a second run. `toolCache: null` leaves RUNNER_TOOL_CACHE unset.
+function runner({ toolCache } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-download-'));
   const runnerTemp = path.join(dir, 'runner-temp');
   fs.mkdirSync(runnerTemp);
-  const githubPath = path.join(dir, 'github-path');
+  if (toolCache === undefined) { toolCache = path.join(dir, 'tool-cache'); fs.mkdirSync(toolCache); }
+  const installDir = path.join(toolCache || runnerTemp, 'gitleaks', '8.30.1', PLATFORM);
+  return { dir, runnerTemp, toolCache, installDir, binary: path.join(installDir, 'gitleaks') };
+}
+
+// Runs a template's real step under `bash -e` (GitHub's default for `run:`), repointed at the fake
+// host. Only the wait is shortened, so a run costs seconds: the flags themselves stay the template's.
+function runStep(file, origin, rn = runner()) {
+  const githubPath = path.join(rn.dir, `github-path-${Date.now()}-${Math.random()}`);
   const script = installStep(file)
     .replaceAll('https://github.com', origin)
     .replace(/--retry-delay \d+/, '--retry-delay 1');
+  const env = { PATH: process.env.PATH, HOME: rn.dir, RUNNER_TEMP: rn.runnerTemp, GITHUB_PATH: githubPath, GITLEAKS_VERSION: '8.30.1', no_proxy: '*' };
+  if (rn.toolCache) env.RUNNER_TOOL_CACHE = rn.toolCache;
   return new Promise((resolve) => {
-    execFile('bash', ['-e', '-c', script], {
-      cwd: dir,
-      env: { PATH: process.env.PATH, HOME: dir, RUNNER_TEMP: runnerTemp, GITHUB_PATH: githubPath, GITLEAKS_VERSION: '8.30.1', no_proxy: '*' },
-    }, (err, stdout, stderr) => resolve({
-      code: err ? err.code : 0, stderr, binary: path.join(runnerTemp, 'gitleaks'), githubPath, runnerTemp, dir,
+    execFile('bash', ['-e', '-c', script], { cwd: rn.dir, env }, (err, stdout, stderr) => resolve({
+      ...rn, code: err ? err.code : 0, stdout, stderr, githubPath,
+      // Everything the step left beside the install dir: a temp dir here is litter on a persistent runner.
+      leftovers: fs.existsSync(path.dirname(rn.installDir))
+        ? fs.readdirSync(path.dirname(rn.installDir)).filter((n) => n !== PLATFORM) : [],
     }));
   });
 }
@@ -145,8 +162,11 @@ test('each CI template\'s real install step', { concurrency: true }, async (t) =
       assert.strictEqual(r.code, 0, r.stderr);
       assert.strictEqual(host.hits.length, 3, 'two failures, then the success');
       assert.match(host.hits[0], /^\/gitleaks\/gitleaks\/releases\/download\/v8\.30\.1\/gitleaks_8\.30\.1_(darwin|linux)_(arm64|x64)\.tar\.gz$/);
-      assert.ok(fs.statSync(r.binary).mode & 0o100, 'installed and executable');
-      assert.strictEqual(fs.readFileSync(r.githubPath, 'utf8').trim(), r.runnerTemp);
+      assert.ok(fs.statSync(r.binary).mode & 0o100, 'installed into the tool cache, executable');
+      assert.ok(r.binary.startsWith(r.toolCache + path.sep), 'under RUNNER_TOOL_CACHE, not RUNNER_TEMP');
+      assert.strictEqual(fs.readFileSync(r.githubPath, 'utf8').trim(), r.installDir);
+      assert.deepStrictEqual(r.leftovers, [], 'no temp dir left in the tool cache');
+      assert.deepStrictEqual(fs.readdirSync(r.dir).filter((n) => /\.tar\.gz$/.test(n)), [], 'no tarball left in the workspace');
       fs.rmSync(r.dir, { recursive: true, force: true });
     }),
     t.test(`${file}: a lasting upstream 504 stops at curl, naming the status`, async () => {
@@ -158,6 +178,46 @@ test('each CI template\'s real install step', { concurrency: true }, async (t) =
       assert.doesNotMatch(r.stderr, /gzip|tar:/, 'never reaches tar');
       assert.strictEqual(host.hits.length, 6, 'the first try plus five retries');
       assert.strictEqual(fs.existsSync(r.binary), false, 'nothing installed');
+      assert.deepStrictEqual(r.leftovers, [], 'the failed download leaves no temp dir in the tool cache');
+      fs.rmSync(r.dir, { recursive: true, force: true });
+    }),
+    t.test(`${file}: a runner that installed it once needs no download again, even through a lasting 504`, async () => {
+      const ok = await fakeHost([200], tarball());
+      const rn = runner();
+      const first = await runStep(file, ok.origin, rn);
+      ok.close();
+      assert.strictEqual(first.code, 0, first.stderr);
+      assert.strictEqual(ok.hits.length, 1);
+      // The outage this issue measured: the release host answers 504 to everything, for hours.
+      const down = await fakeHost([504], Buffer.alloc(0));
+      const second = await runStep(file, down.origin, rn);
+      down.close();
+      assert.strictEqual(second.code, 0, second.stderr);
+      assert.strictEqual(down.hits.length, 0, 'no request reaches the host');
+      assert.match(second.stdout, /already on this runner/);
+      assert.strictEqual(fs.readFileSync(second.githubPath, 'utf8').trim(), rn.installDir);
+      fs.rmSync(rn.dir, { recursive: true, force: true });
+    }),
+    t.test(`${file}: the cache is per version — a pin bump downloads, never reuses the old binary`, async () => {
+      const rn = runner();
+      const old = path.join(rn.toolCache, 'gitleaks', '8.29.0', PLATFORM);
+      fs.mkdirSync(old, { recursive: true });
+      fs.writeFileSync(path.join(old, 'gitleaks'), '#!/bin/sh\necho old\n', { mode: 0o755 });
+      const host = await fakeHost([200], tarball());
+      const r = await runStep(file, host.origin, rn);
+      host.close();
+      assert.strictEqual(r.code, 0, r.stderr);
+      assert.strictEqual(host.hits.length, 1, '8.30.1 is not on the runner, so it is downloaded');
+      assert.strictEqual(fs.readFileSync(r.githubPath, 'utf8').trim(), r.installDir);
+      fs.rmSync(rn.dir, { recursive: true, force: true });
+    }),
+    t.test(`${file}: with no RUNNER_TOOL_CACHE it still installs, into RUNNER_TEMP`, async () => {
+      const host = await fakeHost([200], tarball());
+      const r = await runStep(file, host.origin, runner({ toolCache: null }));
+      host.close();
+      assert.strictEqual(r.code, 0, r.stderr);
+      assert.ok(r.binary.startsWith(r.runnerTemp + path.sep));
+      assert.ok(fs.statSync(r.binary).mode & 0o100);
       fs.rmSync(r.dir, { recursive: true, force: true });
     }),
   ]));
