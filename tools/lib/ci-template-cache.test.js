@@ -16,7 +16,8 @@
  *     switch caching back on where `cache:` says off;
  *   - the step names `colab ship`'s cure rule matches by exact name are still there, and the only
  *     new steps are the gated cache steps;
- *   - each cache carries an `EDIT:` note naming self-hosted.
+ *   - each cache carries an `EDIT:` note naming self-hosted;
+ *   - the gitleaks job's binary cache (#696) follows the same hosted-only rule.
  */
 
 const test = require('node:test');
@@ -157,6 +158,29 @@ test('templates/ci-laravel.yml: Composer cache steps run iff GitHub-hosted AND c
   assert.ok(locate.comments.some((l) => /EDIT:/.test(l) && /self-hosted/i.test(l)) ||
     locate.comments.join('\n').match(/EDIT:[\s\S]*self-hosted/), 'Composer cache has no self-hosted EDIT: note');
 });
+
+// The gitleaks binary cache (#696): the same hosted-only rule as the package caches. A self-hosted
+// runner keeps the binary in its own tool cache instead — the install step's half, pinned by running
+// the step itself in ci-template-downloads.test.js.
+for (const file of ['templates/ci-node.yml', 'templates/ci-python.yml', 'templates/ci-laravel.yml']) {
+  test(`${file}: the gitleaks cache restores iff GitHub-hosted, keyed on the pin and the platform`, () => {
+    const steps = stepsOf(jobsOf(read(file)).gitleaks);
+    const names = steps.map((s) => s.name);
+    const restore = steps.find((s) => s.name === 'Restore gitleaks cache');
+    assert.ok(restore, `${file} gitleaks job has no "Restore gitleaks cache" step`);
+    assert.ok(/^actions\/cache@[0-9a-f]{40}$/.test(restore.uses), `actions/cache is not pinned by sha: ${restore.uses}`);
+    assert.ok(names.includes('Install gitleaks (pinned release binary)'), 'the install step keeps the name stamp.js recognises');
+    assert.ok(names.indexOf('Restore gitleaks cache') < names.indexOf('Install gitleaks (pinned release binary)'), 'restore must precede install');
+    for (const env of ENVS) assert.strictEqual(evalExpr(restore.if, { env, files: [] }), env === 'github-hosted', `if: on ${env}`);
+    for (const part of ['env.GITLEAKS_VERSION', 'runner.os', 'runner.arch']) {
+      assert.ok(restore.with.key.includes(part), `cache key lacks ${part}: ${restore.with.key}`);
+    }
+    // The path the install step writes: the tool cache, per version, so a bump is never a hit.
+    assert.strictEqual(restore.with.path, '${{ runner.tool_cache }}/gitleaks/${{ env.GITLEAKS_VERSION }}');
+    assert.ok(restore.comments.join('\n').match(/EDIT:[\s\S]*self-hosted|self-hosted[\s\S]*EDIT:/), 'gitleaks cache has no self-hosted EDIT: note');
+    assert.strictEqual(steps.filter((s) => /cache/i.test(s.name || '')).length, 1, 'one cache step in the gitleaks job');
+  });
+}
 
 // The names `colab ship`'s cure rule matches by exact name (#475/#476: executed-step superset).
 // Renaming one of these is an instrument change, so this list moves only on purpose.
