@@ -11119,7 +11119,11 @@ Sequence (each step gated; any failure aborts before the push — the target is 
                         head (workflows that cannot fire for a branch ref) → nothing to be stale
                         (an integration line with NO runs at all borrows trunk's verdict, advisory —
                         an ungated line is a normal early state; a RED line still blocks; the cure
-                        rule and ci-grant both cover trunk only, never a line)
+                        rule and ci-grant both cover trunk only, never a line) · no carried issue
+                        (closing or --refs) with an OPEN needs-decision (#695), read at ship time
+                        through the same pair rule as \`colab decision\` — clears with \`colab decision
+                        <N> --record\`; a person may pass it at the human door only WITH --answered-by
+                        <name>, and the 🚢/✅ comment names them (a --batch member never passes it)
   b4. core-path review  (#350) the TARGET's CODEOWNERS (.github/, root, docs/) ∩ the branch's changed
                         paths. Inert when there is no CODEOWNERS or it names only the author's forge
                         login. Otherwise a core-touching branch is pushed, a PR is opened (or the open
@@ -11900,6 +11904,32 @@ function resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag, declaredHolds 
   const closeIssues = issues.filter((n) => !refsSet.has(n));
   const refsIssues = issues.filter((n) => refsSet.has(n));
   return { closeIssues, refsIssues, refsSet, gateFindings, brakeFindings };
+}
+
+/**
+ * #695: the open-question row, read AT SHIP TIME over every issue the ship carries (closing and
+ * --refs alike — a kept-open issue's decision is taken by the merge just the same). `needs-decision`
+ * is resolved through decisionPairFor, the reader `colab decision --record/--list` use, so ship and
+ * the decision inbox agree on whether the question is open; the label timeline is read only for an
+ * issue carrying the both-labels pair. `gh` unusable → no row (nothing can be read, and the CI row
+ * already refuses without gh); one issue unreadable → the row fails closed, self-clearing.
+ * `door` / `answeredBy`: the human door and its name (decisionRecord.shipDecisionRow).
+ */
+function shipDecisionCheck(repoAbs, gh, issues, door = null, answeredBy = null) {
+  if (!gh || !issues.length) return null;
+  const trust = decisionTrust(repoAbs);
+  const findings = [];
+  const unread = [];
+  for (const num of issues) {
+    const info = git.ghIssueView(repoAbs, num, ['url', 'labels', 'comments']);
+    if (!info) { unread.push(num); continue; }
+    const names = (info.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
+    if (!names.includes(labels.NEEDS_DECISION_LABEL)) continue; // the ordinary case: one read, no events
+    const pair = decisionPairFor(repoAbs, num, { labels: info.labels || [], comments: info.comments || [] }, trust);
+    const f = decisionRecord.shipOpenQuestion({ issue: num, url: info.url, labels: info.labels, pair });
+    if (f) findings.push(f);
+  }
+  return decisionRecord.shipDecisionRow({ findings, unread, door, answeredBy });
 }
 
 /** `holds:` from a parsed descriptor, as a list of label names — anything malformed reads as none. */
@@ -13195,6 +13225,16 @@ function cmdShipDryJson(opts) {
       : `${checklistFindings.map((f) => `#${f.issue} (${f.unchecked}/${f.total} unticked)`).join(', ')} — ` +
         'tick what shipped, file `Remainder: #M` for the rest, or pass --refs to keep it open deliberately' });
 
+  // #695: an open needs-decision on any carried issue refuses — the same producer as the prose and
+  // --direct paths. A batch member passes no human door: the batch has no per-member 🚢 clause to
+  // name the person on, so such a member lands serially through the door instead.
+  const decisionJson = shipDecisionCheck(repoAbs, gh, sess.issues,
+    opts._batchMember ? null : humanDoor.humanDoorFromProcess(process, opts.answeredBy), opts.answeredBy);
+  if (decisionJson) {
+    checks.push({ name: decisionRecord.SHIP_DECISION_ROW, ok: decisionJson.ok, class: decisionJson.class, detail: decisionJson.detail,
+      ...(decisionJson.findings.length ? { questions: decisionJson.findings.map((f) => ({ issue: f.issue, url: f.url, verdict: f.verdict, clear: f.clear })) } : {}) });
+  }
+
   const migGate = shipMigrationGate(repoAbs, gh, target, sess.branch, sess.issues);
   const migOk = migGate.ok;
   migrationGrantPayload = migGate.payload;
@@ -13577,7 +13617,7 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
       `The deliverable is recorded on this issue (see the comment(s) above), which is what authorised ` +
       `the close — colab closes a zero-diff issue only when it already carries a comment colab did not ` +
       `write. The zero-diff fact was measured from git: ${mode.why}.${shipSess}`;
-    const c = git.ghIssueComment(repoAbs, num, body + (opts.humanDoorEvidence || '')); // #525
+    const c = git.ghIssueComment(repoAbs, num, body + (opts.humanDoorEvidence || '') + (opts.decisionDoorEvidence || '')); // #525, #695
     if (!c.ok) warn(`could not post the evidence-close comment on #${num} — closing anyway`);
     const r = tracker.forRepo(repoAbs).issueClose(num, { reason: 'completed' });
     if (!r.ok) { skipped.push({ num, why: `gh issue close failed: ${(r.stderr || '').split('\n')[0]}` }); continue; }
@@ -13779,6 +13819,13 @@ function cmdShipDirect(opts) {
     detail: gateOk
       ? 'no unticked Plan checklist item(s) without a declared remainder'
       : `${checklistFindings.map((f) => `#${f.issue} (${f.unchecked}/${f.total} unticked)`).join(', ')} — no declared remainder` });
+
+  // #695: an open needs-decision on any claimed issue refuses the close — same producer as a branch ship.
+  const decisionDirect = shipDecisionCheck(repoAbs, gh, issues, humanDoor.humanDoorFromProcess(process, opts.answeredBy), opts.answeredBy);
+  if (decisionDirect) {
+    checks.push({ name: decisionRecord.SHIP_DECISION_ROW, ok: decisionDirect.ok, class: decisionDirect.class, detail: decisionDirect.detail });
+    opts.decisionDoorEvidence = decisionRecord.shipDecisionEvidence(decisionDirect);
+  }
 
   // ---- the work is committed on trunk … ----
   const headBranch = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs).stdout;
@@ -14458,6 +14505,15 @@ function cmdShip(argv) {
       ? 'no unticked Plan checklist item(s) without a declared remainder'
       : `${gateFindings.map((f) => `#${f.issue} (${f.unchecked}/${f.total} unticked)`).join(', ')} — no declared remainder`]);
 
+  // #695: an open needs-decision on any carried issue refuses before the push — the same producer as
+  // --dry --json, read now, whatever the coordinator read earlier in its pass.
+  const decisionResult = shipDecisionCheck(repoAbs, gh, sess.issues, humanDoor.humanDoorFromProcess(process, opts.answeredBy), opts.answeredBy);
+  const decisionOk = !decisionResult || decisionResult.ok;
+  if (decisionResult) {
+    checks.push([decisionOk ? '✓' : '✗', decisionRecord.SHIP_DECISION_ROW, decisionResult.detail]);
+    opts.decisionDoorEvidence = decisionRecord.shipDecisionEvidence(decisionResult);
+  }
+
   // ---- B1b's cross-check, run by the tool rather than by the reader (#87) ----
   // The claim registry is read AT SHIP TIME, so a claim a co-tenant session wrote onto this branch
   // minutes ago is indistinguishable from one this session made. Ask git whether the branch
@@ -14540,7 +14596,7 @@ function cmdShip(argv) {
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && headCiOk && coreOk && recOk && heavyOk;
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && decisionOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && headCiOk && coreOk && recOk && heavyOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -15368,7 +15424,7 @@ function cmdShip(argv) {
   // same block, and re-assigning the collector here would silently discard them.
   shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts,
     skipPrs: reviewPrHandled ? [reviewPrHandled] : [],
-    evidenceExtra: (opts.humanDoorEvidence || '') + docsOnlyEvidence(docsCi, ciResult) + handoffEvidence(sess.handoff) }); // #525, #578, #606
+    evidenceExtra: (opts.humanDoorEvidence || '') + (opts.decisionDoorEvidence || '') + docsOnlyEvidence(docsCi, ciResult) + handoffEvidence(sess.handoff) }); // #525, #578, #606, #695
 
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);

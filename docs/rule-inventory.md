@@ -1391,6 +1391,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5b.dg.34 | default |  | The reading leans towards showing the issue, like Readiness. | This leans towards showing the issue, like Readiness does. | tools/docs/decisions.md | #357 |
 | C5b.dg.35 | explanation |  | Showing a settled question costs a glance; hiding an open one costs a ruling. | Showing a settled question once more costs a glance. | docs/adr/122-decision-gate-rationale.md | #357 |
 | C5b.dg.36 | hard | tools/colab::Recording over this pair must name the question it answers | `colab decision --record` refuses over the both-labels pair unless `--answers <ref>` names the question answered. | over the pair unless `--answers <ref>` says which question the new record answers | tools/docs/decisions.md | #357 |
+| C5b.dg.37 | hard | tools/lib/decision-record.js::no open decision on carried issues (#695) | `colab ship` refuses a branch (or trunk-direct unit) carrying an issue with an open `needs-decision`, read at ship time by the pair rule; the human door passes it only with `--answered-by <name>`. | A ship that would close or reference an issue with an open question refuses. | tools/docs/decisions.md | #695 |
 
 ### Decision options — what a ruling chooses between (#126)
 

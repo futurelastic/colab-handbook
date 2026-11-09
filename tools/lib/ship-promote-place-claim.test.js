@@ -62,6 +62,7 @@ function fixture(projectYml) {
     'if [ "$1" = "--version" ]; then echo "gh version 0.0.0 (fixture)"; exit 0; fi',
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo "Logged in to github.com (fixture)" >&2; exit 0; fi',
     `if [ "$1" = "run" ] && [ "$2" = "list" ]; then cat "${runsFile}"; exit 0; fi`,
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"state":"OPEN","labels":[],"comments":[],"body":""}\'; exit 0; fi', // #695: the open-decision row reads every carried issue
     'echo "fixture gh: refusing $*" >&2',
     'exit 1',
   ].join('\n') + '\n', { mode: 0o755 });

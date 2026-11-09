@@ -91,6 +91,7 @@ function fixture(projectYml) {
     '    shift',
     '  done',
     '  if [ "$fields" = "labels" ]; then echo \'{"labels":[]}\'; exit 0; fi',
+    '  if [ "$fields" = "url,labels,comments" ]; then echo \'{"labels":[],"comments":[]}\'; exit 0; fi', // #695's open-decision read
     '  if [ "$fields" = "body,comments" ]; then',
     `    f="${issuesDir}/\${num}.json"`,
     '    if [ -f "$f" ]; then cat "$f"; exit 0; fi',
