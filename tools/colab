@@ -15618,7 +15618,7 @@ function shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciResult = null) {
     let t = git.git(['log', '-1', '--format=%cI', x.sha], repoAbs);
     if (!t.ok) { git.git(['fetch', '-q', remote, `refs/heads/${x.parsed.ref}`], repoAbs); t = git.git(['log', '-1', '--format=%cI', x.sha], repoAbs); }
     const built = t.ok ? Date.parse(t.stdout.trim()) : NaN;
-    return { ref: x.parsed.ref, base7: x.parsed.base7, rooted: true, verdict: shipBatch.combinedVerdict(runs),
+    return { ref: x.parsed.ref, base7: x.parsed.base7, rooted: true, verdict: shipBatch.combinedVerdict(runs, { verifying: verifyRuns.parsePolicy(doc) }),
       builtAtMs: Number.isFinite(built) ? built : null, settledAtMs: shipBatch.settledAt(runs) };
   });
   const r = shipBatch.laneHold({ batches, trunkNow, nowMs: Date.now() });
@@ -15723,6 +15723,8 @@ function cmdShipBatch(opts) {
   const repoAbs = resolveRepo(opts);
   if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
   const doc = projectDoc(repoAbs);
+  // #692: the combined run reads a wholly skipped workflow as #688 does, unless ship-gate-workflows names it.
+  const batchRead = { verifying: verifyRuns.parsePolicy(doc) };
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
   // #591: a member built on another machine names its hand-off inline — `<branch>@<hand-off-url>`.
@@ -15910,7 +15912,7 @@ function cmdShipBatch(opts) {
       print(`  ${want} is gone and ${atTip.parsed.ref} at ${trunk}'s tip carries this batch — its parent landed; resuming on ${trunk}'s tip`);
     } else {
       const pc = chains.get(want);
-      const verdict = shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, want, p.sha));
+      const verdict = shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, want, p.sha), batchRead);
       const child = rooted.find((x) => x !== p && p.sha.startsWith(x.parsed.base7)) || null;
       if (verdict.state === 'red') {
         if (child) {
@@ -15944,7 +15946,7 @@ function cmdShipBatch(opts) {
     let foreignStep = null;
     if (foreign.length) {
       const runs = git.ghRunsForRef(repoAbs, atBase.parsed.ref, atBase.sha);
-      foreignStep = shipBatch.foreignBatchStep(shipBatch.combinedVerdict(runs), { settledAtMs: shipBatch.settledAt(runs), nowMs: Date.now() });
+      foreignStep = shipBatch.foreignBatchStep(shipBatch.combinedVerdict(runs, batchRead), { settledAtMs: shipBatch.settledAt(runs), nowMs: Date.now() });
     }
     if (foreignStep && foreignStep.step === 'wait') {
       print(`⏸ ship-batch: another batch is in flight at this base — ${atBase.parsed.ref} carries ${inBatch.map((m) => m.branch).join(', ')}${foreignStep.why ? ` (${foreignStep.why})` : ''}.`);
@@ -15973,7 +15975,7 @@ function cmdShipBatch(opts) {
       }
     }
   }
-  let verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
+  let verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha), batchRead) : null;
   // #610: integration-profile: gated — a wave lands only on a green heavy run at its head too. The
   // heavy verdict joins the combined one (integration-profile.js waveVerdict), so a heavy red takes
   // the same re-run / split path a light red does, and the split walks toward the culprit.
@@ -16975,7 +16977,7 @@ function cmdBatchStats(argv) {
   if (!isGhUsable(repoAbs)) {
     notes.push(`gh not usable (${ghUnusableWhy(repoAbs)}) — trunk commits only: no combined runs, no green times, no partner matching`);
   } else {
-    const jq = '.workflow_runs[] | [.id, .head_branch, .head_sha, .event, .status, .conclusion, .run_attempt, .created_at, .updated_at, (if ((.head_branch // "") | startswith("ship-batch/")) then .head_commit.message else null end)] | @json';
+    const jq = '.workflow_runs[] | [.id, .head_branch, .head_sha, .event, .status, .conclusion, .run_attempt, .created_at, .updated_at, (if ((.head_branch // "") | startswith("ship-batch/")) then .head_commit.message else null end), .name] | @json';
     // One query per UTC day: GitHub answers at most 1000 rows for a filtered run list, and a busy
     // repo passes that inside a fortnight. A day that still hits the cap is named, never hidden.
     const days = [];
@@ -16990,7 +16992,9 @@ function cmdBatchStats(argv) {
         if (!line.trim()) continue;
         let a; try { a = JSON.parse(line); } catch (_) { continue; }
         n++;
-        runs.push({ id: a[0], branch: a[1], sha: a[2], event: a[3], status: a[4], conclusion: a[5], attempt: a[6], createdMs: Date.parse(a[7]), updatedMs: Date.parse(a[8]), message: a[9] });
+        // #692: `.name` is the workflow's `name:` (a `run-name:` is `.display_title`) — what the
+        // ship's gate list and #688's per-workflow rule key on.
+        runs.push({ id: a[0], branch: a[1], sha: a[2], event: a[3], status: a[4], conclusion: a[5], attempt: a[6], createdMs: Date.parse(a[7]), updatedMs: Date.parse(a[8]), message: a[9], workflowName: a[10] || undefined });
       }
       if (n >= 1000) capped.push(day);
     }
@@ -17013,7 +17017,7 @@ function cmdBatchStats(argv) {
 
   const cfg = shipBatch.parseShipBatch(doc);
   const waitCfg = shipBatch.parseShipBatchWait(doc);
-  const rep = batchStats.derive({ commits, runs, builds, trunk, config: { n: cfg.n, waitSec: waitCfg.sec } });
+  const rep = batchStats.derive({ commits, runs, builds, trunk, config: { n: cfg.n, waitSec: waitCfg.sec }, verifying: verifyRuns.parsePolicy(doc) });
   rep.repo = shortRepo(repoAbs);
   rep.since = sinceIso;
   rep.until = new Date(nowMs).toISOString();
