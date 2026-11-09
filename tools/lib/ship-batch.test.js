@@ -154,6 +154,43 @@ test('#629: a named workflow whose only run was cancelled keeps the batch head f
   assert.strictEqual(sb.combinedVerdict([{ status: 'completed', conclusion: 'success' }, testsCancelled]).state, 'red');
 });
 
+test('#692: a wholly skipped workflow does not decide the batch, unless ship-gate-workflows names it', () => {
+  const policy = { gate: null, ignore: [] };
+  const ci = { status: 'completed', conclusion: 'success', databaseId: 1, workflowName: 'CI' };
+  const gated = { status: 'completed', conclusion: 'skipped', databaseId: 2, workflowName: 'Gated' };
+  // Without a policy the old strict reading holds: a skip is red.
+  assert.strictEqual(sb.combinedVerdict([ci, gated]).state, 'red');
+  // With one, the skipped workflow is set aside and named, and CI decides.
+  const g = sb.combinedVerdict([ci, gated], { verifying: policy });
+  assert.strictEqual(g.state, 'green');
+  assert.match(g.why, /1 run\(s\): all success/);
+  assert.match(g.why, /not judged.*Gated \(run 2\)/);
+  assert.deepStrictEqual(g.runIds, [1, 2], 'runIds still name every row');
+  // Named in ship-gate-workflows: the owner said it must run, so its skip is red, and the why says so.
+  const r = sb.combinedVerdict([ci, gated], { verifying: { gate: ['CI', 'Gated'], ignore: [] } });
+  assert.strictEqual(r.state, 'red');
+  assert.match(r.why, /"Gated" finished skipped.*ship-gate-workflows names it/);
+  // A gate list that does not name it still sets it aside.
+  assert.strictEqual(sb.combinedVerdict([ci, gated], { verifying: { gate: ['CI'], ignore: [] } }).state, 'green');
+  // Only skipped rows: nothing verified the batch, still red.
+  assert.strictEqual(sb.combinedVerdict([gated, { ...gated, databaseId: 3, workflowName: 'Other' }], { verifying: policy }).state, 'red');
+  // CI still in flight beside the skip: pending, never red early.
+  assert.strictEqual(sb.combinedVerdict([{ ...ci, status: 'in_progress', conclusion: null }, gated], { verifying: policy }).state, 'pending');
+  // A real failure beside the skip still reads red with its own why.
+  assert.match(sb.combinedVerdict([{ ...ci, conclusion: 'failure' }, gated], { verifying: policy }).why, /finished failure/);
+  // An unnamed skipped row is never set aside (#92).
+  assert.strictEqual(sb.combinedVerdict([ci, { status: 'completed', conclusion: 'skipped', databaseId: 4 }], { verifying: policy }).state, 'red');
+  // A workflow with a skipped row AND a run that ran is not wholly skipped: the skip still reads red.
+  assert.strictEqual(sb.combinedVerdict([ci, { ...ci, databaseId: 5, conclusion: 'skipped' }], { verifying: policy }).state, 'red');
+  // A row that cannot verify the code (a workflow_run release) does not carry a skipped CI.
+  const release = { status: 'completed', conclusion: 'success', databaseId: 6, workflowName: 'Release', event: 'workflow_run' };
+  assert.strictEqual(sb.combinedVerdict([release, { ...gated, workflowName: 'CI' }], { verifying: policy }).state, 'red');
+  // Set aside beside only cancelled rows: red, and the why does not claim every run was cancelled.
+  const v = sb.combinedVerdict([{ status: 'completed', conclusion: 'cancelled', databaseId: 7 }, gated], { verifying: policy });
+  assert.strictEqual(v.state, 'red');
+  assert.match(v.why, /every run that ran was cancelled.*Gated/);
+});
+
 test('nextStep: the declined, waiting and building states', () => {
   const base = { enabled: true, wired: true, trunkCi: 'green', eligibleCount: 3, trunkNow: 'abcdef0999' };
   assert.deepStrictEqual(sb.nextStep({ ...base, enabled: false }), { step: 'serial', reason: 'not-enabled' });
@@ -308,6 +345,10 @@ test('batchGreenCoversTrunk: only green, same workflows, enough rows, and no rea
   assert.strictEqual(sb.batchGreenCoversTrunk({ ...args, trunkFires: ['ci.yml', 'deploy.yml'] }), false);
   assert.strictEqual(sb.batchGreenCoversTrunk({ ...args, trunkFires: ['a.yml', 'b.yml'], batchFires: ['a.yml', 'b.yml'] }), false, 'one row cannot stand for two workflows');
   assert.strictEqual(sb.batchGreenCoversTrunk({ ...args, trunkFires: [], batchFires: [] }), false);
+  // #692: a skip never vouches for trunk — a workflow gated on the trunk ref skips on every batch ref.
+  const skipped = { status: 'completed', conclusion: 'skipped', databaseId: 9, workflowName: 'Deploy' };
+  const two = { ...args, batchRows: [{ ...g(1), workflowName: 'CI' }, skipped], trunkFires: ['ci.yml', 'deploy.yml'], batchFires: ['ci.yml', 'deploy.yml'] };
+  assert.strictEqual(sb.batchGreenCoversTrunk(two), false);
 });
 
 test('evidenceSuffix and serialLine', () => {

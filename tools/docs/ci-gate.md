@@ -444,6 +444,12 @@ the heavy lane must also be green at the batch head; a heavy red re-runs or spli
    pushed to `ship-batch/<base-sha7>` — the base is trunk's tip, or a parent's head (step 11).
 3. **One combined run** there must be `green`. It **replaces** each member's post-sync
    re-run — not a skip justified by disjointness, but one run instead of N; a workflow whose only run was cancelled blocks `green`, as on trunk (#629).
+   A workflow whose every run there was `skipped` ran nothing, so it does not decide the batch once a
+   run that can verify the code is there (#688's rule, #692): beside a green CI the batch is green and
+   the reason names the workflow, and beside a run in flight it is pending. It still reads red when only
+   skipped workflows ran, and when `ship-gate-workflows` names it. `colab batch-stats` reads its builds
+   and green times the same way. Step 5's stand-in for trunk does **not** take this rule: there, every
+   batch row must have run and passed.
 4. **Landing.** Trunk fast-forwards to the batch head **only if trunk's tip is still the
    batch's base** (for a chain, once the parent landed at that sha — step 11), by a plain
    non-forced push (a moved trunk fails it; the batch is then rebuilt on the new head). Each member's evidence names the combined run. While that run is in

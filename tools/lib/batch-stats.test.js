@@ -17,6 +17,7 @@ const run = (branch, sha, o = {}) => ({
   id: o.id || Math.floor(Math.random() * 1e9), branch, sha, event: 'push',
   status: o.status || 'completed', conclusion: o.conclusion === undefined ? 'success' : o.conclusion,
   attempt: o.attempt || 1, createdMs: o.created, updatedMs: o.updated, message: o.message || null,
+  ...(o.workflowName ? { workflowName: o.workflowName } : {}), ...(o.event ? { event: o.event } : {}),
 });
 const sha = (c) => c.repeat(40);
 
@@ -264,4 +265,28 @@ test('#580: on a history with no batches, alone equals serial', () => {
   const { batchOfOne, ...alone } = r.alone;
   assert.strictEqual(batchOfOne, 0);
   assert.deepStrictEqual(strip(alone), r.serial);
+});
+
+test('#692: builds and green-at-head read a wholly skipped workflow as colab ship --batch does', () => {
+  const ref = 'ship-batch/ddddddd';
+  const policy = { gate: null, ignore: [] };
+  const runs = [
+    run(ref, sha('7'), { created: min(1), updated: min(5), workflowName: 'CI' }),
+    run(ref, sha('7'), { created: min(1), updated: min(2), conclusion: 'skipped', workflowName: 'Gated' }),
+  ];
+  // No policy: as before, the skip reads the build red.
+  assert.strictEqual(bs.derive({ commits: [], runs, trunk: 'main' }).red.builds, 1);
+  // The ship's policy: green, so not a red build.
+  const r = bs.derive({ commits: [], runs, trunk: 'main', verifying: policy });
+  assert.strictEqual(r.red.builds, 0);
+  assert.strictEqual(r.batches.builds, 1);
+  // Named in ship-gate-workflows: red again.
+  assert.strictEqual(bs.derive({ commits: [], runs, trunk: 'main', verifying: { gate: ['CI', 'Gated'], ignore: [] } }).red.builds, 1);
+  // greenAt on a feature branch: the success's finish time with the policy, unknown without it.
+  const byBranch = new Map([['fix/a-1', [
+    run('fix/a-1', sha('a'), { created: min(0), updated: min(4), workflowName: 'CI' }),
+    run('fix/a-1', sha('a'), { created: min(0), updated: min(1), conclusion: 'skipped', workflowName: 'Gated' }),
+  ]]]);
+  assert.strictEqual(bs.greenAt(byBranch, 'fix/a-1', min(10)), null);
+  assert.strictEqual(bs.greenAt(byBranch, 'fix/a-1', min(10), null, policy), min(4));
 });

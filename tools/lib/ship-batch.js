@@ -18,6 +18,8 @@
  * semantic conflicts need no shared file. The combined run is the gate.
  */
 
+const verifyRuns = require('./verify-runs');
+
 // The SAFETY ceiling (#557): what any repo may declare, never what it gets. 3 until a red batch had
 // a cheaper exit than N serial cycles; split-and-retry (nextStep's `split`) is that exit, so the
 // ceiling is now 8 — the size from which bisection beats a serial fallback. A repo's own
@@ -384,33 +386,71 @@ function wiring(fires) {
  * least one success. `attempt` is the highest run attempt seen — how many times it was re-run.
  * Unlike summarizeRunsForCommit it does NOT reduce to the newest run per workflow (#461): a batch
  * ref is built fresh and re-run in place (same run, higher `attempt`), so it carries no superseded
- * attempts of a workflow for that reduction to set aside. Nor does it set a wholly skipped workflow
- * aside (#688): a skip here reads red, so a workflow gated off on `ship-batch/**` costs a split or
- * a serial landing rather than a refusal of trunk.
+ * attempts of a workflow for that reduction to set aside.
+ *
+ * #692: `opts.verifying` (the verify-runs.js policy, `{gate, ignore}`) applies #688's rule here too:
+ * a named workflow whose every row is `skipped` executed nothing, so it is set aside beside a row
+ * that can verify the code, unless `ship-gate-workflows` names it. Measured shape (#688): a
+ * workflow with every job gated on an unset repository variable fires on the batch push, concludes
+ * skipped, and read every batch red. Without `opts.verifying` nothing is set aside — a skip reads
+ * red, as before; batchGreenCoversTrunk asks that strict reading on purpose.
  */
-function combinedVerdict(rows) {
+function combinedVerdict(rows, opts = {}) {
   const list = Array.isArray(rows) ? rows : null;
   if (list === null) return { state: 'pending', attempt: 1, runIds: [], why: 'the run list could not be read' };
   const runIds = list.map((r) => r.databaseId).filter((x) => x !== null && x !== undefined);
   const attempt = list.reduce((m, r) => Math.max(m, Number(r.attempt) || 1), 1);
   if (list.length === 0) return { state: 'none', attempt, runIds, why: 'no run at the batch head yet' };
-  const bad = list.find((r) => r.status === 'completed' && r.conclusion !== 'success' && r.conclusion !== 'cancelled');
-  if (bad) return { state: 'red', attempt, runIds, why: `a run finished ${bad.conclusion}` };
-  if (list.some((r) => r.status !== 'completed')) return { state: 'pending', attempt, runIds, why: 'a run is still in flight' };
+  const policy = opts && opts.verifying ? opts.verifying : null;
+  const { judged, skippedOnly } = policy ? setAsideSkippedWorkflows(list, policy) : { judged: list, skippedOnly: [] };
+  const note = verifyRuns.skippedOnlyNote(skippedOnly);
+  const bad = judged.find((r) => r.status === 'completed' && r.conclusion !== 'success' && r.conclusion !== 'cancelled');
+  if (bad) {
+    const gated = bad.conclusion === 'skipped' && bad.workflowName && policy && Array.isArray(policy.gate) && policy.gate.includes(bad.workflowName);
+    return { state: 'red', attempt, runIds, why: gated
+      ? `workflow "${bad.workflowName}" finished skipped — ${verifyRuns.GATE_KEY} names it, so it must run here (#692)`
+      : `a run finished ${bad.conclusion}` };
+  }
+  if (judged.some((r) => r.status !== 'completed')) return { state: 'pending', attempt, runIds, why: `a run is still in flight${note}` };
   // #629 (the batch-ref twin of #628): a NAMED workflow whose rows here are all cancelled verified
   // nothing, and another workflow's success must not carry the verdict for it — measured shape: the
   // test workflow hung and was cancelled, a lint workflow passed, and the batch read green. A
   // batch ref is re-run in place (same run, higher attempt), so a cancelled row is never a
   // superseded straggler beside a newer run of its workflow; a same-workflow success still clears
   // it. Unnamed rows (batch-stats.js projections, older fixtures) stay neutral, as in #628.
-  const succeeded = new Set(list.filter((r) => r.conclusion === 'success' && r.workflowName).map((r) => r.workflowName));
-  const cancelledOnly = list.find((r) => r.workflowName && r.conclusion === 'cancelled' && !succeeded.has(r.workflowName));
+  const succeeded = new Set(judged.filter((r) => r.conclusion === 'success' && r.workflowName).map((r) => r.workflowName));
+  const cancelledOnly = judged.find((r) => r.workflowName && r.conclusion === 'cancelled' && !succeeded.has(r.workflowName));
   if (cancelledOnly) {
     const id = cancelledOnly.databaseId !== null && cancelledOnly.databaseId !== undefined ? ` (run ${cancelledOnly.databaseId})` : '';
     return { state: 'red', attempt, runIds, why: `workflow "${cancelledOnly.workflowName}" never finished here — its only run${id} was cancelled, so it verified nothing; re-run it` };
   }
-  if (list.some((r) => r.conclusion === 'success')) return { state: 'green', attempt, runIds, why: `${list.length} run(s): all success` };
-  return { state: 'red', attempt, runIds, why: 'every run was cancelled' };
+  if (judged.some((r) => r.conclusion === 'success')) return { state: 'green', attempt, runIds, why: `${judged.length} run(s): all success${note}` };
+  return { state: 'red', attempt, runIds, why: skippedOnly.length ? `every run that ran was cancelled${note}` : 'every run was cancelled' };
+}
+
+/**
+ * #692: #688's rule (git.js setAsideWhollySkipped) for the rows at one batch head. A NAMED workflow
+ * whose every row is a finished `skipped` is set aside — returned as `skippedOnly` — when:
+ *   - `ship-gate-workflows` does not name it. A named gate workflow that skipped reads red: the
+ *     owner said exactly these must count. (git.js sets nothing aside once the list is declared,
+ *     because its rows were already narrowed to the list; batch rows are not, so the test is per
+ *     name.)
+ *   - another row can verify the code (a verifying trigger, or no `event` field). All-skipped
+ *     stays red (#514): nothing verified the batch.
+ * Unnamed rows are never set aside (#92). A workflow with any row that is not a finished skip is
+ * left whole, so its skipped row still reads red beside it, as before #692.
+ */
+function setAsideSkippedWorkflows(list, policy) {
+  const gate = policy && Array.isArray(policy.gate) ? policy.gate : null;
+  const isSkipped = (r) => !!r && r.status === 'completed' && r.conclusion === 'skipped';
+  const names = new Set(list.filter((r) => r && r.workflowName).map((r) => r.workflowName));
+  const wholly = new Set([...names].filter((n) => (!gate || !gate.includes(n))
+    && list.every((r) => !r || r.workflowName !== n || isSkipped(r))));
+  const unchanged = { judged: list, skippedOnly: [] };
+  if (!wholly.size) return unchanged;
+  const rest = list.filter((r) => !r || !wholly.has(r.workflowName));
+  if (!rest.some((r) => !isSkipped(r) && verifyRuns.setAsideReason(r, null) === null)) return unchanged;
+  return { judged: rest, skippedOnly: list.filter((r) => r && wholly.has(r.workflowName)) };
 }
 
 /**
@@ -524,6 +564,10 @@ function givenUpRefs({ refs, members } = {}) {
  *   - the workflow FILES firing on a trunk push and on a `ship-batch/**` push are the same set;
  *   - there are at least as many batch rows as trunk-firing workflows.
  * Anything else → false, and trunk waits for its own run exactly as today.
+ *
+ * #692: the batch rows are read WITHOUT the skipped-workflow rule (combinedVerdict with no policy).
+ * A workflow gated on the trunk ref is `skipped` on every batch ref, so a skip here would vouch for
+ * a trunk run that will execute; the stand-in needs every batch row to have run and passed.
  */
 function batchGreenCoversTrunk({ trunkRows, batchRows, trunkFires, batchFires }) {
   const t = Array.isArray(trunkRows) ? trunkRows : [];

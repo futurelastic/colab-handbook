@@ -64,11 +64,12 @@ const isBatchRef = (b) => String(b || '').startsWith(shipBatch.REF_PREFIX);
 
 /**
  * When did `branch` go green at the head it had at time `atMs`? Its runs created before `atMs` are
- * read; the newest sha among them is the head at that moment. Green only when every run at that sha
- * finished success (cancelled aside, as combinedVerdict reads it) by `atMs` → the latest finish.
+ * read; the newest sha among them is the head at that moment. Green only when combinedVerdict reads
+ * the runs at that sha green, and their successes finished by `atMs` → the latest finish.
  * Null when there is no run, or the head was not green yet — unknown, never a guess.
+ * `verifying` (#692): the ship's policy, so a wholly skipped workflow reads as the batch lane reads it.
  */
-function greenAt(runsByBranch, branch, atMs, sha = null) {
+function greenAt(runsByBranch, branch, atMs, sha = null, verifying = null) {
   const rows = (runsByBranch.get(branch) || []).filter((r) => r.createdMs <= atMs);
   if (!rows.length) return null;
   const headSha = sha
@@ -76,11 +77,27 @@ function greenAt(runsByBranch, branch, atMs, sha = null) {
     : rows.reduce((a, b) => (b.createdMs > a.createdMs ? b : a)).sha;
   if (!headSha) return null;
   const at = rows.filter((r) => r.sha === headSha);
-  const v = shipBatch.combinedVerdict(at.map((r) => ({ status: r.status, conclusion: r.conclusion, attempt: r.attempt })));
+  const v = shipBatch.combinedVerdict(at.map(verdictRow), verdictOpts(verifying));
   if (v.state !== 'green') return null;
   const done = Math.max(...at.filter((r) => r.conclusion === 'success').map((r) => r.updatedMs));
   return done <= atMs ? done : null;
 }
+
+/**
+ * #692: the projection combinedVerdict reads. `workflowName` and `event` ride along so #688's rule
+ * (a wholly skipped workflow is not judged beside a run that can verify the code) reads these rows
+ * exactly as `colab ship --batch` reads its own. A side effect of the name, wanted for the same
+ * reason: #629 now applies here too, so a named workflow whose only run was cancelled no longer reads
+ * green beside another workflow's success. A row without the field stays unnamed, read as before.
+ */
+function verdictRow(r) {
+  return {
+    status: r.status, conclusion: r.conclusion, attempt: r.attempt, databaseId: r.id,
+    ...(r.workflowName ? { workflowName: r.workflowName } : {}),
+    ...(r.event ? { event: r.event } : {}),
+  };
+}
+const verdictOpts = (verifying) => (verifying ? { verifying } : {});
 
 /** Which feature branch carried a serial landing that closed `issues`, as of `atMs`? Newest run wins. */
 function branchForIssues(runsByBranch, issues, atMs) {
@@ -100,14 +117,17 @@ function branchForIssues(runsByBranch, issues, atMs) {
 /**
  * The report. Inputs:
  *   commits  [{ sha, dateMs, body }] — trunk first-parent, inside the window, any order
- *   runs     [{ id, branch, sha, event, status, conclusion, attempt, createdMs, updatedMs, message? }]
+ *   runs     [{ id, branch, sha, event, status, conclusion, attempt, createdMs, updatedMs, message?,
+ *            workflowName? }]
  *            `message` is the head commit's message, needed only for ship-batch/** rows
+ *   verifying optional — the ship's verify-runs policy (`{gate, ignore}`, #692); absent, a skipped
+ *            row reads red as before
  *   builds   optional { [sha]: [message, …] } — every commit message of an UNLANDED build, when the
  *            caller could read them (compare API); a landed build is read from trunk instead
  *   trunk    trunk branch name
  *   config   { n, waitSec } — the repo's declared knobs, echoed so the report says what it tunes
  */
-function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config = {} } = {}) {
+function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config = {}, verifying = null } = {}) {
   const notes = [];
   const runsByBranch = new Map();
   const trunkRuns = new Map(); // sha → rows
@@ -157,12 +177,12 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
   for (const l of landings) {
     if (l.kind === 'batch') {
       for (const m of l.members) {
-        changes.push({ landing: l, branch: m.branch, issues: branchName.branchIssueNumbers(m.branch), greenMs: greenAt(runsByBranch, m.branch, l.atMs, m.sha), atMs: l.atMs });
+        changes.push({ landing: l, branch: m.branch, issues: branchName.branchIssueNumbers(m.branch), greenMs: greenAt(runsByBranch, m.branch, l.atMs, m.sha, verifying), atMs: l.atMs });
       }
     } else {
       const br = branchForIssues(runsByBranch, l.issues, l.atMs);
       l.branch = br;
-      changes.push({ landing: l, branch: br, issues: l.issues, greenMs: br ? greenAt(runsByBranch, br, l.atMs) : null, atMs: l.atMs });
+      changes.push({ landing: l, branch: br, issues: l.issues, greenMs: br ? greenAt(runsByBranch, br, l.atMs, null, verifying) : null, atMs: l.atMs });
     }
   }
 
@@ -171,7 +191,7 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
   const buildRows = [];
   for (const [k, rows] of batchRuns) {
     const [ref, sha] = k.split(' ');
-    const v = shipBatch.combinedVerdict(rows.map((r) => ({ status: r.status, conclusion: r.conclusion, attempt: r.attempt, databaseId: r.id })));
+    const v = shipBatch.combinedVerdict(rows.map(verdictRow), verdictOpts(verifying));
     const landed = landedHeads.has(sha);
     const messages = landed ? null : (builds[sha] || rows.map((r) => r.message).filter(Boolean).slice(0, 1));
     buildRows.push({ ref, sha, state: v.state, attempt: v.attempt, landed, createdMs: Math.min(...rows.map((r) => r.createdMs)), messages });
@@ -235,14 +255,14 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
       const via = tagVia ? { via: c.landing.kind === 'serial' ? 'serial' : 'batch-of-one' } : {};
       for (const o of changes) {
         if (o === c || o.landing === c.landing || o.atMs <= c.atMs || !o.branch || o.branch === c.branch) continue;
-        const gNow = greenAt(runsByBranch, o.branch, c.atMs);
+        const gNow = greenAt(runsByBranch, o.branch, c.atMs, null, verifying);
         if (gNow !== null) {
           missed = true;
           pairs.push({ kind: 'missed', landed: label, partner: o.branch, ...via });
           continue;
         }
         if (end === null) continue;
-        const gEnd = greenAt(runsByBranch, o.branch, end);
+        const gEnd = greenAt(runsByBranch, o.branch, end, null, verifying);
         if (gEnd !== null && gEnd > c.atMs) {
           near = true;
           const from = c.greenMs !== null ? c.greenMs : c.atMs;
