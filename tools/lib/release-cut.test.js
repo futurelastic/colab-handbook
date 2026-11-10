@@ -1074,3 +1074,123 @@ test('#624 verifyingRunsForCut: push runs count, a schedule run is set aside and
   const gated = rc.verifyingRunsForCut(rows, { gate: ['CI', 'Nightly'], ignore: [] });
   assert.deepStrictEqual(gated.rows.map((r) => r.workflowName), ['CI', 'Nightly']);
 });
+
+// ---- #709: an SQLite table rebuild is additive; a destructive change has a human path on deploy-tag-fast ----
+
+const REBUILD = [
+  "CREATE TABLE t_new (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a', 'b', 'c')));",
+  'INSERT INTO t_new (id, kind) SELECT id, kind FROM t;',
+  'DROP TABLE t;',
+  'ALTER TABLE t_new RENAME TO t;',
+].join('\n');
+const REBUILD_STAR = REBUILD.replace('INSERT INTO t_new (id, kind) SELECT id, kind FROM t;', 'INSERT INTO t_new SELECT * FROM t;');
+const sqlAt = (content, path = 'prisma/migrations/20261110/migration.sql') => rc.schemaVerdict([{ status: 'A', path, content }], 'v1.2.0');
+
+test('#709 schema: a table rebuild copying with SELECT * is additive — a ✓ naming the rebuild', () => {
+  const v = sqlAt(REBUILD_STAR);
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.strictEqual(v.checked, undefined);
+  assert.match(v.detail, /none destructive — 1 SQLite table rebuild\(s\) read as additive \(every row copied before the drop\): prisma\/migrations\/20261110\/migration\.sql:3 `t`/);
+});
+
+test('#709 schema: a rebuild copying an explicit column list passes, but as NOT CHECKED — the old table\'s columns are not in the file', () => {
+  const v = sqlAt(REBUILD);
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.strictEqual(v.checked, false);
+  assert.match(v.detail, /^not checked — .*`t` is copied by an explicit column list/);
+  assert.match(v.detail, /a column the copy leaves out is dropped/);
+});
+
+test('#709 schema: quoting, case, IF EXISTS, a schema prefix and an Up/Down layout are all read as the same rebuild', () => {
+  const quoted = [
+    'create table "Orders_new" ("id" integer primary key, "state" text check ("state" in (\'open\', \'paid\')));',
+    'insert into "Orders_new" select * from main."Orders";',
+    'drop table if exists `orders`;',
+    'alter table [Orders_new] rename to "ORDERS";',
+  ].join('\n');
+  assert.strictEqual(sqlAt(quoted).ok, true, sqlAt(quoted).detail);
+  const goose = `-- +goose Up\n${REBUILD_STAR}\n-- +goose Down\nDROP TABLE t;\n`;
+  const v = rc.schemaVerdict([{ status: 'A', path: 'modules/x/sql/9.sql', content: goose }], 'v1.2.0', D);
+  assert.strictEqual(v.ok, true, v.detail);
+});
+
+test('#709 schema: fails closed on every shape that could lose a row or a table', () => {
+  const swap = (from, to) => REBUILD_STAR.replace(from, to);
+  const cases = {
+    'a WHERE on the copy': swap('SELECT * FROM t;', 'SELECT * FROM t WHERE id > 10;'),
+    'a LIMIT on the copy': swap('SELECT * FROM t;', 'SELECT * FROM t LIMIT 5;'),
+    'a JOIN on the copy': swap('SELECT * FROM t;', 'SELECT t.* FROM t JOIN u ON u.id = t.id;'),
+    'SELECT DISTINCT': swap('SELECT * FROM t;', 'SELECT DISTINCT * FROM t;'),
+    'INSERT OR IGNORE': swap('INSERT INTO', 'INSERT OR IGNORE INTO'),
+    'INSERT OR REPLACE': swap('INSERT INTO', 'INSERT OR REPLACE INTO'),
+    'a TEMP table': swap('CREATE TABLE', 'CREATE TEMP TABLE'),
+    'no copy at all': swap('INSERT INTO t_new SELECT * FROM t;', ''),
+    'a copy from another table': swap('FROM t;', 'FROM other;'),
+    'the drop before the copy': ['CREATE TABLE t_new (id INT);', 'DROP TABLE t;', 'INSERT INTO t_new SELECT * FROM t;', 'ALTER TABLE t_new RENAME TO t;'].join('\n'),
+    'renamed to another name': swap('RENAME TO t;', 'RENAME TO t2;'),
+    'no create of the new table': swap(/^CREATE TABLE t_new[^\n]*\n/, ''),
+    'column counts that differ': REBUILD.replace('SELECT id, kind FROM t', 'SELECT id FROM t'),
+  };
+  for (const [name, content] of Object.entries(cases)) {
+    const v = sqlAt(content);
+    assert.strictEqual(v.ok, false, `${name}: ${v.detail}`);
+    assert.strictEqual(v.destructive, true, name);
+  }
+});
+
+test('#709 schema: a rebuild exempts only its own DROP and RENAME — another destructive statement still refuses', () => {
+  const v = sqlAt(`${REBUILD_STAR}\nALTER TABLE u DROP COLUMN legacy;`);
+  assert.strictEqual(v.ok, false);
+  assert.match(v.detail, /migration\.sql:5: `DROP COLUMN`/);
+  const second = sqlAt(`${REBUILD_STAR}\nDROP TABLE t_old;`);
+  assert.match(second.detail, /migration\.sql:5: `DROP TABLE`/);
+});
+
+test('#709 schema: a declared schema FILE reads a rebuild in the lines it added the same way', () => {
+  const added = REBUILD_STAR.split('\n').map((text, i) => ({ line: 40 + i, text }));
+  const v = rc.schemaVerdict([{ status: 'M', path: 'server/db.sql', added }], 'v1.2.0', ['server/db.sql']);
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.match(v.detail, /server\/db\.sql:42 `t`/); // the file's own line, not the line within the added lines
+});
+
+test('#709 sqlRebuilds: the pure reader reports table, line and column mode', () => {
+  const r = rc.sqlRebuilds(`SELECT 1;\n${REBUILD}`);
+  assert.deepStrictEqual(r.map(({ table, line, columns }) => ({ table, line, columns })), [{ table: 't', line: 4, columns: 'listed' }]);
+  assert.deepStrictEqual(rc.sqlRebuilds('DROP TABLE t;'), []);
+});
+
+const releaseFinalize = require('./release-finalize.js');
+const DESTRUCTIVE = sqlAt('DROP TABLE legacy;');
+
+test('#709 fast route: a destructive schema change with no grant refuses and hands off the one human command', () => {
+  const migrations = releaseFinalize.migrationGrantVerdict({ paths: ['db/9.sql'], grant: { ok: false, reason: 'no tracking issue yet to carry a grant' }, since: 'v1.2.0', layout: true });
+  const v = rc.decide(fastFacts({ schema: DESTRUCTIVE, migrations: { ...migrations, paths: ['db/9.sql'] }, trackingIssue: 40 }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(refusal(v, 'schema-additive').ok, false);
+  assert.ok(v.standing.includes('schema-additive'));
+  assert.strictEqual(v.handoff, 'COLAB_HUMAN=1 colab migration-grant 40 --branch v1.2.1');
+});
+
+test('#709 fast route: the migration grant on the version\'s tracking issue clears a destructive change — the row names whose decision', () => {
+  const migrations = releaseFinalize.migrationGrantVerdict({ paths: ['db/9.sql'], grant: { ok: true, issue: 40 }, since: 'v1.2.0', layout: true });
+  assert.strictEqual(migrations.granted, 40);
+  const v = rc.decide(fastFacts({ schema: DESTRUCTIVE, migrations: { ...migrations, paths: ['db/9.sql'] } }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
+  assert.strictEqual(v.tag, 'v1.2.1');
+  const row = refusal(v, 'schema-additive');
+  assert.strictEqual(row.ok, true);
+  assert.match(row.detail, /`DROP TABLE` — cleared by a person's decision: the migration grant on the tracking issue #40 for v1\.2\.1 \(route deploy-tag-fast/);
+  assert.match(rc.tagMessage(v, { sha: 'abc', lastFinal: 'v1.2.0' }), /schema-additive: .*cleared by a person's decision/);
+});
+
+test('#709 the grant clears only a MEASURED destructive finding, and only on deploy-tag-fast', () => {
+  const granted = { ok: true, granted: 40, paths: ['db/9.sql'], detail: 'granted' };
+  const unread = { ok: false, unread: true, destructive: true, detail: 'could not read' };
+  assert.strictEqual(refusal(rc.decide(fastFacts({ schema: unread, migrations: granted })), 'schema-additive').ok, false);
+  const contradiction = { ok: false, detail: 'migrations: none contradicted' };
+  assert.strictEqual(refusal(rc.decide(fastFacts({ schema: contradiction, migrations: granted })), 'schema-additive').ok, false);
+  // No grant field (no migration grant read) — refused as before.
+  assert.strictEqual(refusal(rc.decide(fastFacts({ schema: DESTRUCTIVE, migrations: { ok: true, paths: [], detail: 'none' } })), 'schema-additive').ok, false);
+  // A candidate route keeps refusing: a person cuts there by hand.
+  assert.strictEqual(refusal(rc.decide(facts({ schema: DESTRUCTIVE, migrations: granted })), 'schema-additive').ok, false);
+});

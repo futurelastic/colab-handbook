@@ -2491,10 +2491,10 @@ channels, publishing and deploys — is documented with the CLI, in
    finalized.
 4. **[Hard C6.contract.04 — refuse: a deploying final tagged automatically without a recorded grant]**
    Where a final tag deploys production, the final is a person's act. The two exceptions —
-   [*An operator-granted automatic final*](tools/docs/releases.md#an-operator-granted-automatic-final-441)
-   and [*A final on every green head*](tools/docs/releases.md#a-final-on-every-green-head--deploy-tag-fast-446) —
+   [*An operator-granted automatic final*](tools/docs/releases.md#an-operator-granted-automatic-final-441) and [*A final on every green head*](tools/docs/releases.md#a-final-on-every-green-head--deploy-tag-fast-446) —
    each need the operator's grant: a ruling a person recorded, never written by an agent, per repo and
-   revocable at once. A release carrying a database migration still waits for a person's grant.
+   revocable at once. A release carrying a database migration still waits for a person's grant — and on the
+   second, where nobody cuts by hand, that grant is also the person's decision on a destructive schema change (item 1, #709).
 5. Nothing deploys a candidate, and no agent tags a candidate or a final by hand around the release
    tooling.
 6. A version a user sees reads the tag, or a stamp made from it at release or build time — never a

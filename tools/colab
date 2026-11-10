@@ -1358,7 +1358,11 @@ Refuses, naming each failed condition (all are reported, not just the first):
                        format is NAMED in the detail, and the release notes still owe the §6
                        judgement on the diff. When nothing was read — no default layout and no
                        \`migrations:\` declared, or a declared migration in another format changed —
-                       the row prints · "not checked" (#670): it refuses nothing, and it is never a ✓
+                       the row prints · "not checked" (#670): it refuses nothing, and it is never a ✓.
+                       An SQLite table rebuild (CREATE t_new; INSERT INTO t_new SELECT … FROM t; DROP
+                       TABLE t; ALTER TABLE t_new RENAME TO t — every row copied, no WHERE/DISTINCT/
+                       OR IGNORE) is additive (#709); copied by an explicit column list it prints ·
+                       "not checked", since whether the list names every old column is not in the file
   switch-dependencies  a colab:switch marker is malformed, or a finished switch needs one that is not
   manifest-version     the tag does not equal the version a manifest declares (VERSION, package.json,
                        Cargo.toml [package], else [workspace.package] (#620), pyproject.toml
@@ -1414,7 +1418,9 @@ Route deploy-tag-fast (#446) — a deploy: tag repo with the operator's grant an
   release-hold         an open issue carries the release-hold label (a human veto)
   migration-grant      a migration since the last final with no grant on the version's tracking
                        issue — refused; a non-dry run opens "release: vX.Y.Z" if needed and posts the
-                       one human command (COLAB_HUMAN=1 colab migration-grant <N> --branch vX.Y.Z)
+                       one human command (COLAB_HUMAN=1 colab migration-grant <N> --branch vX.Y.Z).
+                       That grant is also the person's decision a destructive schema-additive finding
+                       needs on this route (#709): with it live, the row passes and names the grant
 
 The bump (without --auto) is release-status's semverSuggestion since the last final tag (candidates skipped): fix ->
 patch, feat -> minor; a breaking change is a minor pre-1.0 and a refusal from 1.0 on.
@@ -1938,7 +1944,7 @@ function cmdReleaseCut(argv) {
       if (num) {
         handoff = releaseCut.migrationHandoff(num, verdict.version);
         commentOnce(repoAbs, num, { state: 'migration-handoff', version: verdict.version },
-          `**${verdict.version} carries a database migration**, and route deploy-tag-fast never deploys an ungranted one. The one command, run by a human, lets it ride — the next green run then tags and deploys it:\n\n\`\`\`sh\n${handoff}\n\`\`\``);
+          `**${verdict.version} carries a database migration**, and route deploy-tag-fast never deploys an ungranted one. The one command, run by a human, lets it ride — the next green run then tags and deploys it:\n\n\`\`\`sh\n${handoff}\n\`\`\`${verdict.refusals.some((c) => c.condition === 'schema-additive') ? '\n\nThe schema check also read a **destructive** change (`schema-additive` in the run\'s output). On this route the same grant is the person\'s decision that lets it ride (#709) — read the migration before granting.' : ''}`);
       }
     }
   }
