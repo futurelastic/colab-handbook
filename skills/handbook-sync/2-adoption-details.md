@@ -112,7 +112,12 @@ colab adopt --repo . --no-verify        # step 2 — one command: which of the f
                                          #   are already declared, what the repo's working
                                          #   tree already detects, what still needs asking
 gh label list --search in-progress      # step 3
-gh repo view --json repositoryTopics    # step 4 — tier-a / tier-b / tier-c
+gh repo view <owner>/<repo> --json repositoryTopics   # step 4 — tier-a / tier-b / tier-c
+                                         #   <owner>/<repo> = the repo you push to: origin's
+                                         #   CONFIGURED url (`git config --get remote.origin.url`,
+                                         #   or the colab.remote one), never gh's default — a bare
+                                         #   call reads the UPSTREAM on a fork. No GitHub slug
+                                         #   there? Stop and say so (#703)
 grep -c "colab-handbook @" CLAUDE.md    # step 5 — the pointer block and its stamp (always in
                                          #   CLAUDE.md, even when it is a thin shell over AGENTS.md)
 ls .github/workflows/                   # step 6

@@ -23,13 +23,22 @@ GITDIR="$(git rev-parse --path-format=absolute --git-common-dir)"
 CACHE="$GITDIR/colab-triage.json"
 REPO="$(dirname "$GITDIR")"      # the MAIN checkout — see the note on input 4
 
+# The tracked repo, named — never gh's default (#703). A bare `gh repo view` ignores GH_REPO and,
+# on a fork with an `upstream` remote and no `gh repo set-default`, reads the UPSTREAM. Same source
+# colab pins every gh call to (tracker-github pinnedRepo): the resolved remote's CONFIGURED url.
+RMT=$(git config --get colab.remote || { git remote | grep -qx origin && echo origin; } \
+  || git config --get remote.pushDefault || { [ "$(git remote | wc -l)" -eq 1 ] && git remote; })
+NWO=$(git config --get "remote.$RMT.url" | sed -E 's#/+$##; s#\.git$##' \
+  | sed -nE "s#^([a-z][a-z0-9+.-]*://([^@/]+@)?|[^@/]+@)?(github\.com|${GH_HOST:-github.com})(:[0-9]+)?[:/]([^/]+)/([^/]+)\$#\5/\6#p")
+[ -n "$NWO" ] || { echo "STOP: no GitHub repo resolves from remote '${RMT:-<none>}' — fix the remote (git config colab.remote <name>); never fall back to gh's default"; exit 1; }
+
 git fetch origin --quiet && git rev-parse origin/<trunk>          # 1. trunk sha
 
-OUT2=$(gh issue list --state open --limit 100 --json number,state,title,body,labels \
+OUT2=$(gh issue list -R "$NWO" --state open --limit 100 --json number,state,title,body,labels \
   -q '"N2 \(length)", (.[]|"I \(.number) \(.state) \([.labels[].name]|sort|join(","))\t\(.title)\t\(.body|@base64)")')
                                                                     # 2. backlog digest — network call now,
                                                                     #    receipt/digest decided below once input 3's TOTAL is in hand
-NWO=$(gh repo view --json nameWithOwner -q .nameWithOwner)        # 3. dependency digest
+                                                                    # 3. dependency digest
 OUT=$(gh api graphql -F owner="${NWO%%/*}" -F name="${NWO##*/}" -f query='
   query($owner:String!,$name:String!){ repository(owner:$owner,name:$name){
     issues(states:OPEN,first:100){ totalCount pageInfo{ hasNextPage }
