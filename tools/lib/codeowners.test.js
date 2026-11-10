@@ -184,3 +184,42 @@ test('#483 directVerdict honours the fork context for both files', () => {
   assert.strictEqual(fork.verdict, 'inert');
   assert.ok(fork.warnings.some((w) => /#483/.test(w) && /@upstream-org\/maintainers/.test(w)));
 });
+
+// ---- #702: a fork the clone cannot see is named, not silently gated ----
+
+const NOT_DETECTED = { fork: false, ownOrg: null, remoteOrg: 'acme' };
+
+test('#702 a non-fork whose CODEOWNERS is only another org\'s teams names the missing fork signal', () => {
+  const note = co.undetectedForkNote(co.parse(INHERITED).rules, NOT_DETECTED);
+  assert.ok(note, 'expected a note');
+  assert.match(note, /fork not detected/);
+  assert.match(note, /`upstream` remote/);
+  assert.match(note, /instruction-files: upstream/);
+  assert.match(note, /\.github\/project\.yml/);
+  assert.match(note, /@upstream-org/);
+  assert.match(note, /other than acme/);
+});
+
+test('#702 no note once the fork IS detected, or when the repo\'s own owner is unknown', () => {
+  assert.strictEqual(co.undetectedForkNote(co.parse(INHERITED).rules, { fork: true, ownOrg: 'acme', remoteOrg: 'acme' }), null);
+  assert.strictEqual(co.undetectedForkNote(co.parse(INHERITED).rules, { fork: false, ownOrg: null, remoteOrg: null }), null);
+  assert.strictEqual(co.undetectedForkNote(co.parse(INHERITED).rules, undefined), null);
+});
+
+test('#702 anyone who could review here — a login, an email, an own-org team — silences the note', () => {
+  for (const extra of ['/db/ @alice\n', '/db/ dba@acme.example\n', '/infra/ @Acme/ops\n']) {
+    assert.strictEqual(co.undetectedForkNote(co.parse(INHERITED + extra).rules, NOT_DETECTED), null, extra);
+  }
+  assert.strictEqual(co.undetectedForkNote(co.parse('').rules, NOT_DETECTED), null);
+  assert.strictEqual(co.undetectedForkNote(co.parse('/docs/\n').rules, NOT_DETECTED), null); // ownerless only
+});
+
+test('#702 directVerdict carries the note as a warning and as forkSignal; the verdict is unchanged', () => {
+  const files = [{ path: '.github/CODEOWNERS', ref: 'abc', text: INHERITED }];
+  const v = co.directVerdict({ files, authors: ['me'], changed: ['docs/a.md'], fork: NOT_DETECTED });
+  assert.strictEqual(v.verdict, 'refuse'); // still gated — the note explains it, it does not decide it
+  assert.match(v.forkSignal, /instruction-files: upstream/);
+  assert.ok(v.warnings.some((w) => /^\.github\/CODEOWNERS@abc: fork not detected/.test(w)));
+  const fork = co.directVerdict({ files, authors: ['me'], changed: ['docs/a.md'], fork: FORK });
+  assert.strictEqual(fork.forkSignal, null);
+});

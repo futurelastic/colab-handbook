@@ -773,12 +773,12 @@ fork, `colab ship` ignores every owner of the form `@org/team` whose org is not 
 owner, before anything else is read, and says so in the `core-path review` row. A rule left with
 no owner carves its paths out, exactly like an ownerless line. Everything else is unchanged:
 logins and emails still count, a team of the fork's own org still counts, and a line the fork
-adds to the file applies as written. The fork test is the one `colab adopt` uses: a remote named
-`upstream` whose URL differs from `origin`'s — or, on a checkout without that remote, the committed
-record of the same test, `instruction-files: upstream` in `project.yml` (#602, #658). The fork's
-owner is read from its configured remote URL. When either is unknown, nothing is ignored. `colab adopt` names the ignored teams at adoption time, so
-a fork owner who wants a review on some paths learns there that the fix is to write the fork's own
-owners into the file, as a fork patch.
+adds to the file applies as written. The fork test is the one `colab adopt` uses: a remote named `upstream`
+whose URL differs from `origin`'s — or, on a checkout without that remote, the committed record of the same
+test, `instruction-files: upstream` in `project.yml` (#602, #658). The fork's owner is read from its configured
+remote URL. When either is unknown, nothing is ignored. When the test reads "not a fork" but every owner in the
+file is a team of another org, the row and a warning say "fork not detected" and name that declaration, never changing the verdict ([#702](docs/adr/483-core-path-fork-codeowners-rationale.md#a-fork-the-clone-cannot-see-702)).
+`colab adopt` names the ignored teams at adoption time, so a fork owner who wants a review on some paths learns there that the fix is to write the fork's own owners into the file, as a fork patch.
 
 **[Hard — gate: colab ship core-path review]** **The pause.** When the rule is active and the branch touches a core path:
 

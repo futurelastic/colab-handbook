@@ -13925,14 +13925,16 @@ function readTargetCodeowners(repoAbs, target) {
  * this repo's remote URL. Either unknown → `{ fork: false }`, nothing is dropped.
  */
 function codeownersForkContext(repoAbs) {
-  const declared = instructionFile.parseInstructionFiles(projectDoc(repoAbs)).exempt;
-  if (!adoptDetectFork(repoAbs) && !declared) return { fork: false, ownOrg: null };
   const name = git.remoteInfo(repoAbs).name || 'origin';
   // The configured url, as the gh pin reads it (#658): `get-url` expands `url.<x>.insteadOf`, which
   // changes how git reaches the remote, never which org owns it.
   const u = git.git(['config', '--get', `remote.${name}.url`], repoAbs);
-  const ownOrg = u.ok ? codeowners.remoteOwner(u.stdout) : null;
-  return { fork: !!ownOrg, ownOrg };
+  const remoteOrg = u.ok ? codeowners.remoteOwner(u.stdout) : null;
+  const declared = instructionFile.parseInstructionFiles(projectDoc(repoAbs)).exempt;
+  // #702: `remoteOrg` rides along on a non-fork too — it drops nothing there (`ownOrg` stays null),
+  // it only lets the review say "fork not detected" when the file is all other orgs' teams.
+  if (!adoptDetectFork(repoAbs) && !declared) return { fork: false, ownOrg: null, remoteOrg };
+  return { fork: !!remoteOrg, ownOrg: remoteOrg, remoteOrg };
 }
 
 function branchChangedPathsNoRenames(repoAbs, base, ref) {
@@ -13978,12 +13980,23 @@ function shipDirectCoreReview(repoAbs, gh, trunk, since) {
       }
     }
   }
-  return codeowners.directVerdict({ files: [before, readTargetCodeowners(repoAbs, trunk)], authors, changed, fork: codeownersForkContext(repoAbs) });
+  const out = codeowners.directVerdict({ files: [before, readTargetCodeowners(repoAbs, trunk)], authors, changed, fork: codeownersForkContext(repoAbs) });
+  if (out.forkSignal) out.detail += FORK_SIGNAL_TAIL;
+  return out;
 }
 
+/** #702: the table row's tail when the file reads like an undetected fork's — the full note is a warning. */
+const FORK_SIGNAL_TAIL = ' · fork not detected: no `upstream` remote, no `instruction-files: upstream` (#702)';
+
 function shipCoreReview(repoAbs, gh, target, branch) {
+  const out = shipCoreReviewVerdict(repoAbs, gh, target, branch);
+  if (out.forkSignal) out.detail += FORK_SIGNAL_TAIL;
+  return out;
+}
+
+function shipCoreReviewVerdict(repoAbs, gh, target, branch) {
   const out = { active: false, inertReason: null, codeownersPath: null, warnings: [], corePaths: [], ignoredOwners: [],
-    pr: null, approval: null, headSha: null, authors: [], verdict: 'inert', detail: '' };
+    forkSignal: null, pr: null, approval: null, headSha: null, authors: [], verdict: 'inert', detail: '' };
   const file = readTargetCodeowners(repoAbs, target);
   if (!file) { out.inertReason = `no CODEOWNERS on ${target}`; out.detail = `inert: ${out.inertReason}`; return out; }
   out.codeownersPath = file.path;
@@ -13994,6 +14007,11 @@ function shipCoreReview(repoAbs, gh, target, branch) {
   const { rules, dropped } = codeowners.dropForeignTeams(parsedFile.rules, forkCtx);
   out.ignoredOwners = dropped;
   if (dropped.length) out.warnings = [...out.warnings, codeowners.foreignNote(dropped, forkCtx)];
+  // #702: fork status comes from this checkout's remotes or a declaration, so a fork cloned without
+  // `upstream` and never declared reads as active here and inert on a clone that has the remote.
+  // Say so instead of silently pausing on teams nobody in this repo can be.
+  out.forkSignal = codeowners.undetectedForkNote(parsedFile.rules, forkCtx);
+  if (out.forkSignal) out.warnings = [...out.warnings, out.forkSignal];
   const parsed = branchName.parse(branch);
   out.authors = [...new Set([gh ? git.ghCurrentLogin() : null, parsed && parsed.login].filter(Boolean))];
   const inert = codeowners.inert(rules, out.authors);
@@ -14062,7 +14080,7 @@ function coreReviewPayload(cr) {
   if (!cr) return null;
   return {
     active: cr.active, verdict: cr.verdict, inertReason: cr.inertReason, codeownersPath: cr.codeownersPath,
-    ignoredOwners: cr.ignoredOwners || [], corePaths: cr.corePaths.map((c) => c.path), headSha: cr.headSha,
+    ignoredOwners: cr.ignoredOwners || [], forkSignal: cr.forkSignal || null, corePaths: cr.corePaths.map((c) => c.path), headSha: cr.headSha,
     pr: cr.pr ? { number: cr.pr.number, url: cr.pr.url, state: cr.pr.state } : null,
     approval: cr.approval,
   };
