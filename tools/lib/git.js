@@ -1014,7 +1014,8 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
     // workflowDatabaseId is additive (#510): the cure rule's same-workflow test reads the workflow's
     // id, never its display name; mapped to `workflowId`, the name the REST row (ci-wait restRow) uses.
     // updatedAt is additive (#555): a finished run's completion time, the lone-member wait's anchor.
-    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event'], { cwd: repo });
+    // headBranch is additive (#705): the ref the concurrency-queue read (ghActiveRunsOfWorkflow) keys on.
+    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event,headBranch'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
@@ -1458,7 +1459,14 @@ function summarizeRepoOwnedRuns(forSha, sha) {
   // forSha[0] is the newest remaining row either way).
   const pending = forSha.find((x) => x.status !== 'completed');
   const pick = pending || forSha[0];
-  return { status: pick.status, conclusion: pick.conclusion || null, sha, createdAt: pick.createdAt || null, databaseId: pick.databaseId || null, runCount };
+  // #705: a still-running pick carries its workflow id and ref, when the row had them, so the wedge
+  // read can ask whether it is only queued behind an older run of the same workflow on the same ref
+  // (its concurrency group) — additive, and absent on rows that never had them.
+  const queueKeys = pending ? {
+    ...(pick.workflowId != null ? { workflowId: pick.workflowId } : {}),
+    ...(pick.headBranch ? { headBranch: pick.headBranch } : {}),
+  } : {};
+  return { status: pick.status, conclusion: pick.conclusion || null, sha, createdAt: pick.createdAt || null, databaseId: pick.databaseId || null, runCount, ...queueKeys };
 }
 
 /**
@@ -1480,6 +1488,39 @@ function ghRunJobCount(repo, runDatabaseId) {
   if (!r.ok) return null;
   const n = Number(r.stdout);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * The IN-PROGRESS runs of one workflow on one ref (#705) — `[{databaseId, status, createdAt, headSha,
+ * headBranch, workflowId}]` (ci-wait restRow shape), or null when it could not be read. null must NOT
+ * be read as "none in progress": the caller then keeps the verdict it had without this read.
+ *
+ * Why it exists: a run waiting for its concurrency group (`concurrency: { group: …${github.ref} }`
+ * with no cancel-in-progress on trunk) sits at `status: pending` with ZERO jobs until the older run
+ * holding the group finishes — exactly #155's wedge shape, while it is ordinary queueing. The older
+ * run in progress on the same workflow and ref is what tells the two apart.
+ *
+ * One REST call (`actions/workflows/<id>/runs?branch=&status=in_progress`), made lazily: only for a
+ * pending run that would otherwise read WEDGED on zero jobs. Falls back to `gh run list` on any
+ * failure but a rate limit, the same posture as ghRunsAtShaRest.
+ */
+function ghActiveRunsOfWorkflow(repo, workflowId, branch) {
+  if (workflowId == null || !branch) return null;
+  const ciWait = require('./ci-wait');
+  const q = `branch=${encodeURIComponent(branch)}&status=in_progress&per_page=20`;
+  const r = ghApiConditional(repo, `repos/{owner}/{repo}/actions/workflows/${encodeURIComponent(String(workflowId))}/runs?${q}`);
+  if (r.kind === 'rate-limited') return null;
+  if (r.kind === 'ok' && r.json && Array.isArray(r.json.workflow_runs)) {
+    return r.json.workflow_runs.map(ciWait.restRow).filter((x) => x.status === 'in_progress' && (!x.headBranch || x.headBranch === branch));
+  }
+  const l = gh(['run', 'list', '--workflow', String(workflowId), '--branch', branch, '--status', 'in_progress', '-L', '20',
+    '--json', 'databaseId,status,createdAt,headSha,headBranch,workflowDatabaseId'], { cwd: repo });
+  if (!l.ok) return null;
+  let rows;
+  try { rows = JSON.parse(l.stdout); } catch (_) { return null; }
+  if (!Array.isArray(rows)) return null;
+  return rows.filter((x) => x && x.status === 'in_progress')
+    .map(({ workflowDatabaseId, ...x }) => ({ ...x, workflowId: workflowDatabaseId ?? workflowId }));
 }
 
 /**
@@ -1584,7 +1625,7 @@ module.exports = {
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghRunsAtShaUnfiltered, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
-  ghRunJobCount, ghRunJobs, ghWorkflowDispatch,
+  ghRunJobCount, ghRunJobs, ghActiveRunsOfWorkflow, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,
   ghPrForBranch, ghOpenPrsForBranch, ghOpenPrs, ghPrCreate, ghPrClose, ghRepoVisibility, ghRunCancel,

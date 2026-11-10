@@ -51,6 +51,18 @@
  * a positive (same posture as the two signals above). Its verdict is still HUMAN_GATED, never green,
  * even when every job succeeded: the forge has not said the run passed (epic #652, fail closed).
  * `wedgeExit` below names the exits that work for each shape, so the verdict is actionable.
+ *
+ * Amendment (#705): signal B's zero jobs has one ordinary cause it must not wedge on — a run WAITING
+ * FOR ITS CONCURRENCY GROUP. A workflow with `concurrency: { group: ci-${{ github.ref }} }` that does
+ * not cancel in progress on trunk leaves the newer trunk run at `status: pending` with zero jobs until
+ * the older run holding the group finishes. Measured: a trunk read WEDGED / "a human must look" while
+ * the previous trunk run of the same workflow was in progress with jobs running, and branch runs
+ * started after it were already in progress (so runners were there). Signal: the run is `pending`
+ * (the status GitHub gives a run held by its group — never `queued`, which is the runner wait #155's
+ * shape lives in), and an OLDER run of the same workflow on the same ref is `in_progress`
+ * (`concurrencyBlocker` below; the caller reads the in-progress runs lazily, only for a run about to
+ * wedge on zero jobs). That reads as waiting — not wedged — and the age backstop still bounds it, so
+ * a group held forever by a dead run still reaches a human.
  */
 
 // Generous on purpose (see doc comment above) — an ordinary run finishes in minutes to tens of
@@ -123,9 +135,14 @@ function unconcludedJobs(jobs, opts = {}) {
  * `jobs` (#650) is optional — `ghRunJobs`'s list, read by the same lazy call; when present it is what
  * tells the forge-stuck shape (every job completed, run never concluded) from #155's two.
  *
+ * `queuedBehind` (#705) is optional — `concurrencyBlocker`'s answer: the older in-progress run of the
+ * same workflow on the same ref that a `pending` run is waiting on. Present, it turns zero jobs from a
+ * wedge into waiting (age backstop still applies).
+ *
  * Returns `{ wedged, reason, shape }`. `reason` and `shape` are null when `wedged` is false; `shape` is
  * `'zero-jobs'` | `'unconcluded'` | `'age'` (which signal fired). An `'unconcluded'` verdict also
- * carries `failed` — the jobs that concluded red, if any.
+ * carries `failed` — the jobs that concluded red, if any. A not-wedged verdict for a run waiting on its
+ * concurrency group carries `queuedBehind` back, so the caller can name the run it waits on.
  */
 function wedgedVerdict(run, opts = {}) {
   if (!run || run.status === 'completed' || run.status === 'none') return { wedged: false, reason: null, shape: null };
@@ -134,6 +151,15 @@ function wedgedVerdict(run, opts = {}) {
   const floorMin = Number.isFinite(opts.zeroJobsFloorSec) ? opts.zeroJobsFloorSec / 60 : ZERO_JOBS_AGE_FLOOR_MINUTES;
   const wedgeHours = Number.isFinite(opts.wedgeAgeSec) ? opts.wedgeAgeSec / 3600 : WEDGE_AGE_HOURS;
   if (run.jobCount === 0) {
+    // #705: held by its own concurrency group behind an older in-progress run — ordinary queueing,
+    // bounded only by the age backstop (a group held for hours means the holder is what is stuck).
+    if (run.status === 'pending' && run.queuedBehind) {
+      const b = run.queuedBehind;
+      if (age !== null && age >= wedgeHours) {
+        return { wedged: true, shape: 'age', reason: `status=pending for ${age.toFixed(1)}h queued behind run ${b.databaseId} of the same workflow (concurrency), (>= ${fmtHours(wedgeHours)} backstop)` };
+      }
+      return { wedged: false, reason: null, shape: null, queuedBehind: b };
+    }
     // #171: no createdAt (age unknown) never manufactures a positive here, same posture as the age
     // backstop below when createdAt is missing/unparseable — a missing signal must not wedge on its own.
     const floorHours = floorMin / 60;
@@ -162,6 +188,35 @@ function wedgedVerdict(run, opts = {}) {
     return { wedged: true, shape: 'age', reason: `status=${run.status} for ${age.toFixed(1)}h (>= ${fmtHours(wedgeHours)} backstop)` };
   }
   return { wedged: false, reason: null, shape: null };
+}
+
+/**
+ * #705: the older in-progress run of the same workflow on the same ref that `run` waits behind, or
+ * null. `run` is the picked run (`{status, databaseId, createdAt}`); `active` is the in-progress runs
+ * of its workflow on its ref (tools/lib/git.js `ghActiveRunsOfWorkflow`), or null when unread.
+ * Only a `pending` run is ever queued behind its group (see the #705 amendment above). "Older" is the
+ * earlier createdAt, else the lower run id; a row that cannot be ordered against `run` is not a
+ * blocker — a missing signal never manufactures one. Returns `{ databaseId, createdAt, headSha }` of
+ * the newest such run.
+ */
+function concurrencyBlocker(run, active) {
+  if (!run || run.status !== 'pending' || !Array.isArray(active)) return null;
+  const tOf = (x) => (x && x.createdAt ? Date.parse(x.createdAt) : NaN);
+  const idOf = (x) => (x && x.databaseId != null ? Number(x.databaseId) : NaN);
+  const rt = tOf(run);
+  const rid = idOf(run);
+  const older = active.filter((x) => {
+    if (!x || x.status !== 'in_progress') return false;
+    if (!Number.isNaN(rid) && idOf(x) === rid) return false;
+    const t = tOf(x);
+    if (!Number.isNaN(rt) && !Number.isNaN(t) && t !== rt) return t < rt;
+    const id = idOf(x);
+    return !Number.isNaN(rid) && !Number.isNaN(id) && id < rid;
+  });
+  if (!older.length) return null;
+  older.sort((a, b) => (tOf(b) || 0) - (tOf(a) || 0) || (idOf(b) || 0) - (idOf(a) || 0));
+  const b = older[0];
+  return { databaseId: b.databaseId != null ? b.databaseId : null, createdAt: b.createdAt || null, headSha: b.headSha || null };
 }
 
 /**
@@ -209,4 +264,4 @@ function emptyReadVerdict(committedAtMs, opts = {}) {
   return { fresh: minutes >= 0 && minutes < graceMinutes, minutes, graceMinutes };
 }
 
-module.exports = { WEDGE_AGE_HOURS, ZERO_JOBS_AGE_FLOOR_MINUTES, UNCONCLUDED_FLOOR_MINUTES, EMPTY_READ_GRACE_MINUTES, wedgedVerdict, unconcludedJobs, wedgeExit, emptyReadVerdict };
+module.exports = { WEDGE_AGE_HOURS, ZERO_JOBS_AGE_FLOOR_MINUTES, UNCONCLUDED_FLOOR_MINUTES, EMPTY_READ_GRACE_MINUTES, wedgedVerdict, unconcludedJobs, concurrencyBlocker, wedgeExit, emptyReadVerdict };
