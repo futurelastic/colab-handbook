@@ -230,6 +230,9 @@ label is `blocked:needs-human`, a provisioned convention label, so the label syn
 Deprecated aliases until 2027-01-06: `needs-owner` and `needs-boss` (labels `blocked:needs-owner`, `blocked:needs-boss`).
 After that date `colab labels --ensure --prune-deprecated` deletes an alias label no open issue
 carries; dropping the aliases from the reader is a separate change.
+The provenance marker carries the same window (#699): `Filed-by: boss` is a deprecated read
+alias of `Filed-by: human` (`CONVENTIONS.md` §5, *Provenance*) — a reader accepts
+`agent|human|boss`, a writer emits `human` only.
 
 | Kind | Token | What it means | What it converts to |
 |---|---|---|---|

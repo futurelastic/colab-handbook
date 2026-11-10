@@ -1401,17 +1401,17 @@ body with:**
 
 ```
 Filed-by: agent (<agent>, during code-wrap of #48, session <name>)
-Filed-by: boss (via discussion session <name>)
+Filed-by: human (via discussion session <name>)
 ```
 
 - **An agent stamp names the agent first** — `<agent>` is the filing session's own agent
   name. A consumer that does not know the session resolves the filer from that leading
   name; a stamp without it reads as a filer nobody can identify.
-
 - **No label means a human filed it** — the default; existing issues need no backfill.
 - **Provenance is whose *intent* it was, not whose keyboard.** An agent transcribing a
-  person's decision writes `Filed-by: boss`, **no** label. An agent noticing a problem
-  itself is `agent-filed`, even if a human was in the room.
+  person's decision writes `Filed-by: human` (it may name them: `human (<name>, via …)`),
+  **no** label; readers still accept the deprecated `boss` ([window](tools/docs/readiness.md#disposition--the-marker-the-seven-kinds-and-who-may-apply-one-315)).
+  An agent noticing a problem itself is `agent-filed`, even if a human was in the room.
 - The `Filed-by:` line is the durable record; the label makes it **queryable**. Write
   both.
 
