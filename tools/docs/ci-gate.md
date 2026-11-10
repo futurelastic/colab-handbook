@@ -52,7 +52,8 @@ The rule: [CONVENTIONS.md §4](../../CONVENTIONS.md#4-branches-and-commits), and
   list` filter ([why](../../docs/adr/539-schema-checks-and-gates-rationale.md)).
   **Waiting for that verdict is `colab ci-wait`, never a loop (#495).** It backs off
   (30 s → 60 s → 120 s, then a deadline — the repo's own CI wait bound, measured from its
-  history, `colab ci-profile`, #559), sends conditional requests so an unchanged read is
+  history, `colab ci-profile`, #559; guard-skipped trunk runs are not samples, and the trunk
+  bound never falls below the branch bound, #706), sends conditional requests so an unchanged read is
   free, and ends with its own exit code on a rate limit or an unreadable state instead of
   retrying. `colab trunk-ci` itself costs one runs read (plus one check-runs read on green) and
   caches its verdict per trunk sha for 45 s in the repo's git dir, shared by every session on

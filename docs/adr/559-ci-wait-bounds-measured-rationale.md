@@ -67,3 +67,39 @@ declaration (`ci` stays not-a-field). Only the patience is.
   Accepted: every value is conservative relative to its own sample.
 - The CI templates' descriptor check does not validate `ci-wait-factor` yet. That is a
   follow-up, because those templates are edited by other live work.
+
+## Amendment — guard skips are not trunk samples (#706)
+
+**What broke.** The trunk sample counted every clean green trunk sha. On a repo that ships by
+squash merge, nearly every trunk run is the CI templates' `dedupe` guard (#418, #493) skipping
+the suite, so the trunk p95 measured the guard. One adopting repo measured trunk p50 33 s and
+p95 50 s against a branch p95 of 27 min, so its trunk wait was 4 min. A trunk run that does run
+the suite (an untested tree, or a `gh run rerun --failed`) takes 15–20 min, and every
+`ci-wait` on it timed out, which `code-sweep` §4.0 turned into a deferral. This repo had the
+same shape: 47 of 47 trunk shas were guard skips (12–24 s), and the trunk wait was 3 min.
+
+**The sample filter.** The run list has no job-level signal. So the refresh reads the check
+suites of the newest 50 trunk shas, in batched GraphQL calls of 25 shas each. Each trunk run
+takes its jobs from the suite that matches its `check_suite_id`. A run has the guard-skip
+shape when exactly one job succeeded and every other job (at least one) was skipped. That is
+`treeSkipCheckRuns`'s name-independent shape without the annotation test, because the #418
+sha skip leaves no notice. A trunk sha leaves the sample when every green run at it has that
+shape, and `colab ci-profile` names the dropped shas. Their push → run lag still counts,
+because the lag is real either way. A sha past the cap is not counted, so the sample stays
+the newest shas whose shape is known. A run whose read failed is kept, which is the pre-#706
+reading.
+
+**The floor.** Once the skips are gone, a squash-merge repo has only a few full-suite trunk
+shas. Its trunk kind then falls below 10 samples and returns to the 15 min bootstrap, which
+is still shorter than a 20 min run. So the trunk bound is never below a **measured** branch
+bound: a full-suite trunk run runs the branch's suite. A longer deadline costs nothing when
+the run finishes, because `ci-wait` returns as soon as it does. The only cost is that a
+genuinely stuck trunk run is reported later. `ci-profile` prints the trunk's own bound next
+to the floor.
+
+**Cost.** Two GraphQL calls per refresh, once a day per checkout. Measured here, the refresh
+took about 6 s longer. The first draft read one REST call per run, and spent 78 s on 60 runs
+that covered only 25 shas. The cache version moved to 2, so profiles taken from skips are
+read again. Branch runs are not read: their guard fires only on a ref's first push at an
+already-tested sha, which `colab`'s claim refs (#550) no longer produce.
+

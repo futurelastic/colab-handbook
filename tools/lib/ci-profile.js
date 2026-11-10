@@ -21,6 +21,15 @@
  * `ci-wait --sha` waits on). That is exactly the wait a session sits through: "every run at the sha
  * has finished". Only clean first-attempt green shas count — a re-run measures an incident, a red
  * run measures how fast it failed.
+ *
+ * Guard skips are not samples of the trunk suite (#706). The CI templates' "already tested at this sha
+ * or tree?" guard (#418, #493) skips every job on a trunk push whose tree a branch run already passed —
+ * on a repo that ships by squash merge that is nearly every trunk run, so a trunk sample taken from
+ * the run list measured the guard (seconds), not the suite (minutes), and a full-suite trunk run then
+ * outlived its own wait. The run list carries no job-level signal, so `tools/colab` reads the check
+ * runs of the newest trunk shas (capped, `MAX_SHA_READS`) onto each row as `jobs`; a sha whose every
+ * green run has the guard-skip shape leaves the trunk sample (its push→run lag still counts), and the
+ * trunk bound is never shorter than the measured branch bound.
  */
 
 const ciWait = require('./ci-wait');
@@ -33,6 +42,14 @@ const DEFAULT_FACTOR = 2;
 /** A kind with fewer clean green shas than this in the window stays on its bootstrap value. */
 const MIN_SAMPLES = 10;
 const WINDOW_DAYS = 30;
+/**
+ * At most this many trunk shas get their jobs read per profile refresh (#706) — batched GraphQL, `SHA_BATCH`
+ * shas per call, so two calls, once a day per checkout through the cache. The newest win; an older trunk
+ * sha past the cap is not counted, so the trunk sample stays the newest shas whose shape is known.
+ * Measured on this repo: one REST call per run spent 78 s on 60 runs that covered only 25 shas.
+ */
+const MAX_SHA_READS = 50;
+const SHA_BATCH = 25;
 
 /**
  * The one platform constant: how long GitHub may take to start a run and materialize its job list
@@ -73,14 +90,60 @@ function parseFactor(doc) {
   return { value: n, declared: true, valid: true, reason: `${FACTOR_KEY}: ${n}` };
 }
 
+/** A run the guard skipped: exactly one job succeeded (the guard) and every other job (≥ 1) was skipped.
+ * Name-independent, like tree-green's `treeSkipCheckRuns` — adopters rename the guard (#511) — but
+ * without its annotation test: the #418 sha skip leaves no notice. `row.jobs` is
+ * `{ total, success, skipped }`; absent or null (not read, or the read failed) is not a skip. */
+function isGuardSkip(row) {
+  const j = row && row.jobs;
+  if (!j || typeof j !== 'object') return false;
+  const { total, success, skipped } = j;
+  return [total, success, skipped].every(Number.isInteger) && success === 1 && skipped >= 1 && total === success + skipped;
+}
+
+/** Could this row decide a trunk sample? The runs worth a jobs read: trunk, finished green, first attempt. */
+function isTrunkCandidate(r, trunk) {
+  return !!r && r.branch === trunk && r.event !== 'dynamic' && r.status === 'completed' && r.conclusion === 'success' && !(Number(r.attempt) > 1);
+}
+
+/** The trunk shas to read jobs for: those of the newest candidates, distinct, at most `max` (#706). */
+function jobReadShas(rows, { trunk, max = MAX_SHA_READS } = {}) {
+  const out = [];
+  for (const r of (rows || []).filter((x) => isTrunkCandidate(x, trunk))
+    .sort((a, b) => (b.createdMs - a.createdMs) || (Number(b.id) - Number(a.id)))) {
+    if (out.length >= max) break;
+    if (!out.includes(r.sha)) out.push(r.sha);
+  }
+  return out;
+}
+
+/**
+ * One run's jobs from its commit's check suites (#706): `suites` is `[{ id, total, conclusions }]` as
+ * GraphQL returns them (conclusions upper-case), `suiteId` the run's `check_suite_id`. Null — unread —
+ * when the suite is missing or its check runs did not fit the page: never a guess.
+ */
+function jobsFromSuites(suites, suiteId) {
+  if (!Array.isArray(suites) || suiteId === null || suiteId === undefined) return null;
+  const s = suites.find((x) => x && String(x.id) === String(suiteId));
+  if (!s || !Array.isArray(s.conclusions) || s.total !== s.conclusions.length) return null;
+  const c = s.conclusions.map((x) => String(x || '').toLowerCase());
+  return { total: s.total, success: c.filter((x) => x === 'success').length, skipped: c.filter((x) => x === 'skipped').length };
+}
+
 /**
  * Rows → one wall time per clean green sha. A row: `{ sha, branch, event, workflowName, status,
  * conclusion, attempt, createdMs, updatedMs, headCommitMs }`.
  *
  * A branch group at a sha that is also a trunk sha is dropped: a branch cut moments ago re-runs
  * trunk's content, and those near-instant runs would drag the branch duration down.
+ *
+ * `probed` (#706): the trunk rows carry a jobs read (`jobs`: an object, or null when the read failed).
+ * A trunk sha is then marked `drop: 'guard-skip'` when every green run at it has the guard-skip shape,
+ * or `drop: 'unprobed'` when its sha was past the read cap (no `jobs` key at all). A failed
+ * read keeps the sha — the pre-#706 reading, never a guess. `profile()` leaves dropped entries out of
+ * the trunk sample and counts them; their push→run lag still counts.
  */
-function shaDurations(rows, { trunk, policy = null } = {}) {
+function shaDurations(rows, { trunk, policy = null, probed = false } = {}) {
   const groups = new Map();
   for (const r of rows || []) {
     if (!r || !r.sha || r.event === 'dynamic') continue;
@@ -108,7 +171,14 @@ function shaDurations(rows, { trunk, policy = null } = {}) {
       const c = Math.min(...counted.map((r) => r.headCommitMs).filter(Number.isFinite));
       if (Number.isFinite(c) && created >= c) lagSec = Math.round((created - c) / 1000);
     }
-    out.push({ sha: g[0].sha, kind, sec: Math.round((ended - created) / 1000), lagSec, endMs: ended });
+    const e = { sha: g[0].sha, kind, sec: Math.round((ended - created) / 1000), lagSec, endMs: ended };
+    if (kind === 'trunk' && probed) {
+      const green = counted.filter((r) => r.conclusion === 'success');
+      if (green.some((r) => !Object.prototype.hasOwnProperty.call(r, 'jobs'))) e.drop = 'unprobed';
+      else if (green.every(isGuardSkip)) e.drop = 'guard-skip';
+      else if (green.some((r) => r.jobs === null)) e.jobsUnread = true;
+    }
+    out.push(e);
   }
   return out;
 }
@@ -124,11 +194,29 @@ function stats(values) {
   };
 }
 
-/** Durations → `{ branch, trunk, lag, source }`; only samples ending at or after `sinceMs` count. */
+/** How many dropped shas the profile names; the count is always whole. */
+const DROPPED_SHAS_LISTED = 20;
+
+/**
+ * Durations → `{ branch, trunk, lag, source }`; only samples ending at or after `sinceMs` count.
+ * `trunk.dropped` (#706) says what left the trunk sample: guard skips (newest shas named), runs past
+ * the jobs-read cap, and how many kept shas had a failed jobs read.
+ */
 function profile(durations, { sinceMs = null } = {}) {
   const d = (durations || []).filter((x) => sinceMs === null || x.endMs >= sinceMs);
   const branch = stats(d.filter((x) => x.kind === 'branch').map((x) => x.sec));
-  const trunk = stats(d.filter((x) => x.kind === 'trunk').map((x) => x.sec));
+  const trunkAll = d.filter((x) => x.kind === 'trunk');
+  const skips = trunkAll.filter((x) => x.drop === 'guard-skip').sort((a, b) => b.endMs - a.endMs);
+  const trunk = {
+    ...stats(trunkAll.filter((x) => !x.drop).map((x) => x.sec)),
+    dropped: {
+      guardSkip: skips.length,
+      guardSkipShas: skips.slice(0, DROPPED_SHAS_LISTED).map((x) => x.sha),
+      guardSkipMaxSec: skips.length ? Math.max(...skips.map((x) => x.sec)) : null,
+      unprobed: trunkAll.filter((x) => x.drop === 'unprobed').length,
+      jobsUnread: trunkAll.filter((x) => !x.drop && x.jobsUnread).length,
+    },
+  };
   const lagV = d.filter((x) => x.kind === 'trunk' && x.lagSec !== null).map((x) => x.lagSec);
   const lag = { source: lagV.length >= MIN_SAMPLES ? 'measured' : 'bootstrap', samples: lagV.length, p95Sec: quantile(lagV, 0.95) };
   const n = [branch, trunk].filter((k) => k.source === 'measured').length;
@@ -157,7 +245,11 @@ function thresholds(prof, factor = DEFAULT_FACTOR) {
   const f = Number.isFinite(factor) && factor >= 1 ? factor : DEFAULT_FACTOR;
   const p = prof || {};
   const branch = boundFor(p.branch, f, BOOTSTRAP.branchWaitSec);
-  const trunk = boundFor(p.trunk, f, BOOTSTRAP.trunkWaitSec);
+  const trunkOwn = boundFor(p.trunk, f, BOOTSTRAP.trunkWaitSec);
+  // #706: a trunk run that does run the suite runs the branch's suite, so its wait is never shorter
+  // than the measured branch wait — whatever a thin or skip-heavy trunk sample says. A longer deadline
+  // costs nothing when the run finishes; it only reports a genuinely stuck trunk run later.
+  const trunk = branch.basis === 'measured' && branch.sec > trunkOwn.sec ? { sec: branch.sec, basis: 'branch' } : trunkOwn;
   const anyMeasured = branch.basis === 'measured' || trunk.basis === 'measured';
   const wedgeAgeSec = anyMeasured ? Math.min(BOOTSTRAP.wedgeAgeSec, ceilMinute(f * Math.max(branch.sec, trunk.sec))) : BOOTSTRAP.wedgeAgeSec;
   const lagMeasured = p.lag && p.lag.source === 'measured' && Number.isFinite(p.lag.p95Sec);
@@ -166,6 +258,7 @@ function thresholds(prof, factor = DEFAULT_FACTOR) {
     factor: f,
     branchWaitSec: branch.sec,
     trunkWaitSec: trunk.sec,
+    trunkWaitOwnSec: trunkOwn.sec,
     ciWaitDefaultSec: { branch: branch.sec, trunk: trunk.sec, any: Math.max(branch.sec, trunk.sec) },
     wedgeAgeSec,
     emptyReadGraceSec,
@@ -190,6 +283,6 @@ function kindFor({ branch = null, trunk = null, onTrunk = null } = {}) {
 }
 
 module.exports = {
-  FACTOR_KEY, DEFAULT_FACTOR, MIN_SAMPLES, WINDOW_DAYS, PLATFORM_FLOOR_SEC, BOOTSTRAP,
-  parseFactor, shaDurations, profile, thresholds, scheduleFor, kindFor,
+  FACTOR_KEY, DEFAULT_FACTOR, MIN_SAMPLES, WINDOW_DAYS, MAX_SHA_READS, SHA_BATCH, PLATFORM_FLOOR_SEC, BOOTSTRAP,
+  parseFactor, isGuardSkip, isTrunkCandidate, jobReadShas, jobsFromSuites, shaDurations, profile, thresholds, scheduleFor, kindFor,
 };

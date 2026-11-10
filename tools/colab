@@ -16669,7 +16669,7 @@ function trunkCiCache(repoAbs) {
 // thresholds are NOT cached — they are recomputed from the cached profile and the CURRENT
 // `ci-wait-factor`, so editing the factor applies at once with no refetch.
 const CI_PROFILE_TTL_DEFAULT_SEC = 24 * 3600;
-const CI_PROFILE_CACHE_V = 1;
+const CI_PROFILE_CACHE_V = 2; // 2 (#706): profiles read before guard skips left the trunk sample are refetched
 
 function ciProfileTtlSec() {
   const env = process.env.COLAB_CI_PROFILE_TTL;
@@ -16683,11 +16683,18 @@ function ciProfileCacheFile(repoAbs) {
 
 /**
  * The repo's completed CI runs in the profile window — up to 3 pages of the whole list plus one page
- * of trunk pushes, so a branch-heavy repo still yields trunk samples. Returns `{ rows, runsRead }`,
- * or `{ error }` when the list cannot be read (the caller falls back, never fails a wait on it).
+ * of trunk pushes, so a branch-heavy repo still yields trunk samples. Returns `{ rows, runsRead,
+ * jobsRead, jobsFailed }`, or `{ error }` when the list cannot be read (the caller falls back, never
+ * fails a wait on it).
+ *
+ * #706: then the check suites of the newest trunk shas (at most `ciProfile.MAX_SHA_READS`, batched
+ * GraphQL, `SHA_BATCH` per call) — the run list carries no job-level signal, and a guard-skipped trunk
+ * run is only visible as "one job succeeded, the rest skipped". Each trunk candidate at a read sha gets
+ * `jobs` from the suite matching its `check_suite_id`; a failed or partial read leaves `jobs: null` (the
+ * row is kept, as before #706); a row at a sha past the cap gets no `jobs` key at all.
  */
 function fetchCiProfileRows(repoAbs, trunk, sinceIso) {
-  const jq = '.workflow_runs[] | [.id, .head_branch, .head_sha, .event, .name, .status, .conclusion, .run_attempt, .created_at, .updated_at, .head_commit.timestamp] | @json';
+  const jq = '.workflow_runs[] | [.id, .head_branch, .head_sha, .event, .name, .status, .conclusion, .run_attempt, .created_at, .updated_at, .head_commit.timestamp, .check_suite_id] | @json';
   const day = sinceIso.slice(0, 10);
   const paths = [1, 2, 3].map((n) => `repos/{owner}/{repo}/actions/runs?per_page=100&status=completed&created=%3E%3D${day}&page=${n}`);
   paths.push(`repos/{owner}/{repo}/actions/runs?per_page=100&status=completed&created=%3E%3D${day}&branch=${encodeURIComponent(trunk)}&event=push`);
@@ -16703,11 +16710,37 @@ function fetchCiProfileRows(repoAbs, trunk, sinceIso) {
       seen.set(a[0], {
         id: a[0], branch: a[1], sha: a[2], event: a[3], workflowName: a[4], status: a[5], conclusion: a[6],
         attempt: a[7], createdMs: Date.parse(a[8]), updatedMs: Date.parse(a[9]), headCommitMs: a[10] ? Date.parse(a[10]) : null,
+        checkSuiteId: a[11] === undefined ? null : a[11],
       });
     }
     if (i < 3 && n < 100) i = 2; // a short page ends the paged list; the trunk page still runs
   }
-  return { rows: [...seen.values()], runsRead: seen.size };
+  const rows = [...seen.values()];
+  const shas = ciProfile.jobReadShas(rows, { trunk });
+  const suitesAt = new Map();
+  for (let i = 0; i < shas.length; i += ciProfile.SHA_BATCH) {
+    const batch = shas.slice(i, i + ciProfile.SHA_BATCH).filter((x) => /^[0-9a-f]{7,40}$/i.test(x));
+    if (!batch.length) continue;
+    const query = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${batch.map((x, k) => `c${k}:object(oid:"${x}"){...C}`).join(' ')}}} `
+      + 'fragment C on Commit{checkSuites(first:30){nodes{databaseId checkRuns(first:100,filterBy:{checkType:LATEST}){totalCount nodes{conclusion}}}}}';
+    const r = git.ghApi(repoAbs, ['graphql', '-F', 'owner={owner}', '-F', 'name={repo}', '-f', `query=${query}`,
+      '--jq', '.data.repository | to_entries[] | [.key, [(.value.checkSuites.nodes // [])[] | [.databaseId, .checkRuns.totalCount, [.checkRuns.nodes[].conclusion]]]] | @json']);
+    if (!r.ok) continue; // every row at these shas stays unread (jobs: null) — kept, as before #706
+    for (const line of String(r.stdout || '').split('\n')) {
+      let a; try { a = JSON.parse(line); } catch (_) { continue; }
+      const k = Array.isArray(a) ? Number(String(a[0]).slice(1)) : NaN;
+      if (!Number.isInteger(k) || !batch[k] || !Array.isArray(a[1])) continue;
+      suitesAt.set(batch[k], a[1].map(([id, total, conclusions]) => ({ id, total, conclusions })));
+    }
+  }
+  let jobsRead = 0, jobsFailed = 0;
+  const read = new Set(shas);
+  for (const row of rows) {
+    if (!read.has(row.sha) || !ciProfile.isTrunkCandidate(row, trunk)) continue;
+    row.jobs = ciProfile.jobsFromSuites(suitesAt.get(row.sha), row.checkSuiteId);
+    if (row.jobs) jobsRead++; else jobsFailed++;
+  }
+  return { rows, runsRead: seen.size, jobsRead, jobsFailed };
 }
 
 const ciProfileMemo = new Map();
@@ -16745,8 +16778,9 @@ function ciProfileFor(repoAbs, { fetch = 'never' } = {}) {
       if (got.error) notes.push(`could not read CI history (${got.error}) — ${entry ? 'using the stale cached profile' : 'using the bootstrap bounds'}`);
       else {
         const policy = verifyRuns.parsePolicy(doc);
-        const prof = ciProfile.profile(ciProfile.shaDurations(got.rows, { trunk, policy }), { sinceMs });
-        entry = { v: CI_PROFILE_CACHE_V, trunk, fetchedAt: nowMs, since: new Date(sinceMs).toISOString(), runsRead: got.runsRead, profile: prof };
+        const prof = ciProfile.profile(ciProfile.shaDurations(got.rows, { trunk, policy, probed: true }), { sinceMs });
+        entry = { v: CI_PROFILE_CACHE_V, trunk, fetchedAt: nowMs, since: new Date(sinceMs).toISOString(), runsRead: got.runsRead,
+          jobsRead: got.jobsRead, jobsFailed: got.jobsFailed, profile: prof };
         state = 'fetched';
         try {
           const tmp = `${file}.${process.pid}.tmp`;
@@ -16760,7 +16794,8 @@ function ciProfileFor(repoAbs, { fetch = 'never' } = {}) {
   const out = {
     trunk, factor, profile, th: ciProfile.thresholds(profile, factor.value),
     cache: { state, ageSec: state === 'fetched' ? 0 : ageSec, fetchedAt: entry ? new Date(entry.fetchedAt).toISOString() : null,
-      since: entry ? entry.since : null, runsRead: entry ? entry.runsRead : null },
+      since: entry ? entry.since : null, runsRead: entry ? entry.runsRead : null,
+      jobsRead: entry ? entry.jobsRead : null, jobsFailed: entry ? entry.jobsFailed : null },
     notes,
   };
   ciProfileMemo.set(memoKey, out);
@@ -16871,7 +16906,7 @@ function cmdCiWait(argv) {
     deadlineSec = cp.th.ciWaitDefaultSec[kind];
     schedule = cp.th.scheduleSec[kind];
     const b = kind === 'any' ? (cp.th.basis.branchWait === 'measured' || cp.th.basis.trunkWait === 'measured' ? 'measured' : 'bootstrap') : cp.th.basis[`${kind}Wait`];
-    deadlineBasis = `${kind === 'any' ? 'larger' : kind} bound, ${b}`;
+    deadlineBasis = `${kind === 'any' ? 'larger' : kind} bound, ${b === 'branch' ? 'measured branch bound (#706: never shorter than it)' : b}`;
     if (!opts.json) for (const n of cp.notes) process.stderr.write(`ci-wait: ${n}\n`);
   }
 
@@ -17150,9 +17185,15 @@ finish, over clean first-attempt green shas in the last ${ciProfile.WINDOW_DAYS}
 runs — plus the push → run lag on trunk. A kind with fewer than ${ciProfile.MIN_SAMPLES} samples stays on its
 bootstrap value, which is today's fleet value exactly (15m waits, 6h wedge, 10m grace, 2m floor).
 
+Guard skips leave the trunk sample (#706): a trunk sha whose every green run had one job succeed and
+the rest skipped — the CI templates' "already tested at this sha or tree?" guard — measured the
+guard, not the suite. The newest ${ciProfile.MAX_SHA_READS} trunk shas get their check runs read to tell; an older one is
+not counted, and one whose read failed is kept. The dropped shas are listed; their lag still counts.
+
 Declared: only \`ci-wait-factor: <number ≥ 1>\` in .github/project.yml (default ${ciProfile.DEFAULT_FACTOR}) — how many times
 the measured p95 a repo will wait. Every bound:
-  branch / trunk wait   2m + factor × p95 of that kind, rounded up to the minute
+  branch / trunk wait   2m + factor × p95 of that kind, rounded up to the minute; the trunk wait is
+                        never below a measured branch wait (a full-suite trunk run runs that suite)
   wedged-run age        factor × the longer wait, never above 6h
   empty-read grace      factor × push→run p95, never below 2m
   zero-jobs floor       2m (not measurable from the run list)
@@ -17193,10 +17234,18 @@ function cmdCiProfile(argv) {
   const k = (name, x) => print(`  ${name.padEnd(11)} ${x.source} · ${x.samples} sha(s)${x.samples ? ` · p50 ${dur(x.p50Sec)} · p95 ${dur(x.p95Sec)} · max ${dur(x.maxSec)}` : ''}`);
   k('branch', p.branch);
   k('trunk', p.trunk);
+  const dr = p.trunk.dropped;
+  if (dr && dr.guardSkip) {
+    const shas = dr.guardSkipShas.map((s) => String(s).slice(0, 7)).join(' ');
+    print(`  ${''.padEnd(11)} dropped ${dr.guardSkip} guard-skip sha(s), every job but the guard skipped (max ${dur(dr.guardSkipMaxSec)}): ${shas}${dr.guardSkip > dr.guardSkipShas.length ? ' …' : ''}`);
+  }
+  if (dr && dr.unprobed) print(`  ${''.padEnd(11)} not counted: ${dr.unprobed} older trunk sha(s) past the ${ciProfile.MAX_SHA_READS}-sha jobs read`);
+  if (dr && dr.jobsUnread) print(`  ${''.padEnd(11)} kept unverified: ${dr.jobsUnread} trunk sha(s) whose jobs could not be read — a guard skip among them would shorten the trunk p95`);
   print(`  ${'push→run'.padEnd(11)} ${p.lag.source} · ${p.lag.samples} sample(s)${p.lag.samples ? ` · p95 ${dur(p.lag.p95Sec)}` : ''}`);
   const row = (name, sec, basis, how, boot) => print(`  ${name.padEnd(11)} ${dur(sec).padEnd(7)} ${basis === 'measured' ? how : basis === 'default' ? how : 'bootstrap'}${basis === 'measured' && boot ? `   (bootstrap ${boot})` : ''}`);
   row('branch wait', th.branchWaitSec, th.basis.branchWait, `2m + ${th.factor} × p95`, '15m');
-  row('trunk wait', th.trunkWaitSec, th.basis.trunkWait, `2m + ${th.factor} × p95`, '15m');
+  if (th.basis.trunkWait === 'branch') print(`  ${'trunk wait'.padEnd(11)} ${dur(th.trunkWaitSec).padEnd(7)} the branch wait — trunk's own bound (${dur(th.trunkWaitOwnSec)}) is shorter, and a full-suite trunk run runs the branch suite`);
+  else row('trunk wait', th.trunkWaitSec, th.basis.trunkWait, `2m + ${th.factor} × p95`, '15m');
   print(`  ${'ci-wait'.padEnd(11)} ${dur(th.ciWaitDefaultSec.branch)} branch · ${dur(th.ciWaitDefaultSec.trunk)} trunk · ${dur(th.ciWaitDefaultSec.any)} run id  (its default with no --timeout)`);
   row('wedged age', th.wedgeAgeSec, th.basis.wedgeAge, `${th.factor} × the longer wait, ≤ 6h`, '6h');
   row('empty read', th.emptyReadGraceSec, th.basis.emptyReadGrace, `${th.factor} × push→run p95, ≥ 2m`, '10m');
