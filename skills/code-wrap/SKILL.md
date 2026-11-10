@@ -93,7 +93,7 @@ gh issue edit $N --body-file <tmpfile>   # tick the checklist, add Decisions/Got
 session's own agent name, first, because the accept step reads the filer from it — plus an `Ask:` line (`backlog` ·
 `permission` · `ruling` · `deferred(<trigger>)`), and `colab issue-filed <N>` where `colab`
 exists. More than one session of work ⇒ an epic with sub-issues. One the human asked for is
-`Filed-by: boss (via session <name>)`, no label.
+`Filed-by: human (via session <name>)`, no label.
 Read when you file a follow-up: [a1-follow-up.md](a1-follow-up.md).
 
 ### A2. Update repo docs the work made stale — not in `CLAUDE.md`

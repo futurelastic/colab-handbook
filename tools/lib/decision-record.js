@@ -42,7 +42,7 @@
  * `colab migration-grant` / `colab ci-grant` / `colab promote`, `colab decision --record` is
  * deliberately NOT gated on COLAB_HUMAN=1: those three AUTHORIZE a write to production or
  * trunk that did not exist before the command ran; this one TRANSCRIBES a call a human
- * already made elsewhere (the ordinary case is `Filed-by: boss` — an agent recording Boss's
+ * already made elsewhere (the ordinary case is `Filed-by: human` — an agent recording a person's
  * ruling, not inventing one). The safety property is carried by requiring `ruledBy` (no
  * default) plus TRUSTED_ASSOCIATIONS on read, not by gating who may type the command. If that
  * is judged too weak in review, requiring COLAB_HUMAN=1 here too is the safe direction and

@@ -237,7 +237,7 @@ gh issue view $N --comments                      # prior-session log
 
   ## Gotchas
 
-  Filed-by: <boss (via <session>) | agent (<agent>, <what prompted it>, session <name>)>
+  Filed-by: <human (via <session>) | agent (<agent>, <what prompted it>, session <name>)>
   ```
   **Before you file: would one session finish this?** If not, it is an epic — the
   `Plan (checklist)` heading above is an invitation, not a green light. File the
@@ -253,7 +253,7 @@ gh issue view $N --comments                      # prior-session log
 
   **The `Filed-by:` line is not optional, and it is about intent — not about who
   typed** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#provenance--who-decided-the-work-should-exist), *Provenance*). On this path you are almost always
-  transcribing work a person just asked for, so it is `Filed-by: boss` and **no
+  transcribing work a person just asked for, so it is `Filed-by: human` and **no
   label**. If instead you are filing something *you* noticed and nobody approved,
   say `agent` and add the label — and end the body with an `Ask:` line too
   (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#ask--the-filer-declares-the-ask-class-89), *Ask*): `permission | backlog | ruling | deferred(<trigger>)`,
