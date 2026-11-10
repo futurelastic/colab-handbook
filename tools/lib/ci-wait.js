@@ -102,6 +102,9 @@ function restRow(x) {
     event: x.event || null, url: x.html_url || null,
     // #510: the workflow FILE's id — the cure rule's same-workflow test, which a display name cannot answer.
     workflowId: x.workflow_id ?? null,
+    // #705: the ref the run is on — a zero-jobs run is told apart from one queued behind its own
+    // concurrency group by an older in-progress run of the same workflow on the SAME ref.
+    headBranch: x.head_branch || null,
   };
 }
 

@@ -12289,9 +12289,22 @@ function classifyCiRunRaw(repoAbs, run, at) {
   const jobCount = Array.isArray(jobs) ? jobs.length : null;
   // #559: wedge age and zero-jobs floor follow the repo's measured CI (cached profile; bootstrap = 6h / 2m).
   const th = ciProfileFor(repoAbs).th;
-  const wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount, jobs }, { wedgeAgeSec: th.wedgeAgeSec, zeroJobsFloorSec: th.zeroJobsFloorSec });
+  const wedgeOpts = { wedgeAgeSec: th.wedgeAgeSec, zeroJobsFloorSec: th.zeroJobsFloorSec };
+  let wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount, jobs }, wedgeOpts);
+  // #705: a `pending` run with zero jobs may only be waiting for its concurrency group — an older run
+  // of the same workflow on the same ref still in progress. One more read, made only here, for a run
+  // that would otherwise read WEDGED on zero jobs; an unreadable answer keeps the verdict above.
+  if (wedge.shape === 'zero-jobs' && run.status === 'pending' && run.workflowId != null && run.headBranch) {
+    const active = git.ghActiveRunsOfWorkflow(repoAbs, run.workflowId, run.headBranch);
+    const queuedBehind = ciVerdict.concurrencyBlocker(run, active);
+    if (queuedBehind) wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount, jobs, queuedBehind }, wedgeOpts);
+  }
   if (wedge.wedged) {
     return { ok: false, class: HUMAN_GATED, wedge: wedge.shape, detail: `run for ${at}: status=${run.status} — WEDGED (${wedge.reason}); ${ciVerdict.wedgeExit(wedge)}` };
+  }
+  if (wedge.queuedBehind) {
+    const b = wedge.queuedBehind;
+    return { ok: false, class: SELF_CLEARING, queuedBehind: b, detail: `run for ${at}: status=pending — queued behind run ${b.databaseId}${b.headSha ? ` (${String(b.headSha).slice(0, 7)})` : ''} of the same workflow on ${run.headBranch} (concurrency), retry later` };
   }
   return { ok: false, class: SELF_CLEARING, detail: `run for ${at}: status=${run.status} — still running, retry later` };
 }
@@ -16526,7 +16539,9 @@ the detail (--json: setAside). Override in .github/project.yml, by workflow name
 The first output word is one verdict:
   GREEN       every judged workflow's newest run at the sha succeeded — ship's row would pass
   RED         a judged run completed and did not succeed — trunk is red
-  PENDING     a judged run is still in flight (or the sha is minutes old with no run yet)
+  PENDING     a judged run is still in flight (or the sha is minutes old with no run yet, or
+              its run is queued behind an older in-progress run of the same workflow on
+              trunk — its concurrency group, #705 — and the detail names that run)
   WEDGED      a run that will never move on its own (zero jobs / hours unmoving, #155; every job
               completed but the forge never concluded the run, #650 — the detail names the exits)
   NONE        no repo-owned run exists at the sha — CI not wired or never started

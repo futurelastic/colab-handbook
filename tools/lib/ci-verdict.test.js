@@ -176,6 +176,66 @@ test('#650 wedgeExit: the forge-stuck shape names what works and what the forge 
   assert.strictEqual(v.wedgeExit({ wedged: true, shape: 'age' }), 'a human must look, not retry');
 });
 
+// --- #705: a pending run queued behind its own concurrency group is waiting, not wedged --------
+
+const Q0 = Date.parse('2026-11-10T07:00:00Z');
+const qAt = (min) => new Date(Q0 + min * 60000).toISOString();
+// The measured shape: the trunk run is `pending`, zero jobs, 15 minutes old; the previous trunk run of
+// the same workflow (older sha) is `in_progress` with jobs running.
+const QUEUED = { status: 'pending', conclusion: null, databaseId: 200, createdAt: qAt(0), jobCount: 0, jobs: [] };
+const HOLDER = { databaseId: 199, status: 'in_progress', createdAt: qAt(-20), headSha: 'a'.repeat(40) };
+const qNow = { nowMs: Q0 + 15 * 60000 };
+
+test('#705 concurrencyBlocker: an older in-progress run of the workflow on the ref is the blocker', () => {
+  assert.deepStrictEqual(v.concurrencyBlocker(QUEUED, [HOLDER]), { databaseId: 199, createdAt: HOLDER.createdAt, headSha: HOLDER.headSha });
+});
+
+test('#705 concurrencyBlocker: nothing older in progress → null (the run itself, a newer run, an unread list)', () => {
+  assert.strictEqual(v.concurrencyBlocker(QUEUED, []), null);
+  assert.strictEqual(v.concurrencyBlocker(QUEUED, null), null, 'an unread list never manufactures a blocker');
+  assert.strictEqual(v.concurrencyBlocker(QUEUED, [{ ...QUEUED, status: 'in_progress' }]), null, 'never its own row');
+  assert.strictEqual(v.concurrencyBlocker(QUEUED, [{ ...HOLDER, databaseId: 201, createdAt: qAt(5) }]), null, 'a newer run does not hold it');
+  assert.strictEqual(v.concurrencyBlocker(QUEUED, [{ ...HOLDER, status: 'queued' }]), null, 'only an in-progress run holds the group');
+});
+
+test('#705 concurrencyBlocker: only a pending run is ever held by its group — a queued zero-jobs run is the runner wait', () => {
+  assert.strictEqual(v.concurrencyBlocker({ ...QUEUED, status: 'queued' }, [HOLDER]), null);
+});
+
+test('#705 concurrencyBlocker: unordered by time, the lower run id is the older; no order at all → no blocker', () => {
+  const r = { ...QUEUED, createdAt: null };
+  assert.strictEqual(v.concurrencyBlocker(r, [{ ...HOLDER, createdAt: null }]).databaseId, 199);
+  assert.strictEqual(v.concurrencyBlocker({ ...r, databaseId: null }, [{ ...HOLDER, createdAt: null }]), null);
+});
+
+test('#705 the issue\'s shape: pending, zero jobs, 15 min, an older run in progress → NOT wedged, names the run it waits on', () => {
+  const r = v.wedgedVerdict({ ...QUEUED, queuedBehind: v.concurrencyBlocker(QUEUED, [HOLDER]) }, qNow);
+  assert.strictEqual(r.wedged, false);
+  assert.strictEqual(r.shape, null);
+  assert.strictEqual(r.queuedBehind.databaseId, 199);
+});
+
+test('#705 the same run with no older run in progress is still #155\'s zero-jobs wedge', () => {
+  const r = v.wedgedVerdict({ ...QUEUED, queuedBehind: v.concurrencyBlocker(QUEUED, []) }, qNow);
+  assert.strictEqual(r.wedged, true);
+  assert.strictEqual(r.shape, 'zero-jobs');
+  assert.strictEqual(v.wedgeExit(r), 'a human must look, not retry');
+});
+
+test('#705 a queued (not pending) zero-jobs run handed a blocker still wedges — the queue signal is pending-only', () => {
+  const r = v.wedgedVerdict({ ...QUEUED, status: 'queued', queuedBehind: { databaseId: 199 } }, qNow);
+  assert.strictEqual(r.shape, 'zero-jobs');
+});
+
+test('#705 the wait is bounded: queued behind a run past the age backstop → WEDGED (age), naming the holder', () => {
+  const r = v.wedgedVerdict({ ...QUEUED, queuedBehind: { databaseId: 199 } }, { nowMs: Q0 + 7 * 3600000 });
+  assert.strictEqual(r.wedged, true);
+  assert.strictEqual(r.shape, 'age');
+  assert.match(r.reason, /queued behind run 199/);
+  const m = v.wedgedVerdict({ ...QUEUED, queuedBehind: { databaseId: 199 } }, { nowMs: Q0 + 40 * 60000, wedgeAgeSec: 30 * 60 });
+  assert.strictEqual(m.shape, 'age', 'the repo-measured backstop (#559) bounds it too');
+});
+
 // --- #413: emptyReadVerdict — the grace window for "no run yet" -------------------------------
 
 test('#413 emptyReadVerdict: a sha committed minutes ago is fresh (a run may not exist yet)', () => {
