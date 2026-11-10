@@ -178,6 +178,32 @@ function foreignNote(dropped, ctx) {
 }
 
 /**
+ * #702 — the fork test (#483) reads a clone-local `upstream` remote or a committed declaration, so a
+ * fork whose clone lacks the remote and whose descriptor declares nothing reads as "not a fork" on
+ * that clone alone: the same branch is then gated on one clone and not another. This cannot settle
+ * fork status itself (a repo may legitimately be owned by another org's teams), so it only names the
+ * missing signal, and only in the one shape that gives it away: NOT a fork, the repo's own remote
+ * owner known, and EVERY owner in the file a team (`@org/team`) of some other org. A login, an
+ * email or a team of the repo's own org anywhere in the file means someone here can review, so
+ * nothing is said. Returns the one-line note, or null.
+ */
+function undetectedForkNote(rules, { fork, remoteOrg } = {}) {
+  if (fork || !remoteOrg) return null;
+  const own = String(remoteOrg).toLowerCase();
+  const owners = [...new Set((rules || []).flatMap((r) => r.owners))];
+  if (!owners.length) return null;
+  const orgs = new Set();
+  for (const o of owners) {
+    const m = TEAM_RE.exec(o);
+    if (!m || m[1].toLowerCase() === own) return null;
+    orgs.add('@' + m[1]);
+  }
+  return `fork not detected: every CODEOWNERS owner is a team of an org other than ${remoteOrg} (${[...orgs].join(', ')}), `
+    + 'yet this checkout has no `upstream` remote and project.yml has no `instruction-files: upstream`. '
+    + 'If this repo is a fork, add `instruction-files: upstream` to .github/project.yml so every clone ignores the inherited teams the same way (#483, #658, #702)';
+}
+
+/**
  * Has a PR been approved by someone other than its author, AT `headSha`?
  *
  * `reviews`: the forge's review list, `[{ author: { login }, state, submittedAt, commit: { oid } }]`.
@@ -228,7 +254,7 @@ function approvalVerdict(reviews, { prAuthor, authors = [], headSha }) {
  * before anything else is read (`dropForeignTeams`). Absent = nothing dropped.
  */
 function directVerdict({ files, authors, changed, fork = null }) {
-  const out = { active: false, inertReason: null, codeownersPath: null, warnings: [], corePaths: [], verdict: 'inert', detail: '' };
+  const out = { active: false, inertReason: null, codeownersPath: null, warnings: [], corePaths: [], forkSignal: null, verdict: 'inert', detail: '' };
   const seen = new Set();
   const present = (files || []).filter((f) => f && !seen.has(f.text) && seen.add(f.text));
   if (!present.length) { out.inertReason = 'no CODEOWNERS on trunk before or after the unit'; out.detail = `inert: ${out.inertReason}`; return out; }
@@ -241,6 +267,9 @@ function directVerdict({ files, authors, changed, fork = null }) {
     // #483: a fork's inherited foreign-org teams bind neither file.
     const { rules, dropped } = dropForeignTeams(parsed.rules, fork || {});
     if (dropped.length) out.warnings.push(`${f.path}@${f.ref}: ${foreignNote(dropped, fork)}`);
+    // #702: not read as a fork, but the file says it probably is one — name the missing signal.
+    const unforked = undetectedForkNote(parsed.rules, fork || {});
+    if (unforked) { out.warnings.push(`${f.path}@${f.ref}: ${unforked}`); out.forkSignal = out.forkSignal || unforked; }
     const iv = inert(rules, authors);
     if (iv.inert) { inertReasons.push(`${f.path}@${f.ref}: ${iv.reason}`); continue; }
     out.active = true;
@@ -268,5 +297,5 @@ function directVerdict({ files, authors, changed, fork = null }) {
 
 module.exports = {
   CODEOWNERS_PATHS, parse, compile, ownerOf, corePaths, inert, approvalVerdict, directVerdict,
-  remoteOwner, foreignTeams, dropForeignTeams, foreignNote,
+  remoteOwner, foreignTeams, dropForeignTeams, foreignNote, undetectedForkNote,
 };
