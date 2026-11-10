@@ -675,6 +675,7 @@ function handoffTrackingBody(version) {
     '',
     '- The final is automatic on every green head, by the operator\'s grant — but a database migration since the last final never rides an automatic deploy ungranted.',
     `- **To let it ride:** a human runs \`COLAB_HUMAN=1 colab migration-grant <this issue> --branch ${version}\`; the next green run tags and deploys ${version}.`,
+    '- The same grant is the person\'s decision a destructive schema change needs here (a dropped column, a rewritten migration): this route has no hand cut, so the grant is how a person lets one ride (#709). Read the migration first — the grant is the review.',
     `- **Veto:** add the \`${HOLD_LABEL}\` label to any open issue. While it is present no final is tagged; only a human removes it.`,
   ].join('\n') + '\n';
 }
@@ -836,26 +837,109 @@ const SQL_DOWN_MARKER = /^\s*--\s*(\+(migrate|goose)\s+down|migrate:down)\b/i;
 const SQL_DOWN_FILE = /\.down\.sql$/i;
 
 /**
- * The first destructive SQL statement outside a Down section — `{ statement, line, inUp }` (1-based
- * line in the original file; `inUp` = an Up marker opened the section it sits in) — or null. Skipped
- * lines are blanked, not removed, so line numbers stay true and a statement split across lines
- * (`DROP\n  TABLE`) still matches, as it did when the whole file was read.
+ * The SQL a migration runs: every line outside a Down section, `--` comment lines (markers included)
+ * blanked — Prisma labels its statements `-- DropIndex`. Skipped lines are blanked, not removed, so
+ * line numbers stay true and a statement split across lines (`DROP\n  TABLE`) still matches, as it
+ * did when the whole file was read. `sections[i]` = the section line i+1 sits in.
  */
-function sqlDestructive(text) {
+function sqlUpText(text) {
   let section = 'pre';
   const sections = [];
   const kept = String(text).split('\n').map((l) => {
     if (SQL_DOWN_MARKER.test(l)) section = 'down';
     else if (SQL_UP_MARKER.test(l)) section = 'up';
     sections.push(section);
-    // `--` comment lines (markers included) are blanked too: Prisma labels its statements `-- DropIndex`.
     return section === 'down' || /^\s*--/.test(l) ? '' : l;
   });
-  const joined = kept.join('\n');
-  const m = SQL_DESTRUCTIVE.exec(joined);
-  if (!m) return null;
-  const line = joined.slice(0, m.index).split('\n').length;
-  return { statement: m[0].replace(/\s+/g, ' '), line, inUp: sections[line - 1] === 'up' };
+  return { joined: kept.join('\n'), sections };
+}
+
+// #709: SQLite cannot widen a CHECK or change a column's type in place, so the documented way
+// (sqlite.org/lang_altertable.html, "other kinds of table schema changes") is a table REBUILD:
+//   CREATE TABLE t_new (…); INSERT INTO t_new (…) SELECT … FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t;
+// Every row is copied before the drop, so the drop and the rename lose nothing. Read as additive only
+// in that exact shape, and fails CLOSED on anything that could lose a row: a WHERE/JOIN/LIMIT or any
+// other tail after `FROM t`, `SELECT DISTINCT`, `INSERT OR IGNORE|REPLACE` (both skip or merge rows
+// on a stricter constraint), a TEMP table (gone at the end of the session), statements out of order,
+// or an INSERT column list whose length differs from the SELECT list. One thing the file cannot show:
+// whether an explicit SELECT list names EVERY column of `t` — `t` was created by an earlier
+// migration — so such a rebuild is reported `columns: 'listed'` and the verdict says it was not
+// checked; only `SELECT *` (`columns: 'all'`) proves every column is copied.
+const SQL_IDENT = '(?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|[A-Za-z_][\\w$]*)';
+const SQL_NAME = `((?:${SQL_IDENT}\\s*\\.\\s*)?${SQL_IDENT})`;
+const SQL_REBUILD = {
+  create: new RegExp(`\\bCREATE\\s+(TEMP\\s+|TEMPORARY\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${SQL_NAME}`, 'gi'),
+  insert: new RegExp(`\\bINSERT\\s+INTO\\s+${SQL_NAME}\\s*(?:\\(([^)]*)\\))?\\s*SELECT\\s+([^;]*?)\\s+FROM\\s+${SQL_NAME}\\s*(?=;|$)`, 'gi'),
+  drop: new RegExp(`\\bDROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?${SQL_NAME}`, 'gi'),
+  rename: new RegExp(`\\bALTER\\s+TABLE\\s+${SQL_NAME}\\s+(RENAME)\\s+TO\\s+${SQL_NAME}`, 'gi'),
+};
+
+/** #709: an SQLite identifier as one comparable key — schema prefix, quoting and case dropped. */
+function sqlKey(name) {
+  const parts = String(name).split('.');
+  return parts[parts.length - 1].trim().replace(/^["`[]|["`\]]$/g, '').toLowerCase();
+}
+
+/** #709: a SELECT or column list split on its top-level commas (a call's own commas stay inside). */
+function sqlListItems(list) {
+  const items = [];
+  let depth = 0; let cur = '';
+  for (const ch of String(list)) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    if (ch === ',' && depth === 0) { items.push(cur); cur = ''; } else cur += ch;
+  }
+  items.push(cur);
+  return items.map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * #709: every complete SQLite table rebuild in `joined` (sqlUpText's output) —
+ * [{ table, line, columns: 'all'|'listed', drop, rename }]: `drop`/`rename` are the offsets of the
+ * `DROP` and `RENAME` keywords SQL_DESTRUCTIVE would otherwise match, `line` the 1-based line of the
+ * drop. Pure; a shape it does not recognise is simply not listed, so its statements stay destructive.
+ */
+function sqlRebuilds(joined) {
+  const all = (re) => [...String(joined).matchAll(new RegExp(re.source, re.flags))];
+  const creates = all(SQL_REBUILD.create).filter((m) => !m[1]).map((m) => ({ at: m.index, name: sqlKey(m[2]) }));
+  const inserts = all(SQL_REBUILD.insert).map((m) => ({ at: m.index, into: sqlKey(m[1]), cols: m[2], select: m[3], from: sqlKey(m[4]) }));
+  const drops = all(SQL_REBUILD.drop).map((m) => ({ at: m.index, name: sqlKey(m[1]) }));
+  const renames = all(SQL_REBUILD.rename).map((m) => ({ at: m.index, kw: m.index + m[0].search(/RENAME/i), from: sqlKey(m[1]), to: sqlKey(m[3]) }));
+  const out = [];
+  for (const d of drops) {
+    const t = d.name;
+    for (const r of renames) {
+      if (r.at < d.at || r.to !== t || r.from === t) continue;
+      const fresh = r.from;
+      const copy = inserts.find((i) => i.into === fresh && i.from === t && i.at < d.at
+        && creates.some((c) => c.name === fresh && c.at < i.at));
+      if (!copy) continue;
+      const select = copy.select.trim();
+      if (/^(DISTINCT|ALL)\b/i.test(select)) continue;
+      const star = new RegExp(`^(?:${SQL_IDENT}\\s*\\.\\s*)?\\*$`).test(select);
+      if (!star && copy.cols !== undefined && sqlListItems(copy.cols).length !== sqlListItems(select).length) continue;
+      out.push({ table: t, line: joined.slice(0, d.at).split('\n').length, columns: star ? 'all' : 'listed', drop: d.at, rename: r.kw });
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * The first destructive SQL statement outside a Down section — `{ statement, line, inUp }` (1-based
+ * line in the original file; `inUp` = an Up marker opened the section it sits in) — or null. #709: the
+ * DROP and RENAME of a complete SQLite table rebuild (sqlRebuilds) are not destructive; any other
+ * destructive statement in the same file still is.
+ */
+function sqlDestructive(text) {
+  const { joined, sections } = sqlUpText(text);
+  const exempt = new Set(sqlRebuilds(joined).flatMap((r) => [r.drop, r.rename]));
+  for (const m of joined.matchAll(new RegExp(SQL_DESTRUCTIVE.source, 'gi'))) {
+    if (exempt.has(m.index)) continue;
+    const line = joined.slice(0, m.index).split('\n').length;
+    return { statement: m[0].replace(/\s+/g, ' '), line, inUp: sections[line - 1] === 'up' };
+  }
+  return null;
 }
 
 function laravelUpBody(text) {
@@ -1006,6 +1090,12 @@ function schemaVerdictCore(changes, since, declared, layout, none, missing) {
     .filter((c) => String(c.status || '').charAt(0) === 'A' && c.path.endsWith('.php'))
     .map((c) => ({ name: base(c.path), adds: laravelColumnEvents(laravelUpBody(String(c.content || ''))).filter((e) => e.kind === 'add').map((e) => `${e.table}.${e.column}`) }));
   const addedBefore = (p) => laravelAdds.filter((a) => a.name < base(p)).flatMap((a) => a.adds);
+  // #709: every SQLite table rebuild read as additive, named in the verdict — never silently.
+  const rebuilds = [];
+  // `lineOf` maps a line of `text` to the file's own line — a declared schema file is read by its added lines.
+  const noteRebuilds = (path, text, lineOf = (n) => n) => {
+    for (const r of sqlRebuilds(sqlUpText(text).joined)) rebuilds.push({ path, ...r, line: lineOf(r.line) });
+  };
   for (const c of migrations) {
     const st = String(c.status || '').charAt(0);
     if (st !== 'A') { findings.push(`${c.path}: ${st === 'D' ? 'deleted' : st === 'R' ? 'renamed' : 'edited'} — an existing migration was rewritten`); continue; }
@@ -1017,21 +1107,31 @@ function schemaVerdictCore(changes, since, declared, layout, none, missing) {
       if (SQL_DOWN_FILE.test(c.path)) continue;
       const m = sqlDestructive(text);
       if (m) findings.push(`${c.path}:${m.line}: \`${m.statement}\`${m.inUp ? ' in the Up section' : ''}`);
+      noteRebuilds(c.path, text);
     }
   }
   for (const c of schemaFiles) {
     const f = schemaFileFinding(c);
     if (f) findings.push(f);
+    else if (Array.isArray(c.added)) noteRebuilds(c.path, c.added.map((l) => l.text).join('\n'), (n) => (c.added[n - 1] ? c.added[n - 1].line : '?'));
+    else if (typeof c.content === 'string') noteRebuilds(c.path, c.content);
   }
   if (findings.length) {
-    return { ok: false, detail: `destructive schema change since ${since} — a release carrying one is a human's to cut (CONVENTIONS.md §6, Switched epics rule 5): ${findings.join('; ')}` };
+    // `destructive` (#709): a measured destructive finding — not a failed read, not a declaration
+    // contradiction — the one refusal a recorded human decision can clear on route deploy-tag-fast.
+    return { ok: false, destructive: true, detail: `destructive schema change since ${since} — a release carrying one is a human's to cut (CONVENTIONS.md §6, Switched epics rule 5): ${findings.join('; ')}` };
   }
   const read = [
     ...(migrations.length ? [`${migrations.length} migration file(s) added`] : []),
     ...(schemaFiles.length ? [`declared schema file(s) changed (${schemaFiles.map((c) => c.path).join(', ')}), the SQL they added read`] : []),
   ].join(' and ');
-  if (unread.length) return notChecked(`${read} since ${since}, none destructive — but ${unreadWhy()}`);
-  return { ok: true, detail: `${read} since ${since}, none destructive (${scope})` };
+  const rebuilt = rebuilds.length ? ` — ${rebuilds.length} SQLite table rebuild(s) read as additive (every row copied before the drop): ${rebuilds.map((r) => `${r.path}:${r.line} \`${r.table}\``).join(', ')}` : '';
+  const listed = rebuilds.filter((r) => r.columns === 'listed');
+  if (unread.length) return notChecked(`${read} since ${since}, none destructive${rebuilt} — but ${unreadWhy()}`);
+  if (listed.length) {
+    return notChecked(`${read} since ${since}, none destructive${rebuilt} — but ${listed.map((r) => `\`${r.table}\``).join(', ')} ${listed.length === 1 ? 'is' : 'are'} copied by an explicit column list, and whether it names every column of the old table is not read here (that table was created by an earlier migration); a column the copy leaves out is dropped, so a person reads it before the final — \`SELECT * FROM <table>\` is read as copying every column (#709)`);
+  }
+  return { ok: true, detail: `${read} since ${since}, none destructive${rebuilt} (${scope})` };
 }
 
 /**
@@ -1342,7 +1442,19 @@ function decide(facts) {
     add('on-trunk', false, 'a shallow checkout cannot answer whether the commit is on main (nor find the last final tag) — fetch full history (fetch-depth: 0) and re-run');
   }
 
-  for (const [condition, verdict] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
+  // #709: on route deploy-tag-fast no person can cut by hand — the route tags only from the release
+  // workflow, so the deploy runs in the same run — and "a destructive schema change is a person's
+  // decision" (§6 contract item 1) had no act that could make it. The act is the migration grant on
+  // the version's tracking issue: a person, through COLAB_HUMAN=1, bound to this version. A MEASURED
+  // destructive finding (never a failed read, never a declaration contradiction) with that grant live
+  // passes, and the row says whose decision cleared it. Without the grant it refuses exactly as before,
+  // and migration-grant's hand-off below names the one command.
+  let schema = f.schema;
+  const granted = fast && f.migrations && f.migrations.ok && f.migrations.granted;
+  if (schema && !schema.ok && schema.destructive && !schema.unread && granted) {
+    schema = { ok: true, detail: `${schema.detail} — cleared by a person's decision: the migration grant on the tracking issue #${granted}${v.ok ? ` for ${v.version}` : ''} (route deploy-tag-fast, CONVENTIONS.md §6 contract item 4)` };
+  }
+  for (const [condition, verdict] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', schema], ['switch-dependencies', f.switches]]) {
     if (!verdict) add(condition, false, 'not measured', true);
     else {
       add(condition, verdict.ok, verdict.detail, isUnread(verdict));
@@ -1438,6 +1550,7 @@ function tagMessage(verdict, { sha, lastFinal, checkedBy }) {
 }
 
 module.exports = {
+  sqlRebuilds, sqlUpText,
   CONDITIONS, FAST_CONDITIONS, STANDING_CONDITIONS, BUMPS, MIGRATION_FILE, RELEASE_BRANCH, HOLD_LABEL,
   isFastRoute, isLibraryRoute, decideManifestVersion, spacingVerdict, holdsVerdict, migrationHandoff,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,

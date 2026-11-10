@@ -603,7 +603,9 @@ function migrationGrantVerdictCore({ paths, grant, since, layout, none, missing 
     return { ok: true, detail: `no migration file changed since ${since || 'the first commit'}` };
   }
   const list = paths.join(', ');
-  if (grant && grant.ok) return { ok: true, detail: `${paths.length} migration file(s) since ${since || 'the first commit'} (${list}), granted on the tracking issue #${grant.issue}` };
+  // `granted` (#709): the tracking issue whose live grant cleared it — what lets route deploy-tag-fast
+  // read the same human decision as clearing a destructive schema change (release-cut.js decide()).
+  if (grant && grant.ok) return { ok: true, granted: grant.issue, detail: `${paths.length} migration file(s) since ${since || 'the first commit'} (${list}), granted on the tracking issue #${grant.issue}` };
   return {
     ok: false,
     detail: `${paths.length} migration file(s) since ${since || 'the first commit'} (${list}) and no migration grant on the release${grant && grant.reason ? ` (${grant.reason})` : ''} — an automatically deployed final never carries an ungranted migration; a human finalizes, or grants it first (COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch <version>)`,

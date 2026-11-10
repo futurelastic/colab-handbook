@@ -187,6 +187,18 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
   **not checked**. Beside a path or default directory that does exist, the existing ones are read
   as usual and every detail names the missing ones; the verdict does not change. The audit fails
   the same missing path at HEAD, before a release meets it.
+  **An SQLite table rebuild is additive (#709).** SQLite cannot widen a `CHECK` or change a
+  column's type in place, so the documented way is to rebuild the table: `CREATE TABLE t_new (…)`,
+  `INSERT INTO t_new … SELECT … FROM t`, `DROP TABLE t`, `ALTER TABLE t_new RENAME TO t`. Every row
+  is copied before the drop, so `schema-additive` reads that drop and that rename as part of the
+  rebuild, not as destructive, and names the rebuild in its detail. Only that exact shape counts. A
+  copy that could lose a row is still destructive: a `WHERE`, `JOIN` or `LIMIT` after `FROM t`,
+  `SELECT DISTINCT`, `INSERT OR IGNORE|REPLACE`, a `TEMP` table, statements out of order, or an
+  `INSERT` column list whose length differs from the `SELECT` list. The file cannot show one thing:
+  whether an explicit `SELECT` list names **every** column of `t`, because `t` was created by an
+  earlier migration. So a rebuild copied by a column list prints **not checked** (a column it leaves
+  out is dropped, and a person reads it before the final), while `SELECT * FROM t` is a ✓. Any
+  other destructive statement in the same file still refuses.
 - **Every automatic deploy says whose choice made it so.** The final tag's message names the
   grant and its decision issue, and who ruled it.
 
@@ -220,6 +232,15 @@ every gate that does not depend on one:
   migration since the last final** unless the version's tracking issue carries a migration grant
   — otherwise the run refuses, opens `release: vX.Y.Z` if needed, and posts the one human command
   (`COLAB_HUMAN=1 colab migration-grant <N> --branch vX.Y.Z`); the next green run after it tags.
+  **That grant is also the human path for a destructive schema change (#709).** On this route a
+  person cannot cut by hand, so `schema-additive` refusing a destructive change used to stall the
+  release with nothing a person could do, and every later trunk change waited behind it. Now a
+  measured destructive finding with the version's migration grant live **passes**, and the row
+  names the grant that cleared it (the tag message records that too). The run that tags is still
+  the release workflow's, so the deploy job runs in the same run. A finding the check could not
+  read, or a `migrations: none` contradiction, is never cleared this way. Without the grant the
+  refusal stands, and the hand-off comment says the grant also clears the destructive change.
+  Grant only after reading the migration: the grant **is** the person's decision §6 asks for.
   Where no migration could be read at all (#671), the refusal names the declaration instead — a
   directory, or the inline schema file (#673) — since a grant has nothing to clear until one
   exists. The tag message's `Checked by:` line names the colab that decided (#673), so two
