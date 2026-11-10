@@ -28,7 +28,11 @@ process.on('exit', () => { for (const dir of TMP) { try { fs.rmSync(dir, { recur
 
 // #367: `visibility` is what the fixture `gh repo view` answers — null makes that read FAIL, the
 // shape of a non-GitHub remote or an offline gh. `yml` overrides the descriptor (e.g. to add room:).
-function fixture(codeownersText = CORE_OWNED, { visibility = 'PRIVATE', yml = YML } = {}) {
+// #701: origin is configured as a GitHub url (rewritten to the local bare repo by insteadOf), and
+// the fake answers `visibility` only when that repo is NAMED; `upstream` adds a public upstream
+// remote, which a bare `gh repo view` reads instead — a private fork of a public repo.
+const ORIGIN_URL = 'https://github.com/acme/app.git';
+function fixture(codeownersText = CORE_OWNED, { visibility = 'PRIVATE', yml = YML, upstream = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-core-review-'));
   TMP.push(root);
   const origin = path.join(root, 'origin.git');
@@ -43,7 +47,9 @@ function fixture(codeownersText = CORE_OWNED, { visibility = 'PRIVATE', yml = YM
   g(work, 'config', 'user.email', 'test@example.invalid');
   g(work, 'config', 'user.name', 'core-review test');
   g(work, 'config', 'core.hooksPath', path.join(root, '.nohooks'));
-  g(work, 'remote', 'add', 'origin', origin);
+  g(work, 'remote', 'add', 'origin', ORIGIN_URL);
+  g(work, 'config', `url.${origin}.insteadOf`, ORIGIN_URL);
+  if (upstream) g(work, 'remote', 'add', 'upstream', 'https://github.com/up-org/app.git');
   fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
   fs.writeFileSync(path.join(work, '.github', 'project.yml'), yml);
   fs.writeFileSync(path.join(work, '.github', 'workflows', 'ci.yml'), 'on: push\n');
@@ -65,7 +71,8 @@ function fixture(codeownersText = CORE_OWNED, { visibility = 'PRIVATE', yml = YM
     'if [ "$1" = "--version" ]; then echo "gh version 0.0.0 (fixture)"; exit 0; fi',
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo "Logged in (fixture)" >&2; exit 0; fi',
     'if [ "$1" = "api" ] && [ "$2" = "user" ]; then echo "me"; exit 0; fi',
-    ...(visibility ? [`if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "${visibility}"; exit 0; fi`] : []),
+    ...(visibility ? [`if [ "$1" = "repo" ] && [ "$2" = "view" ] && [ "$3" = "acme/app" ]; then echo "${visibility}"; exit 0; fi`] : []),
+    ...(visibility && upstream ? ['if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "PUBLIC"; exit 0; fi'] : []),
     'if [ "$1" = "run" ] && [ "$2" = "list" ]; then',
     '  BR=""; shift 2',
     '  while [ $# -gt 0 ]; do if [ "$1" = "--branch" ]; then BR="$2"; fi; shift; done',
@@ -287,6 +294,17 @@ test('#367 (e): --dry and --dry --json say which way it will go, and change noth
     assert.match(prose.out, include ? /Machine trailer: Machine: [a-z0-9-]+ — repository is private/ : /Machine trailer: omitted — repository is public/);
     assert.strictEqual(originMain(fx), before, '--dry must not move origin');
   }
+});
+
+test('#701: a private fork of a public upstream — --dry --json reads the fork PRIVATE and keeps the trailer', () => {
+  const fx = fixture(CORE_OWNED, { visibility: 'PRIVATE', upstream: true });
+  branch(fx, 'feat/app-108', 108, { 'f.js': 'x\n' });
+  const j = JSON.parse(colab(fx, ['ship', '--branch', 'feat/app-108', '--repo', fx.work, '--dry', '--json']).out);
+  assert.strictEqual(j.machineTrailerDecision.visibility, 'PRIVATE');
+  assert.strictEqual(j.machineTrailerDecision.include, true);
+  assert.strictEqual(j.machineTrailerDecision.failClosed, false);
+  assert.match(j.machineTrailer, /^Machine: /);
+  assert.match(log(fx), /^repo view acme\/app --json visibility/m);
 });
 
 // ---- #351 (ruling A): a trunk-direct unit touching a core path is refused a close -------------

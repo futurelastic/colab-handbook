@@ -54,7 +54,10 @@ function fixture(script) {
   g(work, 'config', 'user.email', 'test@example.invalid');
   g(work, 'config', 'user.name', 'colab decision test');
   g(work, 'config', 'core.hooksPath', path.join(root, '.nohooks'));
-  g(work, 'remote', 'add', 'origin', origin);
+  // #701: a GitHub url rewritten to the local bare repo — the visibility read names the configured
+  // repo, and a bare local path names none (it would read "could not read").
+  g(work, 'remote', 'add', 'origin', 'https://github.com/acme/app.git');
+  g(work, 'config', `url.${origin}.insteadOf`, 'https://github.com/acme/app.git');
   fs.mkdirSync(path.join(work, '.github'), { recursive: true });
   fs.writeFileSync(path.join(work, '.github', 'project.yml'), PROJECT_YML);
   fs.writeFileSync(path.join(work, 'f.txt'), 'base\n');

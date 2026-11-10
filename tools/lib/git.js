@@ -735,9 +735,17 @@ function ghOpenPrs(repo) {
  * #367: the forge's visibility for this repo — "PUBLIC" | "PRIVATE" | "INTERNAL" — or null when it
  * could not be read (no gh, no GitHub remote, offline). Null is "could not read", never "private":
  * tools/lib/machine-trailer.js fails closed on it.
+ *
+ * #701: the repo is NAMED — the resolved remote's slug (tracker-github `pinnedRepo`, the remote a
+ * squash is pushed to). A bare `gh repo view` ignores the GH_REPO pin every other call carries
+ * (#658: it takes a positional repo, not -R), so on a private fork with a public `upstream` it read
+ * the upstream and reported PUBLIC. No slug (a local-path remote, an SSH alias, a host gh does not
+ * serve) → null, never gh's own guess.
  */
 function ghRepoVisibility(repo) {
-  const r = gh(['repo', 'view', '--json', 'visibility', '-q', '.visibility'], { cwd: repo });
+  const slug = require('./tracker-github').pinnedRepo(repo);
+  if (!slug) return null;
+  const r = gh(['repo', 'view', slug, '--json', 'visibility', '-q', '.visibility'], { cwd: repo });
   if (!r.ok) return null;
   const v = (r.stdout || '').trim().toUpperCase();
   return /^[A-Z]+$/.test(v) ? v : null;

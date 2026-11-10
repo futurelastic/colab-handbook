@@ -203,3 +203,48 @@ test('#658: exec pins GH_REPO to the resolved remote, and leaves an explicit --r
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- #701: the visibility read names the pushed-to repo ---------------------------------------
+
+test('#701: ghRepoVisibility on a private fork of a public upstream reads the fork, by name', { skip: process.platform === 'win32' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-visibility-fork-'));
+  const prev = { PATH: process.env.PATH, GH_REPO: process.env.GH_REPO, GH_HOST: process.env.GH_HOST };
+  try {
+    const repo = path.join(dir, 'repo');
+    execFileSync('git', ['init', '-q', repo]);
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:own-org/app.git'], { cwd: repo });
+    execFileSync('git', ['remote', 'add', 'upstream', 'https://github.com/up-org/app.git'], { cwd: repo });
+    const log = path.join(dir, 'gh.log');
+    // gh's own default on a fork is the upstream (PUBLIC); only the fork NAMED reads PRIVATE.
+    fs.writeFileSync(path.join(dir, 'gh'), [
+      '#!/bin/sh', `echo "$*" >> "${log}"`,
+      'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [ "$3" = "own-org/app" ]; then echo PRIVATE; exit 0; fi',
+      'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo PUBLIC; exit 0; fi',
+      'exit 1',
+    ].join('\n') + '\n', { mode: 0o755 });
+    process.env.PATH = `${dir}:${prev.PATH}`;
+    delete process.env.GH_REPO; delete process.env.GH_HOST;
+    git._resetRemoteCache(); gh._resetPinCache();
+    assert.strictEqual(git.ghRepoVisibility(repo), 'PRIVATE');
+    assert.deepStrictEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), ['repo view own-org/app --json visibility -q .visibility']);
+
+    // An explicit GH_REPO in the environment does not move the read off the pushed-to repo.
+    process.env.GH_REPO = 'up-org/app';
+    gh._resetPinCache();
+    assert.strictEqual(git.ghRepoVisibility(repo), 'PRIVATE');
+    delete process.env.GH_REPO;
+
+    // No slug to name — a local-path origin, an SSH alias — is "could not read" (null), and gh is never asked.
+    for (const url of [path.join(dir, 'origin.git'), 'git@my-alias:own-org/app.git']) {
+      fs.writeFileSync(log, '');
+      execFileSync('git', ['remote', 'set-url', 'origin', url], { cwd: repo });
+      git._resetRemoteCache(); gh._resetPinCache();
+      assert.strictEqual(git.ghRepoVisibility(repo), null, url);
+      assert.strictEqual(fs.readFileSync(log, 'utf8'), '', url);
+    }
+  } finally {
+    for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    git._resetRemoteCache(); gh._resetPinCache();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
