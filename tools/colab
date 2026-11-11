@@ -11967,13 +11967,13 @@ function descriptorHolds(doc) {
  * caller can build the --dry --json `ciGrant`/`ciCure` payloads from the SAME verdicts the prose
  * detail string was built from — see ciGrantPayload/ciCurePayload, below.
  */
-function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk, branch = null) {
+function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk, branch = null, docsOnlyThunk = null) {
   const name = `${target === trunk ? 'trunk' : 'line'} CI green`;
   const r = readCiVerdict(repoAbs, gh, target, trunk);
   // #678: on a forge the engine map names, the verdict is final — the #482 no-workflow door counts
   // `.github/workflows` and reads the branch through gh, neither of which describes a forge's CI.
   if (forgeCi(repoAbs)) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null };
-  const nw = noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch);
+  const nw = noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch, docsOnlyThunk);
   if (nw) return { name, ...nw, grantVerdict: null, cureVerdict: null };
   if (r.final) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null };
   return applyRedTrunkExemptions({ name, ...r.verdict }, target, trunk, r.run.sha, grantThunk, cureThunk);
@@ -11991,14 +11991,27 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk, branch =
  * real gap (CI not wired, or never started) and still blocks exactly as before. Runs ahead of the
  * #413 grace window too: a run that can never exist is not worth waiting ten minutes for. Returns null when
  * the door does not apply, or a `{ok, class, detail}` verdict when it does.
+ *
+ * #711: a DOCS-ONLY candidate (#606's measurement, secret check included — `docsOnlyThunk` returns
+ * shipDocsOnlyCi's shape, called lazily, only once the trunk is known to have no workflow) passes here
+ * without a run of its own: #606 already ruled that run not required, and a docs-only branch on a
+ * no-workflow trunk can never draw one. Only for a branch on the remote (the same precondition as the
+ * branch-run read). A failed secret check, or a branch that is not docs-only, falls through to the
+ * branch's own run as before.
  */
-function noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch) {
+function noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch, docsOnlyThunk = null) {
   if (target !== trunk || !branch || !r.run || r.run.status !== 'none' || !r.run.sha || r.verdict.ok) return null;
   if (trunkWorkflowFiles(repoAbs, r.run.sha) !== 0) return null;
   const at = `${trunk}@${shortSha(r.run.sha)}`;
   const own = git.ghRunForSha(repoAbs, branch);
   // Branch not on the remote, or its runs unreadable: nothing to decide with — the prior verdict stands.
+  // #711 keeps this precondition: the docs-only pass below is for a pushed candidate only.
   if (!own) return null;
+  const dc = docsOnlyThunk ? docsOnlyThunk() : null;
+  if (dc && dc.applies && dc.scan && dc.scan.ok) {
+    return { ok: true, class: null,
+      detail: `none — ${at} has no repo-owned workflow, so nothing there can be red (#482); no workflow on trunk; docs-only branch, CI not required (${dc.files} files, secret check clean — #606)${excludedRunsNote(r.run)}` };
+  }
   const ownAt = own.sha ? `${branch}@${shortSha(own.sha)}` : branch;
   if (own && own.status === 'completed' && own.conclusion === 'success') {
     const n = own.runCount == null ? 1 : own.runCount;
@@ -13206,7 +13219,8 @@ function cmdShipDryJson(opts) {
   const gh = isGhUsable(repoAbs);
   const ciResultJson = shipCiCheck(repoAbs, gh, target, trunk,
     (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
-    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
+    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch,
+    () => shipDocsOnlyCi(repoAbs, doc, target, sess.branch)); // #711: the #482 door learns the #606 measurement
   ciGrantPayloadVal = ciGrantPayload(ciResultJson);
   ciCurePayloadVal = ciCurePayload(ciResultJson);
   checks.push({ name: ciResultJson.name, ok: ciResultJson.ok, class: ciResultJson.class, detail: ciResultJson.detail });
@@ -14516,7 +14530,8 @@ function cmdShip(argv) {
   // ordinary green-trunk ship makes zero extra `gh` reads for a door nobody needs.
   const ciResult = shipCiCheck(repoAbs, gh, target, trunk,
     (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
-    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
+    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch,
+    () => shipDocsOnlyCi(repoAbs, doc, target, sess.branch)); // #711: the #482 door learns the #606 measurement
   const ciOk = ciResult.ok;
   checks.push([ciResult.ok ? '✓' : '✗', ciResult.name, ciResult.detail]);
 
@@ -15058,7 +15073,8 @@ function cmdShip(argv) {
   if (gh || forgeCi(repoAbs)) { // #678: a forge's CI is re-read at B1 exactly as GitHub's is
     const measureB1 = () => shipCiCheck(repoAbs, gh, target, trunk,
       (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
-      (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
+      (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch,
+      () => shipDocsOnlyCi(repoAbs, doc, target, sess.branch)); // #711, same door as the table row
     let ciResultB1 = measureB1();
     // #538: the table admitted this branch through a door (cure or grant) at red sha X, and B1 —
     // seconds later, at the SAME red sha — refused. Nothing the door judges moved (trunk's head is

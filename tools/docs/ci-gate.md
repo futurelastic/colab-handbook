@@ -32,7 +32,10 @@ The rule: [CONVENTIONS.md §4](../../CONVENTIONS.md#4-branches-and-commits), and
   adoption branch is what adds CI — can never draw a run, so nothing there can be red: its
   `none` gets the *Branch CI* treatment for a run that cannot arrive, and the candidate's own
   run at its remote head decides (green passes; red, in flight or absent still refuses). A
-  trunk that has workflows but no run at its sha is a real gap and still refuses.
+  **docs-only** candidate (#606's measurement, secret check included) needs no run at all on
+  such a trunk (#711): it can never draw one, and #606 already says it is not required, so
+  the row passes naming both. A trunk that has workflows but no run at its sha is a real gap
+  and still refuses.
   Each workflow is then judged by its **newest** run at the sha (#461): an earlier attempt of
   the *same* workflow that a later one superseded is set aside and named in the detail, so
   skipped `workflow_run` attempts no longer hold the sha red. A newer run decides in both
