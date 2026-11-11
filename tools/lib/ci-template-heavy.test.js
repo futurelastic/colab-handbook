@@ -226,7 +226,7 @@ test('report: an unreadable issue list files nothing and fails the job', () => {
 
 test('report: only on a scheduled run whose suite failed', () => {
   const job = yaml.parse(read('ci-node-heavy.yml')).jobs.report;
-  assert.strictEqual(job.if, "${{ always() && github.event_name == 'schedule' && needs.heavy.result == 'failure' }}");
+  assert.strictEqual(job.if, "${{ always() && github.event_name == 'schedule' && (needs.heavy.result == 'failure' || needs.secrets.result == 'failure') }}");
   assert.deepStrictEqual(job.permissions, { issues: 'write' });
 });
 

@@ -47,6 +47,8 @@ on:
 permissions: {}
 
 env:
+  # EDIT: the same pin as ci.yml's GITLEAKS_VERSION — bump both together (job `secrets`, #716).
+  GITLEAKS_VERSION: "8.30.1"
   # EDIT: this repo's trunk (`trunk:` in .github/project.yml). A schedule always starts on the
   # default branch; the nightly tests THIS branch's tip.
   TRUNK: main
@@ -251,13 +253,145 @@ jobs:
       # EDIT: integration, browser/e2e or load jobs go here, or as jobs of their own with
       # `needs: plan` and the same `if:` and checkout ref as this one.
 
+  # The full-history secret scan (#716). The light lane's scan reads only the commits its run
+  # brings; this one reads every commit trunk's tip can reach — a secret committed and removed
+  # before this repo scanned in CI, or one a newer GITLEAKS_VERSION's rules now catch. It blocks
+  # no merge: a red nightly files the trunk-red issue below, and a red official build holds that
+  # release, as the suite does. `HEAD` only, never `git log --all`: a finding on a branch is that
+  # branch's own run's to report.
+  secrets:
+    name: Secret scan, full history (gitleaks)
+    needs: plan
+    if: ${{ needs.plan.outputs.run == 'true' }}
+    runs-on: ubuntu-latest # EDIT: the same label as ci.yml's gitleaks job.
+    timeout-minutes: 30 # the whole history, not a range. EDIT: the default is 360.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0 # every commit the tip reaches
+          persist-credentials: false
+
+      # The light lane's restore and install steps, verbatim: keep them in step when you edit either.
+      # Kept between jobs (#696) — GitHub-hosted only: a fresh VM has nothing on disk, so the
+      # binary comes back from here and the install step below downloads nothing.
+      #   - Self-hosted → off. A persistent runner keeps its tool cache on disk already, and a
+      #     remote cache on top was measured as a loss, not a saving (#512).
+      #   - Keyed on the pin and the platform: a version bump is a miss. The post step saves
+      #     only when the job passes, so a failed download is never what gets cached.
+      # A NEW step, skipped on self-hosted. "Install gitleaks (pinned release binary)" keeps
+      # its name: handbook-sync recognises a copy of this job by it.
+      # EDIT: self-hosted runners are already off; to turn it off everywhere, delete this step.
+      - name: Restore gitleaks cache
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/gitleaks/${{ env.GITLEAKS_VERSION }}
+          key: gitleaks-${{ env.GITLEAKS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install gitleaks (pinned release binary)
+        env:
+          # Authenticated (#698). Under load GitHub sheds ANONYMOUS release downloads first:
+          # measured 2026-11-09, ~90 min of instant 504s from github.com/…/releases/download,
+          # while the API asset path below answered 200 with the same file. The job's own token
+          # is enough — reading a public release needs an identity, not a permission.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Deliberately NOT gitleaks/gitleaks-action@v2: that action requires a paid
+          # GITLEAKS_LICENSE for repositories owned by an organization (free only for
+          # personal repos). The release binary itself is MIT and has no such gate.
+          # Repos also carry a local pre-commit gitleaks hook; this is the second layer.
+          # The asset is OS/arch-specific, so resolve both from uname instead of
+          # assuming the GitHub-hosted default: a hardcoded linux_x64 binary on a
+          # macOS self-hosted runner is an ELF the kernel cannot exec, and the step
+          # fails with exit 126 rather than anything mentioning the platform.
+          case "$(uname -s)" in
+            Darwin) os=darwin ;;
+            Linux)  os=linux ;;
+            *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            arm64|aarch64) arch=arm64 ;;
+            x86_64|amd64)  arch=x64 ;;
+            *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
+          esac
+          # Kept between jobs (#696): a pinned version is downloaded once per runner, not on
+          # every run. A release download can answer 504 for hours (measured: 20 of 20 tries),
+          # which outlasts any retry, so the binary has to be on the runner already.
+          # Into the runner's tool cache, not /usr/local/bin: no sudo, no global write — the
+          # per-runner directory setup-node and setup-python install into. A persistent
+          # self-hosted runner keeps it on disk; a GitHub-hosted VM gets it back from the
+          # "Restore gitleaks cache" step above. The version is in the path, so a pin bump is a
+          # miss, never a stale binary. EDIT: an ephemeral self-hosted runner keeps neither and
+          # downloads on every run.
+          dir="${RUNNER_TOOL_CACHE:-$RUNNER_TEMP}/gitleaks/${GITLEAKS_VERSION}/${os}-${arch}"
+          if [ -x "$dir/gitleaks" ]; then
+            echo "gitleaks ${GITLEAKS_VERSION} already on this runner: $dir"
+          else
+            mkdir -p "$dir"
+            tmp="$(mktemp -d "$dir.XXXXXX")"
+            trap 'rm -rf "$tmp"' EXIT
+            asset="gitleaks_${GITLEAKS_VERSION}_${os}_${arch}.tar.gz"
+            sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+            # fetch <accept> <url> <file> — every request of this step, one curl line.
+            # --fail: on an HTTP error curl otherwise saves the error page and exits 0, and tar
+            # then fails with "not in gzip format", naming neither the download nor the host.
+            # --retry: a re-run during the same upstream error spends the one re-run branch CI
+            # allows, so a brief error is retried here first. A longer outage still fails, at
+            # curl, naming the status (#690).
+            # The token reaches api.github.com only: curl drops an -H Authorization header when
+            # the asset's 302 leads to another host, so the download CDN never sees it.
+            fetch() {
+              curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 10 --max-time 120 \
+                -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: $1" -o "$3" "$2"
+            }
+            # The API serves an asset by id, not by name, so look the ids up in the release. No jq:
+            # a self-hosted runner need not have it. Splitting on , { [ leaves one key per line
+            # whether the JSON comes pretty or compact; within an asset, "url" precedes "name". Were
+            # that order ever to change, the wrong file would arrive and the sha256 check below
+            # would refuse it — a loud failure, never a wrong binary.
+            fetch application/vnd.github+json \
+              "https://api.github.com/repos/gitleaks/gitleaks/releases/tags/v${GITLEAKS_VERSION}" "$tmp/release.json"
+            for f in "$asset" "$sums"; do
+              url="$(tr ',{[' '\n\n\n' < "$tmp/release.json" | awk -F'"' -v want="$f" '
+                $2 == "url" && $4 ~ /\/releases\/assets\/[0-9]+$/ { u = $4 }
+                $2 == "name" && $4 == want && !found { print u; found = 1 }')"
+              if [ -z "$url" ]; then
+                echo "::error::gitleaks release v${GITLEAKS_VERSION} has no asset $f"; exit 1
+              fi
+              fetch application/octet-stream "$url" "$tmp/$f"
+            done
+            # Verified before tar (#698): an error page, a truncated file or a wrong archive stops
+            # here, naming the file, instead of reaching tar — or, for a valid archive, the PATH.
+            want="$(awk -v f="$asset" '$2 == f { print $1 }' "$tmp/$sums")"
+            if command -v sha256sum >/dev/null; then got="$(sha256sum "$tmp/$asset" | awk '{ print $1 }')"
+            else got="$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }')"; fi # macOS self-hosted
+            if [ -z "$want" ]; then
+              echo "::error::$sums does not list $asset, so it cannot be verified"; exit 1
+            fi
+            if [ "$got" != "$want" ]; then
+              echo "::error::sha256 mismatch for $asset: got $got, $sums lists $want"; exit 1
+            fi
+            tar -xzf "$tmp/$asset" -C "$tmp" gitleaks
+            chmod +x "$tmp/gitleaks"
+            # One rename on one filesystem: a job sharing this tool cache sees no binary or a
+            # whole one, never half of one.
+            mv -f "$tmp/gitleaks" "$dir/gitleaks"
+          fi
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: gitleaks detect (full history)
+        run: gitleaks detect --source . --no-banner --log-opts=HEAD
+
   # A red NIGHTLY is a trunk finding, never a merge block: one open issue per lane. An open issue
   # with the same title suppresses a new one; an issue list that cannot be read files nothing and
   # fails this job, so a silent miss is never mistaken for "already reported".
   report:
     name: Report a red nightly
-    needs: [plan, heavy]
-    if: ${{ always() && github.event_name == 'schedule' && needs.heavy.result == 'failure' }}
+    needs: [plan, heavy, secrets]
+    if: ${{ always() && github.event_name == 'schedule' && (needs.heavy.result == 'failure' || needs.secrets.result == 'failure') }}
     runs-on: ubuntu-latest # EDIT: needs `gh`.
     timeout-minutes: 5
     permissions:
