@@ -20,6 +20,12 @@
  *   - its body holds no unticked checklist line. An unticked `- [ ]` on an epic is an item
  *     somebody listed and nobody filed as a sub-issue yet — the "two phases whose issues are not
  *     written yet" B2c's rule was protecting. It is reported, never closed over;
+ *   - its body states no `Done when` acceptance (#713). `file-issues` tells a filer to put an
+ *     epic's end state in a `Done when:` line, never a body checklist — so on an epic written to
+ *     that convention the unticked check above sees nothing, and a phase epic filed with only its
+ *     design child (the code children to be filed once the design is approved) read as spent the
+ *     moment that one child shipped. "Every filed child closed" says nothing about whether the
+ *     stated end state holds; that reading is the coordinator's, so ship proposes and never closes;
  *   - it is not a release tracking record (`<!-- colab:release …` body) — `colab release
  *     finalize` owns that record's lifecycle, not a child's ship.
  *
@@ -36,6 +42,8 @@
  *   children-open    at least one sub-issue is still open — the normal state of a live epic
  *   not-container    every child closed, but no `epic` label — report for a human
  *   unfiled-items    every child closed, but the body still lists unticked items — report
+ *   done-when        every child closed, but the body states `Done when` acceptance — ship posts
+ *                    a one-line proposal for the coordinator to check it and close (#713)
  *
  * Fail toward keeping open, the same asymmetry `group-labels.js` states for its own delete: a
  * container closed early buries unwritten work behind a closed issue nobody browses, while one
@@ -51,6 +59,14 @@ const RELEASE_RECORD_RE = /^\s*<!--\s*colab:release\b/;
 
 /** An UNTICKED GitHub checklist line anywhere in the body — `- [ ] …` / `* [ ] …`. */
 const UNTICKED_RE = /^\s*[-*]\s*\[ \]\s*(.+)$/;
+
+/**
+ * A `Done when` acceptance statement at the start of a line (#713): a heading (`## Done when`), a
+ * label line (`Done when:`, `**Done when:**`, `- Done when: …`), any case, `Done-when` too. Only at
+ * a line start, so prose that merely mentions the phrase mid-sentence does not count; a blockquote
+ * (`> Done when`) is a quotation, not this epic's own acceptance.
+ */
+const DONE_WHEN_RE = /^\s*(?:#{1,6}\s+)?(?:[-*+]\s+)?(?:\*\*|__)?done[ -]when\b/i;
 
 function labelNames(labels) {
   return (labels || []).map((l) => (l && typeof l === 'object' ? l.name : l)).map((n) => String(n));
@@ -68,6 +84,16 @@ function untickedItems(body) {
     if (m) out.push(m[1].trim());
   }
   return out;
+}
+
+/** Does the body state `Done when` acceptance outside fenced code? (#713) */
+function hasDoneWhen(body) {
+  let fenced = false;
+  for (const line of String(body || '').split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
+    if (!fenced && DONE_WHEN_RE.test(line)) return true;
+  }
+  return false;
 }
 
 /**
@@ -99,6 +125,7 @@ function classifyContainer(parent) {
   if (!labelNames(parent.labels).includes(EPIC_LABEL)) return { ...out, verdict: 'not-container' };
   const unticked = untickedItems(parent.body);
   if (unticked.length) return { ...out, unticked, verdict: 'unfiled-items' };
+  if (hasDoneWhen(parent.body)) return { ...out, verdict: 'done-when' };
   return { ...out, verdict: 'close' };
 }
 
@@ -120,6 +147,16 @@ function containerCloseComment({ child, sha, total, target }) {
   return `📦 Closed by colab ship — ${via}${at}; all ${total} sub-issue(s) are closed and the body lists no unticked item (#371).`;
 }
 
+/**
+ * The proposal comment posted on an epic whose verdict is `done-when` (#713) — the epic stays OPEN.
+ * One line, issue-specific only: which child emptied it, and what the coordinator checks next.
+ */
+function containerProposalComment({ child, sha, total, target }) {
+  const via = child ? `its last open sub-issue #${child} shipped` : 'its last open sub-issue closed';
+  const at = sha ? ` to ${target || 'trunk'} at ${sha}` : '';
+  return `📋 All ${total} sub-issue(s) closed — ${via}${at}. Left open: check \`Done when\` and close if met, or file the remaining work as sub-issues (#713).`;
+}
+
 /** One report line for a verdict that is NOT `close` but still worth a human's eye; null otherwise. */
 function containerFinding(c) {
   const n = c.number !== null ? `#${c.number}` : 'parent';
@@ -128,6 +165,8 @@ function containerFinding(c) {
       return `${n}: all ${c.total} sub-issue(s) closed, but it is not labelled \`epic\` — close it by hand if it is a container`;
     case 'unfiled-items':
       return `${n}: all ${c.total} sub-issue(s) closed, but ${c.unticked.length} unticked item(s) remain in its body — file them as sub-issues or tick them, then close`;
+    case 'done-when':
+      return `${n}: all ${c.total} sub-issue(s) closed, but its body states \`Done when\` — left open for the coordinator to check it`;
     case 'unknown':
       return `${n}: could not read the parent — container close skipped`;
     default:
@@ -173,7 +212,8 @@ function parentRelationFinding(rel) {
 }
 
 module.exports = {
-  EPIC_LABEL, RELEASE_RECORD_RE,
+  EPIC_LABEL, RELEASE_RECORD_RE, DONE_WHEN_RE,
   issueRepoSlug, parentRelation, parentRelationFinding,
-  untickedItems, classifyContainer, containerDeliveryLabels, containerCloseComment, containerFinding,
+  untickedItems, hasDoneWhen, classifyContainer, containerDeliveryLabels, containerCloseComment,
+  containerProposalComment, containerFinding,
 };

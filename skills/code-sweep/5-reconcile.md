@@ -61,6 +61,7 @@ Worktrees are only half of it. Also:
     --json number,body,subIssuesSummary \
     -q '.[] | select(.subIssuesSummary.total > 0 and .subIssuesSummary.completed == .subIssuesSummary.total)
             | select((.body // "") | test("(?m)^\\s*[-*]\\s*\\[ \\]") | not)
+            | select((.body // "") | test("(?im)^\\s*(#{1,6}\\s+)?([-*+]\\s+)?(\\*\\*|__)?done[ -]when\\b") | not)
             | select((.body // "") | test("^\\s*<!--\\s*colab:release") | not) | .number'
   ```
 
@@ -68,7 +69,9 @@ Worktrees are only half of it. Also:
   body only, so without it an unticked item further down slips through. Each number printed gets a comment naming the evidence (all K sub-issues closed, the
   last one and when), posted and closed in one step: `colab close <P> --comment "<that evidence>"`
   (#381 — a bare `gh issue close` would leave any claim on it and tell no observer). An epic that fails only
-  the unticked-item check is reported with the unticked lines, never closed. The same
+  the unticked-item check is reported with the unticked lines, never closed. An epic that
+  fails only the `Done when` check (#713) is read, not closed blind: close it with evidence
+  when what that line states holds, otherwise report it with the line. The same
   goes for a parent with all sub-issues closed but no `epic` label. A `delivery:*` label
   on any container is reported too (a container has no deliverable). Remove it only if
   the sweep was asked to reconcile labels.

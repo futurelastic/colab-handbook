@@ -59,6 +59,45 @@ test('unfiled-items: an unticked line is work somebody listed and nobody filed �
   assert.match(containerFinding(c), /1 unticked item/);
 });
 
+// ---- #713: an epic stating `Done when` acceptance is proposed, never auto-closed ---------------
+
+test('#713 done-when: every filed child closed, but the body states Done when — never closed', () => {
+  const c = classifyContainer(epic({
+    body: '## Goal\n\nPhase 2.\n\nDone when: the importer runs nightly with no manual step.\n',
+    subIssuesSummary: { total: 1, completed: 1 },
+  }));
+  assert.strictEqual(c.verdict, 'done-when');
+  assert.strictEqual(c.total, 1);
+  assert.match(containerFinding(c), /#40: all 1 sub-issue\(s\) closed, but its body states `Done when`/);
+});
+
+test('#713 hasDoneWhen: heading, label line, bold, bullet and hyphen forms; any case', () => {
+  for (const b of ['## Done when\n- x', 'Done when: x', '**Done when:** x', '- Done when: x', 'done-when: x', '### DONE WHEN']) {
+    assert.strictEqual(cc.hasDoneWhen(b), true, b);
+  }
+});
+
+test('#713 hasDoneWhen: a mid-sentence mention, a blockquote or a fenced example does not count', () => {
+  assert.strictEqual(cc.hasDoneWhen('We are done when it ships.'), false);
+  assert.strictEqual(cc.hasDoneWhen('> Done when: quoted from elsewhere'), false);
+  assert.strictEqual(cc.hasDoneWhen('Template:\n```md\nDone when: …\n```\n'), false);
+  assert.strictEqual(cc.hasDoneWhen(undefined), false);
+  assert.strictEqual(classifyContainer(epic({ body: 'We are done when it ships.' })).verdict, 'close');
+});
+
+test('#713 precedence: unticked items still win (they name the unfiled work); not-container still wins', () => {
+  assert.strictEqual(classifyContainer(epic({ body: 'Done when: x\n- [ ] phase 3\n' })).verdict, 'unfiled-items');
+  assert.strictEqual(classifyContainer(epic({ labels: [], body: 'Done when: x' })).verdict, 'not-container');
+  assert.strictEqual(classifyContainer(epic({ body: 'Done when: x', subIssuesSummary: { total: 2, completed: 1 } })).verdict, 'children-open');
+});
+
+test('#713 containerProposalComment: names the child, target and sha, and says it stays open', () => {
+  const s = cc.containerProposalComment({ child: 43, sha: 'abc1234', total: 1, target: 'main' });
+  assert.match(s, /All 1 sub-issue\(s\) closed — its last open sub-issue #43 shipped to main at abc1234/);
+  assert.match(s, /Left open: check `Done when` and close if met/);
+  assert.doesNotMatch(s, /Closed by colab ship/);
+});
+
 test('untickedItems: a `- [ ]` inside a fenced block is a quoted example, not an item', () => {
   const body = 'Template:\n```md\n- [ ] …\n```\n* [ ] real one\n';
   assert.deepStrictEqual(untickedItems(body), ['real one']);
