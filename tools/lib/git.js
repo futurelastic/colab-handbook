@@ -1157,9 +1157,10 @@ function ghRunsForRef(repo, ref, sha, limit = 20) {
 }
 
 /**
- * #723: the repo's workflows and their state (`active`, `disabled_manually`, `disabled_inactivity`, …)
- * as a Map of file path → state — one REST call. A disabled workflow never gets a run, so it is never
- * expected at a head. Null on any failure: the caller then takes every workflow as active.
+ * #723: the repo's workflows as a Map of file path → `{ state, id, name }` — one REST call. `state`
+ * (`active`, `disabled_manually`, …): a disabled workflow never gets a run, so it is never expected at
+ * a head. `id` / `name` are how its runs identify it (a run's `workflow_id`, its `name`). Null on any
+ * failure: the caller then takes every workflow as active and matches runs by the definition's name.
  */
 function ghWorkflowStates(repo) {
   const r = gh(['api', 'repos/{owner}/{repo}/actions/workflows?per_page=100'], { cwd: repo });
@@ -1168,7 +1169,7 @@ function ghWorkflowStates(repo) {
   try { j = JSON.parse(r.stdout); } catch (_) { return null; }
   if (!j || !Array.isArray(j.workflows)) return null;
   const m = new Map();
-  for (const w of j.workflows) if (w && w.path) m.set(w.path, w.state || null);
+  for (const w of j.workflows) if (w && w.path) m.set(w.path, { state: w.state || null, id: w.id ?? null, name: w.name || null });
   return m;
 }
 
@@ -1304,8 +1305,7 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
     setAside = split.setAside;
     dispatchCounted = split.dispatchCounted || [];
   }
-  const expected = opts && Array.isArray(opts.expected) ? opts.expected : [];
-  const missing = expected.filter((e) => e && e.name && !owned.some((x) => x && x.workflowName === e.name));
+  const missing = missingExpected(owned, opts && opts.expected);
   const { heads, superseded } = newestRunPerWorkflow(owned);
   const { judged, skippedOnly, allSkipped } = setAsideWhollySkipped(heads, superseded, opts && opts.verifying);
   const extra = {
@@ -1315,7 +1315,7 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
     ...(allSkipped ? { allSkipped: true } : {}),
     ...(setAside.length ? { setAside: excludedRunSummary(setAside) } : {}),
     ...(dispatchCounted.length ? { dispatchCounted: excludedRunSummary(dispatchCounted) } : {}),
-    ...(missing.length ? { missing: missing.map((e) => ({ name: e.name, path: e.path || null, dispatch: !!e.dispatch })) } : {}),
+    ...(missing.length ? { missing: missing.map((e) => ({ name: e.name, path: e.path || null, dispatch: !!e.dispatch, ...(e.id != null ? { id: e.id } : {}) })) } : {}),
     // #691: opt-in (`opts.finishedRed`), so no reader that never asked sees a new field — every
     // JUDGED run that finished red: completed, and not success, cancelled or skipped (neither of
     // those two executed anything). The summary's single `conclusion` names only the first not-green
@@ -1327,6 +1327,22 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
   };
   const r = summarizeRepoOwnedRuns(judged, sha);
   return { ...r, ...extra };
+}
+
+/**
+ * #723: the expected workflows with no counted row at the sha. A row stands for an expected workflow
+ * when its workflow FILE id matches (`workflowId`, the workflows API's id), or its name matches the
+ * definition's or the API's. A row carrying neither a name nor an id cannot be told apart from any
+ * workflow, so its presence means nothing is called missing — absence of a field never adds a hold,
+ * the same rule as everywhere above.
+ */
+function missingExpected(rows, expected) {
+  const exp = Array.isArray(expected) ? expected.filter((e) => e && e.name) : [];
+  if (!exp.length) return [];
+  if (rows.some((x) => x && !x.workflowName && (x.workflowId === undefined || x.workflowId === null))) return [];
+  const stands = (x, e) => !!x && ((e.id != null && x.workflowId != null && Number(x.workflowId) === Number(e.id))
+    || x.workflowName === e.name || (!!e.apiName && x.workflowName === e.apiName));
+  return exp.filter((e) => !rows.some((x) => stands(x, e)));
 }
 
 /** #691: a run that ran and failed — completed, and not success, cancelled or skipped. */

@@ -326,8 +326,9 @@ function skipsWorkflows(message) {
  *   - is triggered by `push`, read cleanly, not tags-only, with no `paths` / `paths-ignore` filter,
  *   - passes its branch filters for `branch` (an unreadable pattern → not expected),
  *   - is not in `ship-ignore-workflows`, and is in `ship-gate-workflows` when that list is declared,
- *   - is not reported anything but `active` by the workflows API (`states`: path → state; null = unread,
- *     every workflow taken as active).
+ *   - is not reported anything but `active` by the workflows API (`states`: path → `{state, id, name}`
+ *     or a bare state string; null = unread, every workflow taken as active). The API's `id` and
+ *     `name` ride on the entry, so a run is matched by its workflow id too (git.js missingExpected).
  * Nothing is expected when the head commit's message carries a skip directive (`headMessage`).
  *
  * Every doubt resolves to NOT expected: that is today's reading (the runs that exist decide), so the
@@ -337,9 +338,9 @@ function skipsWorkflows(message) {
  * @param {Array<{path:string, text:string}>} a.defs  - the workflow files at the head
  * @param {string} a.branch
  * @param {object} [a.policy]       - parsePolicy's `{gate, ignore}`
- * @param {Map<string,string>|null} [a.states]
+ * @param {Map<string,(string|{state:string, id:number, name:string})>|null} [a.states]
  * @param {string|null} [a.headMessage]
- * @returns {{ expected: Array<{name:string, path:string, dispatch:boolean}>, skipDirective: boolean }}
+ * @returns {{ expected: Array<{name:string, path:string, dispatch:boolean, id?:number, apiName?:string}>, skipDirective: boolean }}
  */
 function expectedWorkflows({ defs, branch, policy = null, states = null, headMessage = null }) {
   if (skipsWorkflows(headMessage)) return { expected: [], skipDirective: true };
@@ -352,8 +353,11 @@ function expectedWorkflows({ defs, branch, policy = null, states = null, headMes
     const name = t.name || d.path;
     if (p.ignore && p.ignore.includes(name)) continue;
     if (p.gate && !p.gate.includes(name)) continue;
-    if (states && states.has(d.path) && states.get(d.path) !== 'active') continue;
-    expected.push({ name, path: d.path, dispatch: t.dispatch });
+    const st = states && states.has(d.path) ? states.get(d.path) : null;
+    const info = st && typeof st === 'object' ? st : { state: st };
+    if (info.state && info.state !== 'active') continue;
+    expected.push({ name, path: d.path, dispatch: t.dispatch,
+      ...(info.id != null ? { id: info.id } : {}), ...(info.name && info.name !== name ? { apiName: info.name } : {}) });
   }
   return { expected, skipDirective: false };
 }

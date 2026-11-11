@@ -155,7 +155,8 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   match the branch, with no `paths`/`paths-ignore` filter, in `ship-gate-workflows` when declared,
   not in `ship-ignore-workflows`, and not disabled. None are expected when the head commit carries a
   skip directive (`[skip ci]` …). Every doubt (an unreadable filter, a tree that cannot be read)
-  means not expected, which is the old reading. An expected workflow with no run holds a would-be
+  means not expected, which is the old reading. A run stands for an expected workflow by its name or
+  its workflow id; a run carrying neither could be any workflow, so then nothing is missing. An expected workflow with no run holds a would-be
   green: ship adds the row as `pending`, `SELF_CLEARING`; ci-wait keeps waiting, and at the deadline
   ends `NO_RUN` (exit 7, `no-run:<workflow>`). A red still wins. Both name how to get the run, as a
   hint only: `gh workflow run` where the workflow takes `workflow_dispatch` (#567 counts that run),

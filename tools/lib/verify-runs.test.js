@@ -347,3 +347,16 @@ test('#723 summarizeRunsForCommit: two workflows, a run of one at the head and n
   assert.match(vr.missingNote(s.missing, 'feat/a-1'), /no run of CI at this sha.*draft PR \(`gh pr create --draft --head feat\/a-1`\)/);
   assert.match(vr.missingHint([{ name: 'CI', path: '.github/workflows/ci.yml', dispatch: true }], 'feat/a-1'), /`gh workflow run ci\.yml --ref feat\/a-1`/);
 });
+
+test('#723 missing: matched by workflow id or the API name too; an unidentifiable row means nothing is called missing', () => {
+  const d = [{ path: '.github/workflows/ci.yml', text: 'on: [push]\n' }];
+  const states = new Map([['.github/workflows/ci.yml', { state: 'active', id: 42, name: 'CI' }]]);
+  const { expected } = vr.expectedWorkflows({ defs: d, branch: 'feat/a-1', states });
+  assert.deepStrictEqual(expected, [{ name: '.github/workflows/ci.yml', path: '.github/workflows/ci.yml', dispatch: false, id: 42, apiName: 'CI' }]);
+  const sum = (rows) => git.summarizeRunsForCommit(rows, SHA, { verifying: vr.parsePolicy({}), expected });
+  assert.strictEqual(sum([r('CI', 'push', 'success', 1)]).missing, undefined, 'the API name matches');
+  assert.strictEqual(sum([{ ...r('Renamed', 'push', 'success', 1), workflowId: 42 }]).missing, undefined, 'the workflow id matches');
+  assert.strictEqual(sum([{ headSha: SHA, status: 'completed', conclusion: 'success' }]).missing, undefined, 'a row with no name and no id could be it');
+  assert.deepStrictEqual(sum([r('instruction-files', 'push', 'success', 1)]).missing.map((x) => x.id), [42]);
+  assert.strictEqual(vr.expectedWorkflows({ defs: d, branch: 'feat/a-1', states: new Map([['.github/workflows/ci.yml', { state: 'disabled_manually', id: 42 }]]) }).expected.length, 0);
+});
