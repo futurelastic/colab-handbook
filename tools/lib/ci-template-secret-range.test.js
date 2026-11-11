@@ -275,3 +275,62 @@ for (const s of STACKS) {
 test('the light lane is never scheduled — its run at trunk\'s sha is the merge verdict', () => {
   for (const s of STACKS) assert.doesNotMatch(read(`ci-${s}.yml`).split('\njobs:')[0], /^ {2}schedule:/m, s);
 });
+
+// ---- this repo's own CI (#722) ---------------------------------------------------------------
+// The handbook's ci.yml is purpose-written, not copied from a template, so #716 left its scan on
+// `git log --all`. It now runs the light templates' step verbatim, and the full history of trunk's
+// tip moved to a workflow of its own (this repo has no heavy lane) that no merge gate reads.
+
+const own = (name) => fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', name), 'utf8');
+const FULL = 'secrets-full-history.yml';
+const jobPin = (job) => job.match(/^ {6}GITLEAKS_VERSION: "([^"]+)"/m)[1];
+
+test('this repo\'s ci.yml runs the templates\' ranged "gitleaks detect" step, byte for byte', () => {
+  const ci = own('ci.yml');
+  // Identical to ci-node.yml's script, so every executed range test above covers it too.
+  assert.strictEqual(stepScript(ci, DETECT), SCRIPT, '.github/workflows/ci.yml drifted from templates/ci-node.yml');
+  const job = jobText(ci, 'gitleaks');
+  for (const k of ['EVENT: ${{ github.event_name }}', 'REF_NAME: ${{ github.ref_name }}', 'BEFORE: ${{ github.event.before }}',
+    'DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}']) assert.ok(job.includes(`          ${k}\n`), `env ${k}`);
+  assert.doesNotMatch(job, /gitleaks detect --source \. --no-banner\s*$/m, 'a bare scan reads every fetched branch');
+  assert.match(job, /^ {10}fetch-depth: 0$/m, 'the range needs both of its ends in the clone');
+  // This repo's trunk, read the way the step reads it.
+  assert.match(fs.readFileSync(path.join(REPO_ROOT, '.github', 'project.yml'), 'utf8'), /^trunk: main$/m);
+});
+
+test(`${FULL}: a full-history scan of trunk's tip, installed exactly as ci.yml installs it`, () => {
+  const full = own(FULL);
+  const ci = own('ci.yml');
+  const job = jobText(full, 'secrets');
+  for (const l of ['    permissions:\n      contents: read', '          fetch-depth: 0',
+    '        run: gitleaks detect --source . --no-banner --log-opts=HEAD']) assert.ok(job.includes(l), l);
+  assert.doesNotMatch(job, /--all/, 'HEAD only, never every branch');
+  const install = 'Install gitleaks (pinned binary)';
+  assert.strictEqual(stepScript(job, install), stepScript(jobText(ci, 'gitleaks'), install), 'two installers drift apart');
+  assert.strictEqual(jobPin(job), jobPin(jobText(ci, 'gitleaks')), 'bump both pins together');
+  const report = jobText(full, 'report');
+  assert.match(report, /github\.event_name == 'schedule' && needs\.secrets\.result == 'failure'/);
+  assert.match(full.split('\njobs:')[0], /^permissions: \{\}$/m);
+});
+
+test(`${FULL} is never a merge verdict — the gate sets aside every run of it, dispatch included`, () => {
+  const { workflowTriggers, splitVerifying } = require('./verify-runs');
+  const header = own(FULL).split('\njobs:')[0];
+  assert.doesNotMatch(header, /^ {2}(push|pull_request|pull_request_target|merge_group):/m, 'a push trigger makes it a verdict');
+  assert.match(header, /^ {2}schedule:/m);
+  const full = workflowTriggers(own(FULL));
+  const ci = workflowTriggers(own('ci.yml'));
+  assert.deepStrictEqual(full, { name: 'Secret scan (full history)', verifiesBranches: false });
+  assert.deepStrictEqual(ci, { name: 'CI', verifiesBranches: true });
+  // The lost-push rescue (#567), fed the real files: it counts ci.yml's dispatch, never this one's.
+  const policy = { gate: null, ignore: [], dispatchVerifies: () => [full, ci].filter((w) => w.verifiesBranches).map((w) => w.name) };
+  const sha = 'a'.repeat(40);
+  const rows = [
+    { workflowName: full.name, event: 'schedule', headSha: sha, conclusion: 'failure' },
+    { workflowName: full.name, event: 'workflow_dispatch', headSha: sha, conclusion: 'failure' },
+    { workflowName: 'CI', event: 'workflow_dispatch', headSha: sha, conclusion: 'success' },
+  ];
+  const split = splitVerifying(rows, policy);
+  assert.deepStrictEqual(split.counted.map((r) => `${r.workflowName}/${r.event}`), ['CI/workflow_dispatch']);
+  assert.deepStrictEqual(split.setAside.map((r) => r.event).sort(), ['schedule', 'workflow_dispatch']);
+});

@@ -208,6 +208,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          # Full history: the scan's range is computed against trunk (origin/<trunk>..HEAD), and
+          # both ends of it have to be in the clone. The range itself is narrow (#722).
           fetch-depth: 0
       # Pinned binary instead of gitleaks-action v2: the action requires a
       # GITLEAKS_LICENSE for org-owned repos; the binary is MIT and free.
@@ -240,8 +242,39 @@ jobs:
           chmod +x "$tmp/gitleaks"
           sudo mv "$tmp/gitleaks" /usr/local/bin/gitleaks
           rm -rf "$tmp"
+      # The scan range (#722): the light templates' step from #716, verbatim — only the commits this
+      # run brings, never `git log --all`. The fetch-depth-0 checkout above holds every branch and
+      # tag, and gitleaks' default range is all of them, so one open branch's fixture that looks like
+      # a key turned EVERY branch's run red, a trunk cure included.
+      #   - A branch push (or a pull request): the commits not yet on trunk (origin/<trunk>..HEAD).
+      #   - A trunk push: the pushed range (before..HEAD).
+      #   - No range to read (a dispatch, a first or forced trunk push, trunk not fetched): HEAD's
+      #     own history — still never another branch's.
+      # This repo has no heavy lane, so the scan of every commit trunk's tip reaches lives in its own
+      # workflow, secrets-full-history.yml, which no merge gate reads.
       - name: gitleaks detect
-        run: gitleaks detect --source . --no-banner
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          trunk="$(sed -nE "s/^trunk:[[:space:]]*[\"']?([A-Za-z0-9._/-]+).*/\\1/p" .github/project.yml 2>/dev/null | head -n 1 || true)"
+          trunk="${trunk:-$DEFAULT_BRANCH}"
+          commit() { [ -n "$1" ] && git rev-parse --verify -q "$1^{commit}" >/dev/null; }
+          if [ -n "$trunk" ] && [ "$REF_NAME" = "$trunk" ]; then
+            if [ "$EVENT" = push ] && commit "$BEFORE" && git merge-base --is-ancestor "$BEFORE" HEAD; then
+              range="$BEFORE..HEAD"
+            else
+              range=HEAD
+            fi
+          elif [ -n "$trunk" ] && commit "refs/remotes/origin/$trunk"; then
+            range="refs/remotes/origin/$trunk..HEAD"
+          else
+            range=HEAD
+          fi
+          echo "Secret scan range: $range ($(git rev-list --count "$range") commit(s))"
+          gitleaks detect --source . --no-banner --log-opts="$range"
 
   actionlint:
     name: Schema-lint workflow templates (actionlint)
