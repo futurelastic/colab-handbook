@@ -241,8 +241,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          # Full history: gitleaks scans commits, not just the working tree, so a
-          # secret that was committed and later removed is still caught.
+          # Full history: the scan's range is computed against trunk (origin/<trunk>..HEAD), and
+          # the two ends of that range have to be in the clone. The range itself is narrow — see
+          # "gitleaks detect" below (#716).
           fetch-depth: 0
           persist-credentials: false
 
@@ -353,8 +354,40 @@ jobs:
           fi
           echo "$dir" >> "$GITHUB_PATH"
 
+      # The scan range (#716): only the commits this run brings, never `git log --all`. A
+      # fetch-depth-0 checkout holds every branch and tag, and gitleaks' default range is all of
+      # them — so one unshipped branch's finding turned EVERY branch's run red, a trunk cure
+      # included, until that branch rewrote its history.
+      #   - A branch push: the commits not yet on trunk (origin/<trunk>..HEAD).
+      #   - A trunk push: the pushed range (before..HEAD).
+      #   - No range to read (a dispatch, a first or forced trunk push, trunk not fetched): HEAD's
+      #     own history — still never another branch's.
+      # Trunk is `trunk:` in .github/project.yml, else the repository's default branch. Every
+      # commit trunk's tip can reach is scanned by the heavy lane instead (templates/
+      # ci-<stack>-heavy.yml, job `secrets`), which blocks no merge. The step keeps its name.
       - name: gitleaks detect
-        run: gitleaks detect --source . --no-banner
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          trunk="$(sed -nE "s/^trunk:[[:space:]]*[\"']?([A-Za-z0-9._/-]+).*/\\1/p" .github/project.yml 2>/dev/null | head -n 1 || true)"
+          trunk="${trunk:-$DEFAULT_BRANCH}"
+          commit() { [ -n "$1" ] && git rev-parse --verify -q "$1^{commit}" >/dev/null; }
+          if [ -n "$trunk" ] && [ "$REF_NAME" = "$trunk" ]; then
+            if [ "$EVENT" = push ] && commit "$BEFORE" && git merge-base --is-ancestor "$BEFORE" HEAD; then
+              range="$BEFORE..HEAD"
+            else
+              range=HEAD
+            fi
+          elif [ -n "$trunk" ] && commit "refs/remotes/origin/$trunk"; then
+            range="refs/remotes/origin/$trunk..HEAD"
+          else
+            range=HEAD
+          fi
+          echo "Secret scan range: $range ($(git rev-list --count "$range") commit(s))"
+          gitleaks detect --source . --no-banner --log-opts="$range"
 
   build:
     name: Build

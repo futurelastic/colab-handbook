@@ -23,9 +23,12 @@ dispatched runs are set aside (`tools/lib/verify-runs.js`). Why: [ADR 607](../..
 The rule: [CONVENTIONS.md, *Two lanes — light on every merge, heavy on official builds and nightly (#607)*](../../CONVENTIONS.md#two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607).
 
 - **Light** (`ci-<stack>.yml` → `ci.yml`), on every push: secret scan, build, typecheck/lint, the
-  fast tests — about 5 minutes at p50. It is the lane ship reads.
+  fast tests — about 5 minutes at p50. It is the lane ship reads. Its secret scan reads only the
+  commits the run brings — a branch's commits not yet on trunk, or a trunk push's pushed range —
+  never every fetched branch, so one branch's finding cannot red another branch's run (#716).
 - **Heavy** (`ci-<stack>-heavy.yml` → `ci-heavy.yml`), never on a push: the whole suite,
-  integration, browser/e2e, both configurations of a switched epic, load. It runs nightly on
+  integration, browser/e2e, both configurations of a switched epic, load, and the secret scan of
+  every commit trunk's tip reaches (job `secrets`, #716). It runs nightly on
   trunk's tip, and is skipped when trunk has not moved since the last green nightly. It runs at
   every official build: `release-tag.yml` publishes only on its green, and `release-auto.yml`
   finalizes a candidate only on its green run at that exact sha.
@@ -108,7 +111,8 @@ spends most of its wall time waiting rather than working.** Why, with the measur
 - **With few agents, every job is a queue slot.** A 13-second job (a secret scan) that
   sits in its own job costs one more wait per run. Fold it into the main job as its
   first steps; it still runs on every run and still fails the job before any test
-  starts. The main job must check out full history, which the scan needs. Split jobs
+  starts. The main job must check out full history: the scan computes its range against
+  trunk, and both ends of it must be in the clone (#716). Split jobs
   out again only when there are enough agents to run them side by side.
 - **Never run the same check twice in one job.** Drop the copy whose removal breaks
   nothing; a test that pins the test script's shape decides which one that is.

@@ -515,7 +515,7 @@ const WORKFLOW_FINGERPRINTS = [
   { marker: 'Run exactly this tag, verify (deploy-container-run --deploy-only)', kind: 'step', template: 'deploy-container' },
   // branch-name (#348): its one step.
   { marker: 'Check branch name (CONVENTIONS §4)', kind: 'step', template: 'branch-name' },
-  // Shared by all three ci-* templates: proves derivation, cannot say from which. Note the exact
+  // Shared by the ci-* templates, light and heavy (#716): proves derivation, cannot say from which. Note the exact
   // parenthetical — hand-written installers on this fleet say "(pinned binary)", which is why the
   // step NAME discriminates where the URL inside the step does not.
   { marker: 'Install gitleaks (pinned release binary)', kind: 'step', template: null },
