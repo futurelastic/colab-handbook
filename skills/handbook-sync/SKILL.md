@@ -275,8 +275,7 @@ and the audit is what catches it:
   `package.json` — root or workspace member — lacks `"private": true`, when
   `publishConfig.registry` points at `registry.npmjs.org`, or when a workflow runs
   `npm publish` / `pnpm publish` / `yarn npm publish` / `JS-DevTools/npm-publish`. Unknown
-  visibility is a warning, not a pass. Fix: set `"private": true`, delete the publish step,
-  and ship the app from git (`npx github:<org>/<repo>#<tag>`). A public repo is unaffected.
+  visibility is a warning, not a pass. Fix: set `"private": true`, delete the publish step, and ship the app from git (`npx github:<org>/<repo>#<tag>`). A public repo is unaffected.
 - **A private repo's install path is npx, never a GitHub Release asset (#442, advisory).** The
   audit warns when a *private* repository's workflows upload Release assets (`gh release upload`,
   `gh release create <tag> <files>`, a release action given `files:`). A compiled tool moves its
@@ -284,7 +283,7 @@ and the audit is what catches it:
   §6 *Distribution*); an asset that is only a by-product (an SBOM) can stay — it is a warning. A hand-written publish to a downloads site: [offer the shared template](7-convention-drift.md#a-hand-written-publish-to-a-downloads-site-648).
 - **A tag-triggered deploy copy must exclude pre-release tags (#513):** `- "!v*.*.*-*"` right after `- "v*.*.*"`, else every candidate tag deploys; the audit fails it under `deploy: tag` — [graft and exemptions](7-convention-drift.md#a-tag-triggered-deploy-copy-must-exclude-pre-release-tags-513).
 - **A long-running CI or deploy job should declare `timeout-minutes` (#577):** a `deploy-*` job without one is a finding; a `ci-*` `build` / live `migrations` job without one is a suggestion (#607) — offer the template's value plus its `# EDIT:` note, sized by the adopter above their own p99, and never overwrite a value the copy has — [check and graft](7-convention-drift.md#a-long-running-ci-or-deploy-job-must-declare-timeout-minutes-577).
-- **A copied CI gate, or one that never skips, is drift (#721):** the audit's `drift:` warnings — a workflow carrying its own dedupe gate instead of calling the handbook's reusable `ci-light.yml`, or a gate whose last 10 trunk runs never skipped despite a tree already green on a branch; offer `colab template ci-call` as a per-repo proposal — [readings and the move](7-convention-drift.md#a-copied-ci-gate-or-one-that-never-skips-721).
+- **A copied CI gate, or one that never skips, is drift (#721):** the audit's `drift:` findings (a suggestion until a release carries the workflow) — a workflow carrying its own dedupe gate instead of calling the handbook's reusable `ci-light.yml`, or a gate whose last 10 trunk runs never skipped despite a tree already green on a branch; offer `colab template ci-call` as a per-repo proposal — [readings and the move](7-convention-drift.md#a-copied-ci-gate-or-one-that-never-skips-721).
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.
 - **A convention label may have been added since this repo adopted.** The label set
   is part of the model, and a repo that adopted at an older version never back-filled

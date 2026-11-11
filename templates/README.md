@@ -195,7 +195,8 @@ once, for every caller; `ci-call.yml` is the caller. What changes for you:
   and `full` (the light suite, the build — the `full` class); both run on every push the gate does not skip,
   and both take the `trunk` class on a trunk ref under `runs-on: classes`.
 - The copied `ci-<stack>.yml` templates still work and are still copied; moving them onto the caller is
-  tracked in #724. A repo carrying one is reported as drift.
+  tracked in #724. A repo carrying one is reported as drift — a suggestion until a handbook release tag carries
+  `ci-light.yml`, a warning from then on.
 
 ### Migration round-trip — have it from the first copy
 

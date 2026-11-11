@@ -1940,8 +1940,6 @@ function auditRepoInner(target, ctx) {
   // #599: a caller of the reusable instruction-files workflow narrowed off session branches, or not
   // dispatchable, defeats the ratchet's point (fail on the branch) and the cure rule's way out.
   checkInstructionFilesCaller(src, workflows, cfg?.trunk ?? null, warn);
-  // #721: the CI dedupe gate maintained once — a copy of it, or a gate that never skips, is drift.
-  checkGateDrift(src, workflows, cfg?.trunk ?? null, warn, { self: isSelf });
 
   // ---- markdown anchor links resolve (#158) --------------------------------
   // Unconditional, same posture as checkClaudeMdSize above: general markdown hygiene,
@@ -2205,6 +2203,8 @@ function auditRepoInner(target, ctx) {
   info.predatesAxes = [];
   info.suggestions = [];
   const suggest = (t) => info.suggestions.push(t);
+  // #721: the CI dedupe gate maintained once — a copy of it, or a gate that never skips, is drift.
+  checkGateDrift(src, workflows, cfg?.trunk ?? null, warn, { self: isSelf, suggest });
   if (integrationSuggestion) suggest(integrationSuggestion); // #610
   if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes, writesRaw, suggest });
 
@@ -2879,9 +2879,31 @@ function checkInstructionFilesCaller(src, workflows, trunk, warn) {
 //      ref had already passed green — read from run history, so only where GitHub can be read.
 // The handbook itself is the source: its ci.yml and ci-light.yml carry the gate by design, so the
 // static reading is off here (self-audit); the history reading still runs.
-function checkGateDrift(src, workflows, trunk, warn, { self = false } = {}) {
+// Reading 1 is a warn only once the handbook's latest release tag carries ci-light.yml: before that
+// there is nothing to switch TO (a caller pins a tag), so it is a suggestion — the #607 posture for a
+// CI copy — and it turns into drift by itself the day a release ships the workflow.
+let reusableReleasedMemo;
+function reusableReleased() {
+  if (reusableReleasedMemo !== undefined) return reusableReleasedMemo;
+  const hb = handbookInfo(HANDBOOK_ROOT);
+  reusableReleasedMemo = false;
+  if (hb.hasGit && !hb.untagged) {
+    try {
+      execFileSync("git", ["-C", HANDBOOK_ROOT, "cat-file", "-e", `${hb.version}:${gateDrift.REUSABLE_PATH}`], { stdio: "ignore" });
+      reusableReleasedMemo = hb.version;
+    } catch { reusableReleasedMemo = false; }
+  }
+  return reusableReleasedMemo;
+}
+function checkGateDrift(src, workflows, trunk, warn, { self = false, suggest = () => {} } = {}) {
   const { callers, copies } = gateDrift.copiedGates({ readFile: (p) => src.readFile(p), workflows });
-  if (!self) for (const wf of copies) warn(gateDrift.copiedGateText(wf));
+  if (!self && copies.length) {
+    const released = reusableReleased();
+    for (const wf of copies) {
+      if (released) warn(gateDrift.copiedGateText(wf));
+      else suggest(`${wf}: ${gateDrift.copiedGateText(wf)} — a suggestion until a handbook release tag carries ${gateDrift.REUSABLE_PATH}`);
+    }
+  }
   if (!trunk || typeof src.ghApi !== "function") return;
   for (const wf of [...callers, ...copies]) {
     if (self && wf === "ci-light.yml") continue; // the callee: its runs are its callers'

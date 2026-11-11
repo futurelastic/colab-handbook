@@ -10118,6 +10118,10 @@ function cmdTemplate(argv) {
     const pin = require('./lib/template-trunk').pinHandbookTag(body, version);
     body = pin.text;
     if (pin.pinned) trunkNotes.push(`  pin: calls the reusable workflow at ${pin.pinned} — the version this copy is stamped with.`);
+    if (pin.pinned && stamp.handbookInfo(root).hasGit) {
+      const cr = spawnSync('git', ['-C', root, 'cat-file', '-e', `${pin.pinned}:.github/workflows/ci-light.yml`], { stdio: 'ignore' });
+      if (!cr.error && cr.status !== 0) trunkNotes.push(`  ⚠ pin: ${pin.pinned} does not carry .github/workflows/ci-light.yml — this copy cannot run until it calls a release that does; set the tag by hand.`);
+    }
     if (pin.unpinned) trunkNotes.push('  ⚠ pin: the handbook has no tag, so `@HANDBOOK_TAG` is left in place — set it to a release tag that carries .github/workflows/ci-light.yml.');
   }
   // #625: the round-trip job written live, at copy — the commit that creates the workflows.

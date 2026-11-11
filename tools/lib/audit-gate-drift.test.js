@@ -70,13 +70,25 @@ function audit(dir, ghDir) {
     stdout = err.stdout || '';
   }
   const r = JSON.parse(stdout).results[0];
-  return r.findings.filter((f) => /^drift: /.test(f.text)).map((f) => `${f.level}: ${f.text}`);
+  // Before a handbook release carries ci-light.yml, a copied gate is a suggestion (nothing to switch to yet).
+  return [...r.findings.filter((f) => /^drift: /.test(f.text)).map((f) => `${f.level}: ${f.text}`),
+    ...r.suggestions.filter((t) => /: drift: /.test(t)).map((t) => `suggestion: ${t.replace(/^[^:]+: /, '')}`)];
 }
+
+// The audit's own rule, read the same way: does the handbook's latest release tag carry the workflow?
+const RELEASED = (() => {
+  const hb = require('./stamp').handbookInfo(REPO_ROOT);
+  if (!hb.hasGit || hb.untagged) return false;
+  try { execFileSync('git', ['-C', REPO_ROOT, 'cat-file', '-e', `${hb.version}:.github/workflows/ci-light.yml`], { stdio: 'ignore' }); return true; } catch { return false; }
+})();
+const COPY_LEVEL = RELEASED ? 'warn' : 'suggestion';
 
 test('a copied gate with no call to ci-light.yml is drift; calling it is clean (#721)', () => {
   const copy = audit(fixture({ 'ci.yml': COPY }));
   assert.strictEqual(copy.length, 1, copy.join('\n'));
-  assert.match(copy[0], /^warn: drift: \.github\/workflows\/ci\.yml carries its own copy of the CI dedupe gate instead of calling the handbook's reusable workflow \(\.github\/workflows\/ci-light\.yml\)/);
+  assert.match(copy[0], new RegExp(`^${COPY_LEVEL}: drift: \\.github/workflows/ci\\.yml carries`));
+  if (!RELEASED) assert.match(copy[0], /a suggestion until a handbook release tag carries \.github\/workflows\/ci-light\.yml$/);
+  assert.match(copy[0], /instead of calling the handbook's reusable workflow \(\.github\/workflows\/ci-light\.yml\)/);
   assert.match(copy[0], /templates\/ci-call\.yml/);
   assert.deepStrictEqual(audit(fixture({ 'ci.yml': CALL })), []);
   // A caller beside a leftover copy: the copy is still drift, named.

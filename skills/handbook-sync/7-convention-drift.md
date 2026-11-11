@@ -173,7 +173,9 @@ The dedupe gate ([§7, *One verdict per tree*](../../CONVENTIONS.md#one-verdict-
 is maintained once, in the handbook's reusable `.github/workflows/ci-light.yml`. A repo's own copy of
 it is **drift, not customisation**: a copy changes only through this sync, so a gate fix never reaches
 it (#717 did not — measured 2026-11-09 → 11-11, the gate was missing in six adopters and present but
-never skipping in three). The audit reports two shapes, both `warn`, both starting `drift:`:
+never skipping in three). The audit reports two shapes, both starting `drift:`, both `warn` — except that a
+copied gate is a *suggestion* until the handbook's latest release tag carries `ci-light.yml` (a caller pins
+a tag, so before that there is nothing to switch to; `colab template ci-call` warns the same way):
 
 - **A copied gate** — a workflow carrying the guard's step (`Look for a green run of this workflow at
   this sha or tree`) or its `GUARD_NAME` env, with no call to `ci-light.yml`. Offer the caller:
