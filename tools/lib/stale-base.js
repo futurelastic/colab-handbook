@@ -141,19 +141,32 @@ function branchHeadCiVerdict(a) {
  * refuses here. `run.finishedRed` (tools/lib/git.js) lists every judged red run; without it the
  * summary's own status/conclusion decides.
  *
+ * #723: a head where an EXPECTED workflow has no run (`run.missing`, git.summarizeRunsForCommit's
+ * `opts.expected`) is pending, self-clearing, never a pass: ship --dry used to read READY on a head
+ * where only an unrelated workflow had run and the repo's CI never got a run at all. A red still wins
+ * (it is checked first). The detail names the missing workflow and how to get it a run — a hint only.
+ *
  * @param {object} a
  * @param {string|null} a.headSha - the branch head on the remote
  * @param {object|null} a.run     - summarizeRunsForCommit's verdict at headSha, verifying policy applied
  * @param {string} a.branch
- * @returns {null|{ok:false, verdict:'red', selfClearing:false, detail:string}}
+ * @returns {null|{ok:false, verdict:'red'|'pending', selfClearing:boolean, detail:string}}
  */
 function githubBranchHeadRedVerdict(a) {
   const run = a && a.run;
   if (!a || !a.headSha || !run || run.status === 'none') return null;
   const listed = Array.isArray(run.finishedRed) ? run.finishedRed : [];
   const summaryRed = run.status === 'completed' && run.conclusion !== 'success' && run.conclusion !== 'cancelled' && run.conclusion !== 'skipped';
-  if (!listed.length && !summaryRed) return null;
   const at = `${a.branch}@${String(a.headSha).slice(0, 7)} (GitHub Actions)`;
+  const missing = Array.isArray(run.missing) ? run.missing : [];
+  if (!listed.length && !summaryRed) {
+    if (!missing.length) return null;
+    const { missingHint } = require('./verify-runs');
+    return { ok: false, verdict: 'pending', selfClearing: true,
+      detail: `${at} has no run of ${missing.map((x) => x.name).join(', ')}, though ${missing.length === 1 ? 'its' : 'their'} definition fires on a push to this branch — ` +
+        `the runs that exist there do not stand in for it (#723). Wait with \`colab ci-wait --sha ${a.headSha} --branch ${a.branch}\`; ` +
+        `if it ends NO_RUN (exit 7), ${missingHint(missing, a.branch)}` };
+  }
   const failing = listed.length
     ? listed.map((x) => `${x.workflowName || 'run'} (${x.conclusion || 'none'})`).join(', ')
     : `conclusion=${run.conclusion || 'none'}`;

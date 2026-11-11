@@ -275,3 +275,75 @@ test('#567 CLI: a dispatch of the release lane alone still reads NONE — the re
   assert.notStrictEqual(t.verdict, 'GREEN', JSON.stringify(t));
   assert.match(t.detail, /Release \(auto\) \(success, run 2; event: workflow_dispatch\)/);
 });
+
+// ---- #723: the expected set — a workflow that should have fired at a branch head ----------------
+
+test('#723 pushTrigger: the push filters, tags-only, paths and workflow_dispatch are read', () => {
+  const t = vr.pushTrigger('name: CI\non:\n  push:\n    branches: [main, "feat/**"]\n    paths-ignore:\n      - docs/**\n  workflow_dispatch:\n');
+  assert.deepStrictEqual(t, { name: 'CI', push: true, readable: true, branches: ['main', 'feat/**'], branchesIgnore: null, tagsOnly: false, paths: true, dispatch: true });
+  assert.deepStrictEqual(vr.pushTrigger('on: [push]\n'), { name: null, push: true, readable: true, branches: null, branchesIgnore: null, tagsOnly: false, paths: false, dispatch: false });
+  assert.strictEqual(vr.pushTrigger('name: PR\non: pull_request\n').push, false);
+  assert.strictEqual(vr.pushTrigger('on:\n  push:\n    tags: ["v*"]\n').tagsOnly, true);
+  assert.deepStrictEqual(vr.pushTrigger('on:\n  push:\n    branches-ignore:\n      - main\n').branchesIgnore, ['main']);
+  assert.strictEqual(vr.pushTrigger('on:\n  push: { branches: [main] }\n').readable, false, 'a flow map is not followed');
+  assert.strictEqual(vr.pushTrigger('on:\n  push:\n    types: [x]\n').readable, false, 'an unknown key is not followed');
+  assert.strictEqual(vr.pushTrigger('jobs: {}\n'), null);
+});
+
+test('#723 branchFilterMatches: GitHub globs — * stops at /, ** does not, ! negates in order, -ignore excludes', () => {
+  assert.strictEqual(vr.branchFilterMatches('feat/x-1', { branches: ['feat/**'] }), true);
+  assert.strictEqual(vr.branchFilterMatches('feat/a/b', { branches: ['feat/*'] }), false);
+  assert.strictEqual(vr.branchFilterMatches('fix/x-1', { branches: ['main', 'feat/**'] }), false);
+  assert.strictEqual(vr.branchFilterMatches('feat/a', { branches: ['feat/*', '!feat/a'] }), false);
+  assert.strictEqual(vr.branchFilterMatches('feat/a', { branches: ['!feat/a', 'feat/*'] }), true, 'the last match decides');
+  assert.strictEqual(vr.branchFilterMatches('rel.1', { branches: ['rel.1'] }), true);
+  assert.strictEqual(vr.branchFilterMatches('relx1', { branches: ['rel.1'] }), false, 'a dot is literal');
+  assert.strictEqual(vr.branchFilterMatches('main', { branchesIgnore: ['main'] }), false);
+  assert.strictEqual(vr.branchFilterMatches('feat/x', { branchesIgnore: ['main'] }), true);
+  assert.strictEqual(vr.branchFilterMatches('x', { branches: ['[unclosed'] }), null);
+  assert.strictEqual(vr.branchFilterMatches('x', {}), true);
+});
+
+test('#723 expectedWorkflows: push-fired definitions only; every doubt reads not expected', () => {
+  const d = (file, text) => ({ path: `.github/workflows/${file}`, text });
+  const defs = [
+    d('ci.yml', 'name: CI\non:\n  push:\n    branches: ["feat/**", "fix/**"]\n'),
+    d('instr.yml', 'name: instruction-files\non: [push]\n'),
+    d('docs.yml', 'name: Docs\non:\n  push:\n    paths: [docs/**]\n'),
+    d('tag.yml', 'name: Tag\non:\n  push:\n    tags: ["v*"]\n'),
+    d('deploy.yml', 'name: Deploy\non:\n  push:\n    branches: [main]\n'),
+    d('pr.yml', 'name: PR\non: pull_request\n'),
+    d('odd.yml', 'name: Odd\non:\n  push: { branches: [x] }\n'),
+    d('lint.yml', 'on:\n  push:\n  workflow_dispatch:\n'),
+  ];
+  const names = (x) => x.expected.map((e) => e.name);
+  assert.deepStrictEqual(names(vr.expectedWorkflows({ defs, branch: 'feat/a-1' })), ['CI', 'instruction-files', '.github/workflows/lint.yml']);
+  assert.deepStrictEqual(vr.expectedWorkflows({ defs, branch: 'feat/a-1' }).expected[2], { name: '.github/workflows/lint.yml', path: '.github/workflows/lint.yml', dispatch: true });
+  assert.deepStrictEqual(names(vr.expectedWorkflows({ defs, branch: 'main' })), ['instruction-files', 'Deploy', '.github/workflows/lint.yml']);
+  // ship-gate-workflows narrows to the declared set; ship-ignore-workflows drops.
+  assert.deepStrictEqual(names(vr.expectedWorkflows({ defs, branch: 'feat/a-1', policy: vr.parsePolicy({ 'ship-gate-workflows': ['CI'] }) })), ['CI']);
+  assert.deepStrictEqual(names(vr.expectedWorkflows({ defs, branch: 'feat/a-1', policy: vr.parsePolicy({ 'ship-ignore-workflows': ['instruction-files'] }) })), ['CI', '.github/workflows/lint.yml']);
+  // A disabled workflow never gets a run; an unread state map takes every workflow as active.
+  const states = new Map([['.github/workflows/ci.yml', 'disabled_manually'], ['.github/workflows/instr.yml', 'active']]);
+  assert.deepStrictEqual(names(vr.expectedWorkflows({ defs, branch: 'feat/a-1', states })), ['instruction-files', '.github/workflows/lint.yml']);
+  // A skip directive in the head commit means GitHub creates no push run at all.
+  for (const m of ['fix: x [skip ci]', 'docs: y\n\n[CI SKIP]', 'chore: z\n\nskip-checks: true\n']) {
+    const r = vr.expectedWorkflows({ defs, branch: 'feat/a-1', headMessage: m });
+    assert.deepStrictEqual([r.expected.length, r.skipDirective], [0, true], m);
+  }
+});
+
+test('#723 summarizeRunsForCommit: two workflows, a run of one at the head and none of the other — `missing` names it', () => {
+  const expected = [{ name: 'CI', path: '.github/workflows/ci.yml', dispatch: false }, { name: 'instruction-files', path: '.github/workflows/instr.yml', dispatch: false }];
+  const rows = [r('instruction-files', 'push', 'success', 1)];
+  const s = git.summarizeRunsForCommit(rows, SHA, { verifying: vr.parsePolicy({}), expected });
+  assert.deepStrictEqual([s.status, s.conclusion], ['completed', 'success'], 'the runs that exist still summarize as they do');
+  assert.deepStrictEqual(s.missing, [expected[0]]);
+  // Without the opt-in nothing changes: no field, the same verdict.
+  assert.strictEqual(git.summarizeRunsForCommit(rows, SHA, { verifying: vr.parsePolicy({}) }).missing, undefined);
+  // Both ran → nothing missing. A set-aside run of CI (a release-lane event) does not stand in for it.
+  assert.strictEqual(git.summarizeRunsForCommit([...rows, r('CI', 'push', 'success', 2)], SHA, { verifying: vr.parsePolicy({}), expected }).missing, undefined);
+  assert.deepStrictEqual(git.summarizeRunsForCommit([...rows, r('CI', 'schedule', 'success', 2)], SHA, { verifying: vr.parsePolicy({}), expected }).missing.map((x) => x.name), ['CI']);
+  assert.match(vr.missingNote(s.missing, 'feat/a-1'), /no run of CI at this sha.*draft PR \(`gh pr create --draft --head feat\/a-1`\)/);
+  assert.match(vr.missingHint([{ name: 'CI', path: '.github/workflows/ci.yml', dispatch: true }], 'feat/a-1'), /`gh workflow run ci\.yml --ref feat\/a-1`/);
+});

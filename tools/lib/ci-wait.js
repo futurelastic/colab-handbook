@@ -35,6 +35,9 @@ const EXIT = Object.freeze({
   RATE_LIMITED: 4,
   UNKNOWN: 5,
   ALREADY_WAITING: 6,
+  // #723: the deadline passed with an expected workflow still having NO run at the sha (only other
+  // workflows ran there). Not TIMEOUT: nothing is in flight to wait longer for — someone must get it a run.
+  NO_RUN: 7,
 });
 
 const DEFAULT_SCHEDULE_SEC = Object.freeze([30, 60, 120]);
@@ -112,10 +115,15 @@ function restRow(x) {
  * The state of what is being waited on, from a summarized run (`{status, conclusion}`):
  * `green` · `red` · `pending` · `unknown`. `none` (no run at the sha yet) is pending: runs appear
  * seconds after a push, and the deadline bounds the wait if they never do.
+ *
+ * #723: a summary carrying `missing` (an expected workflow with no run at the sha) is never green —
+ * it is pending, like `none`: the run may still appear, and the deadline ends the wait as NO_RUN.
+ * A red stays red: a failure that already happened does not wait on a run that has not.
  */
 function runState(s) {
   if (!s) return 'unknown';
   if (s.status === 'none') return 'pending';
+  if (Array.isArray(s.missing) && s.missing.length && s.status === 'completed' && s.conclusion === 'success') return 'pending';
   if (s.status === 'completed') return s.conclusion === 'success' ? 'green' : 'red';
   if (['queued', 'in_progress', 'waiting', 'requested', 'pending'].includes(s.status)) return 'pending';
   return 'unknown';
@@ -162,7 +170,7 @@ function waitLoop({ poll, sleep, now = Date.now, deadlineSec = DEFAULT_DEADLINE_
     const d = delayFor(i, schedule) * 1000;
     if (d) {
       const left = start + deadlineSec * 1000 - now();
-      if (left <= 0) return done('TIMEOUT', `still ${last ? last.state : 'unread'} at the ${fmtDuration(deadlineSec * 1000)} deadline`);
+      if (left <= 0) return deadline(`still ${last ? last.state : 'unread'} at the ${fmtDuration(deadlineSec * 1000)} deadline`);
       sleep(Math.min(d, left));
     }
     // The poll that lands on the deadline is the last one: it must read the truth, not a 304.
@@ -186,7 +194,13 @@ function waitLoop({ poll, sleep, now = Date.now, deadlineSec = DEFAULT_DEADLINE_
     if (last.state === 'green') return done('GREEN', null);
     if (last.state === 'red') return done('RED', null);
     if (last.state !== 'pending') return done('UNKNOWN', `unrecognised state (${JSON.stringify(last.summary || null)})`);
-    if (now() - start >= deadlineSec * 1000) return done('TIMEOUT', `still pending at the ${fmtDuration(deadlineSec * 1000)} deadline`);
+    if (now() - start >= deadlineSec * 1000) return deadline(`still pending at the ${fmtDuration(deadlineSec * 1000)} deadline`);
+  }
+  // #723: a deadline that passes with an expected workflow still runless is NO_RUN, naming it.
+  function deadline(detail) {
+    const miss = last && last.summary && Array.isArray(last.summary.missing) ? last.summary.missing : [];
+    if (!miss.length) return done('TIMEOUT', detail);
+    return done('NO_RUN', `no-run:${miss.map((x) => x.name).join(',')} — no run of ${miss.length === 1 ? 'that workflow' : 'those workflows'} appeared by the ${fmtDuration(deadlineSec * 1000)} deadline`);
   }
   function done(outcome, detail, r) {
     return { outcome, polls, notModified, forced, waitedMs: now() - start, last: last || r || null, detail };

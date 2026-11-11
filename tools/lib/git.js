@@ -1156,6 +1156,22 @@ function ghRunsForRef(repo, ref, sha, limit = 20) {
   return runs.filter((x) => x && x.headSha === sha);
 }
 
+/**
+ * #723: the repo's workflows and their state (`active`, `disabled_manually`, `disabled_inactivity`, …)
+ * as a Map of file path → state — one REST call. A disabled workflow never gets a run, so it is never
+ * expected at a head. Null on any failure: the caller then takes every workflow as active.
+ */
+function ghWorkflowStates(repo) {
+  const r = gh(['api', 'repos/{owner}/{repo}/actions/workflows?per_page=100'], { cwd: repo });
+  if (!r.ok) return null;
+  let j;
+  try { j = JSON.parse(r.stdout); } catch (_) { return null; }
+  if (!j || !Array.isArray(j.workflows)) return null;
+  const m = new Map();
+  for (const w of j.workflows) if (w && w.path) m.set(w.path, w.state || null);
+  return m;
+}
+
 function ghRunForCommit(repo, branch, sha, limit = 10, opts = {}) {
   return summarizeRunsForCommit(ghRunsForCommit(repo, branch, sha, limit), sha, opts);
 }
@@ -1267,6 +1283,14 @@ function excludedRunSummary(rows) {
  * #688: a workflow whose every run at the sha was skipped is then set aside beside a run that can
  * verify the code (setAsideWhollySkipped, below); the rows ride along as `skippedOnly`, and `allSkipped`
  * says nothing but such workflows ran here. `runCount` no longer counts them (#461's rule).
+ *
+ * #723: `opts.expected` (verify-runs.js `expectedWorkflows(...).expected`, `[{name, path, dispatch}]`)
+ * names the workflows that SHOULD have a run at the sha. One with no counted row there rides along as
+ * `missing` (same entries), present only when non-empty. The summary's status and conclusion are left
+ * exactly as the runs that exist make them — a caller that asked for `expected` reads `missing` and
+ * holds a would-be green (ci-wait.runState, stale-base.githubBranchHeadRedVerdict). Measured: only a
+ * small `instruction-files` workflow ran at a branch head, the repo's CI never got a run there, and the
+ * head read green from that one unrelated run.
  */
 function summarizeRunsForCommit(allForSha, sha, opts = {}) {
   if (allForSha === null) return null;
@@ -1280,6 +1304,8 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
     setAside = split.setAside;
     dispatchCounted = split.dispatchCounted || [];
   }
+  const expected = opts && Array.isArray(opts.expected) ? opts.expected : [];
+  const missing = expected.filter((e) => e && e.name && !owned.some((x) => x && x.workflowName === e.name));
   const { heads, superseded } = newestRunPerWorkflow(owned);
   const { judged, skippedOnly, allSkipped } = setAsideWhollySkipped(heads, superseded, opts && opts.verifying);
   const extra = {
@@ -1289,6 +1315,7 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
     ...(allSkipped ? { allSkipped: true } : {}),
     ...(setAside.length ? { setAside: excludedRunSummary(setAside) } : {}),
     ...(dispatchCounted.length ? { dispatchCounted: excludedRunSummary(dispatchCounted) } : {}),
+    ...(missing.length ? { missing: missing.map((e) => ({ name: e.name, path: e.path || null, dispatch: !!e.dispatch })) } : {}),
     // #691: opt-in (`opts.finishedRed`), so no reader that never asked sees a new field — every
     // JUDGED run that finished red: completed, and not success, cancelled or skipped (neither of
     // those two executed anything). The summary's single `conclusion` names only the first not-green
@@ -1624,7 +1651,7 @@ module.exports = {
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghRunsAtShaUnfiltered, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
-  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
+  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghWorkflowStates, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
   ghRunJobCount, ghRunJobs, ghActiveRunsOfWorkflow, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,

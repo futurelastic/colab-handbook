@@ -150,6 +150,28 @@ const BRANCH_TRIGGERS = Object.freeze(['push', 'pull_request', 'pull_request_tar
  * of the three `on:` shapes (scalar, flow list, block map / block list) — not a YAML parser.
  */
 function workflowTriggers(text) {
+  const parsed = onEvents(text);
+  if (!parsed) return null;
+  const { name, events } = parsed;
+  let verifies = false;
+  for (const [ev, e] of events) {
+    if (!BRANCH_TRIGGERS.includes(ev)) continue;
+    if (ev !== 'push') { verifies = true; break; }
+    const keys = e.body.map((b) => (/^([A-Za-z_-]+)\s*:/.exec(b.text) || [])[1]).filter(Boolean);
+    const tagsOnly = (keys.includes('tags') || keys.includes('tags-ignore')) && !keys.includes('branches') && !keys.includes('branches-ignore');
+    if (!tagsOnly) { verifies = true; break; }
+  }
+  return { name, verifiesBranches: verifies };
+}
+
+/**
+ * The top-level `name:` and the `on:` events of one workflow file: `{ name, events }`, or null when
+ * the text has no top-level `on:`. `events` maps an event name to `{ inline, body }` — `inline` is
+ * what follows `<event>:` on its own line ('' for the block form), `body` the child lines with their
+ * indent (`{ indent, text }`, text trimmed). The scalar and flow-list forms of `on:` give events with
+ * no inline value and no body. Shared by workflowTriggers (#567) and pushTrigger (#723).
+ */
+function onEvents(text) {
   const lines = String(text || '').split(/\r?\n/);
   let name = null;
   let onIdx = -1;
@@ -162,10 +184,10 @@ function workflowTriggers(text) {
     if (m && onIdx < 0) { onIdx = i; onInline = yamlScalar(m[1]); }
   }
   if (onIdx < 0) return null;
-  const events = new Map(); // event -> its child lines (block map form only)
+  const events = new Map();
   if (onInline) {
     const list = onInline.startsWith('[') ? onInline.replace(/^\[|\]$/g, '').split(',') : [onInline];
-    for (const e of list) { const v = yamlScalar(e); if (v) events.set(v, []); }
+    for (const e of list) { const v = yamlScalar(e); if (v) events.set(v, { inline: '', body: [] }); }
   } else {
     let evIndent = null;
     let cur = null;
@@ -178,21 +200,184 @@ function workflowTriggers(text) {
       if (indent < evIndent) break;
       if (indent === evIndent) {
         const t = l.trim();
-        const m = /^-\s*(.+)$/.exec(t) || /^([A-Za-z_]+)\s*:/.exec(t);
-        cur = m ? yamlScalar(m[1].replace(/:.*$/, '')) : null;
-        if (cur) events.set(cur, []);
-      } else if (cur) events.get(cur).push(l.trim());
+        const li = /^-\s*(.+)$/.exec(t);
+        const mk = li ? null : /^([A-Za-z_]+)\s*:\s*(.*)$/.exec(t);
+        cur = li ? yamlScalar(li[1].replace(/:.*$/, '')) : (mk ? yamlScalar(mk[1]) : null);
+        if (cur) events.set(cur, { inline: mk ? yamlScalar(mk[2]) : '', body: [] });
+      } else if (cur) events.get(cur).body.push({ indent, text: l.trim() });
     }
   }
-  let verifies = false;
-  for (const [ev, body] of events) {
-    if (!BRANCH_TRIGGERS.includes(ev)) continue;
-    if (ev !== 'push') { verifies = true; break; }
-    const keys = body.map((t) => (/^([A-Za-z_-]+)\s*:/.exec(t) || [])[1]).filter(Boolean);
-    const tagsOnly = (keys.includes('tags') || keys.includes('tags-ignore')) && !keys.includes('branches') && !keys.includes('branches-ignore');
-    if (!tagsOnly) { verifies = true; break; }
+  return { name, events };
+}
+
+/** A YAML flow list `[a, 'b', "c"]` or a single scalar → the strings; '' → []. */
+function flowList(v) {
+  const t = String(v || '').trim();
+  if (!t) return [];
+  const inner = t.startsWith('[') && t.endsWith(']') ? t.slice(1, -1) : t;
+  return inner.split(',').map(yamlScalar).filter(Boolean);
+}
+
+const PUSH_FILTER_KEYS = Object.freeze(['branches', 'branches-ignore', 'tags', 'tags-ignore', 'paths', 'paths-ignore']);
+
+/**
+ * #723: what one workflow file says about a BRANCH PUSH — the question "should this workflow have a
+ * run at the head of branch B?" asks. Returns null when the text has no top-level `on:`, else
+ * `{ name, push, readable, branches, branchesIgnore, tagsOnly, paths, dispatch }`:
+ *   push            the triggers include `push`
+ *   readable        the push filters were read; false for a shape this small reader does not follow
+ *                   (a flow map `push: {…}`, an unknown key) — the caller then never expects a run
+ *   branches / branchesIgnore   the glob lists, null when absent
+ *   tagsOnly        `tags`/`tags-ignore` with no branch filter: a branch push never fires it
+ *   paths           a `paths` / `paths-ignore` filter is present: whether a push fires it depends on
+ *                   the files the push changed, which this reader does not judge
+ *   dispatch        the triggers include `workflow_dispatch` — `gh workflow run` can give it a run
+ * Not a YAML parser; the same deliberately small reader as workflowTriggers.
+ */
+function pushTrigger(text) {
+  const parsed = onEvents(text);
+  if (!parsed) return null;
+  const { name, events } = parsed;
+  const out = { name, push: events.has('push'), readable: true, branches: null, branchesIgnore: null,
+    tagsOnly: false, paths: false, dispatch: events.has('workflow_dispatch') };
+  if (!out.push) return out;
+  const e = events.get('push');
+  if (e.inline && !['null', '~', '{}'].includes(e.inline)) { out.readable = false; return out; }
+  const lists = {};
+  let key = null;
+  let keyIndent = null;
+  for (const b of e.body) {
+    if (keyIndent === null) keyIndent = b.indent;
+    if (b.indent === keyIndent) {
+      const m = /^([A-Za-z_-]+)\s*:\s*(.*)$/.exec(b.text);
+      if (!m || !PUSH_FILTER_KEYS.includes(m[1])) { out.readable = false; return out; }
+      key = m[1];
+      lists[key] = flowList(m[2]);
+    } else if (key && b.indent > keyIndent) {
+      const li = /^-\s*(.+)$/.exec(b.text);
+      if (!li) { out.readable = false; return out; }
+      lists[key].push(yamlScalar(li[1]));
+    } else { out.readable = false; return out; }
   }
-  return { name, verifiesBranches: verifies };
+  out.branches = lists.branches || null;
+  out.branchesIgnore = lists['branches-ignore'] || null;
+  out.tagsOnly = !!(lists.tags || lists['tags-ignore']) && !out.branches && !out.branchesIgnore;
+  out.paths = !!(lists.paths || lists['paths-ignore']);
+  return out;
+}
+
+/**
+ * One GitHub filter pattern (`*` not across `/`, `**` across, `?` / `+` / `[…]` on the preceding
+ * character as in a regex) → a RegExp over the whole branch name, or null when it cannot be read.
+ */
+function filterPatternRe(p) {
+  let re = '';
+  const s = String(p);
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '*') { if (s[i + 1] === '*') { re += '.*'; i++; } else re += '[^/]*'; }
+    else if (c === '?' || c === '+') re += c;
+    else if (c === '[') { const j = s.indexOf(']', i); if (j < 0) return null; re += s.slice(i, j + 1); i = j; }
+    else if (c === '\\') { if (i + 1 >= s.length) return null; re += s[i + 1].replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'); i++; }
+    else re += c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  }
+  try { return new RegExp(`^${re}$`); } catch (_) { return null; }
+}
+
+/**
+ * #723: does a push to `branch` pass a workflow's branch filters? true / false, or null when a
+ * pattern cannot be read. `branches` is ordered with `!` negations (the last match decides);
+ * `branches-ignore` excludes on any match. Neither list → true.
+ */
+function branchFilterMatches(branch, { branches = null, branchesIgnore = null } = {}) {
+  if (branches) {
+    let hit = false;
+    for (const raw of branches) {
+      const neg = raw.startsWith('!');
+      const re = filterPatternRe(neg ? raw.slice(1) : raw);
+      if (!re) return null;
+      if (re.test(branch)) hit = !neg;
+    }
+    return hit;
+  }
+  if (branchesIgnore) {
+    for (const raw of branchesIgnore) {
+      const re = filterPatternRe(raw);
+      if (!re) return null;
+      if (re.test(branch)) return false;
+    }
+  }
+  return true;
+}
+
+/** GitHub's skip directives (docs: "Skipping workflow runs") — a push run is not created for them. */
+const SKIP_DIRECTIVES = Object.freeze(['[skip ci]', '[ci skip]', '[no ci]', '[skip actions]', '[actions skip]']);
+
+function skipsWorkflows(message) {
+  const m = String(message || '');
+  const low = m.toLowerCase();
+  return SKIP_DIRECTIVES.some((d) => low.includes(d)) || /^skip-checks:\s*true\s*$/mi.test(m);
+}
+
+/**
+ * #723: the workflows that SHOULD have a push run at the head of `branch` — the expected set a
+ * branch verdict reads before it may call the head green. A workflow is expected when its definition
+ * AT THE HEAD (GitHub reads the workflow file from the pushed commit):
+ *   - is triggered by `push`, read cleanly, not tags-only, with no `paths` / `paths-ignore` filter,
+ *   - passes its branch filters for `branch` (an unreadable pattern → not expected),
+ *   - is not in `ship-ignore-workflows`, and is in `ship-gate-workflows` when that list is declared,
+ *   - is not reported anything but `active` by the workflows API (`states`: path → state; null = unread,
+ *     every workflow taken as active).
+ * Nothing is expected when the head commit's message carries a skip directive (`headMessage`).
+ *
+ * Every doubt resolves to NOT expected: that is today's reading (the runs that exist decide), so the
+ * set can only add a hold where a workflow demonstrably should have run, never invent one.
+ *
+ * @param {object} a
+ * @param {Array<{path:string, text:string}>} a.defs  - the workflow files at the head
+ * @param {string} a.branch
+ * @param {object} [a.policy]       - parsePolicy's `{gate, ignore}`
+ * @param {Map<string,string>|null} [a.states]
+ * @param {string|null} [a.headMessage]
+ * @returns {{ expected: Array<{name:string, path:string, dispatch:boolean}>, skipDirective: boolean }}
+ */
+function expectedWorkflows({ defs, branch, policy = null, states = null, headMessage = null }) {
+  if (skipsWorkflows(headMessage)) return { expected: [], skipDirective: true };
+  const p = policy || { gate: null, ignore: [] };
+  const expected = [];
+  for (const d of defs || []) {
+    const t = pushTrigger(d.text);
+    if (!t || !t.push || !t.readable || t.tagsOnly || t.paths) continue;
+    if (branchFilterMatches(branch, t) !== true) continue;
+    const name = t.name || d.path;
+    if (p.ignore && p.ignore.includes(name)) continue;
+    if (p.gate && !p.gate.includes(name)) continue;
+    if (states && states.has(d.path) && states.get(d.path) !== 'active') continue;
+    expected.push({ name, path: d.path, dispatch: t.dispatch });
+  }
+  return { expected, skipDirective: false };
+}
+
+/**
+ * #723: how to get a run for each missing workflow — a hint, never an action. `gh workflow run` where
+ * the workflow takes `workflow_dispatch` (#567 counts that run as the push run it stands in for);
+ * otherwise a draft PR, or an empty re-push, which is the implementer's call.
+ */
+function missingHint(missing, branch) {
+  const list = Array.isArray(missing) ? missing : [];
+  if (!list.length) return '';
+  const b = branch || '<branch>';
+  const parts = list.map((x) => (x.dispatch
+    ? `\`gh workflow run ${String(x.path || x.name).split('/').pop()} --ref ${b}\``
+    : `${x.name}: no workflow_dispatch — open a draft PR (\`gh pr create --draft --head ${b}\`) or push an empty commit (the implementer's call)`));
+  return `to get the run: ${parts.join('; ')}`;
+}
+
+/** #723: the verdict-detail suffix naming the expected workflows with no run at the sha — '' when none. */
+function missingNote(missing, branch) {
+  const list = Array.isArray(missing) ? missing : [];
+  if (!list.length) return '';
+  return ` — no run of ${list.map((x) => x.name).join(', ')} at this sha, though ${list.length === 1 ? 'its' : 'their'} definition fires on a push to this branch (#723); ${missingHint(list, branch)}`;
 }
 
 /** The compact verdict-detail note for rows the lost-push rescue counted — '' when none. */
@@ -225,4 +410,7 @@ function skippedOnlyNote(rows) {
   return ` — not judged, every run skipped so it ran nothing here (#688; name a workflow in ship-gate-workflows if it must run): ${names.join(', ')}`;
 }
 
-module.exports = { VERIFYING_EVENTS, GATE_KEY, IGNORE_KEY, parsePolicy, setAsideReason, splitVerifying, setAsideNote, skippedOnlyNote, workflowTriggers, dispatchCountedNote };
+module.exports = {
+  VERIFYING_EVENTS, GATE_KEY, IGNORE_KEY, SKIP_DIRECTIVES, parsePolicy, setAsideReason, splitVerifying, setAsideNote, skippedOnlyNote,
+  workflowTriggers, pushTrigger, branchFilterMatches, skipsWorkflows, expectedWorkflows, missingHint, missingNote, dispatchCountedNote,
+};
