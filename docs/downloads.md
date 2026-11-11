@@ -58,7 +58,9 @@ wiring):
   their files to.
 - **Nothing** when the site already names that version or a newer one (a complete version sends
   nothing), when `project.yml` has no `downloads:` block, or when the site cannot be read. That
-  last case is a warning, never a red run, and the next daily run retries.
+  last case is a warning, never a red run, and the next daily run retries — except a `401` or
+  `403`, which no later run clears by itself
+  ([below](#a-site-that-requires-sign-in-714)).
 
 The site is read **from the release job's runner**. A site only a private network reaches needs
 the release job on a runner inside that network, as the publish job already does.
@@ -357,6 +359,34 @@ Per repo, never shared between repos:
 | `DOWNLOADS_SSH_HOST`, `DOWNLOADS_SSH_PORT`, `DOWNLOADS_SSH_USER` | secrets | where rsync goes |
 | `DOWNLOADS_SSH_KNOWN_HOSTS` | secret | the host key line(s); host keys are checked strictly. The older name `DOWNLOADS_KNOWN_HOSTS` is still read when this one is unset |
 | `DOWNLOADS_URL` | variable | the site root, `https://…`; the script appends `/<app>` |
+| `DOWNLOADS_READ_HEADERS` | secret, optional | only for a site that requires sign-in: one `Name: value` HTTP header per line, sent on every read of the site ([below](#a-site-that-requires-sign-in-714)) |
+
+### A site that requires sign-in (#714)
+
+Two things read the site over HTTPS: the release job's downloads sweep (`latest.json`, to find a
+final the site lacks) and the publish job (the requires check and the read-back). The upload
+account above is SSH only and is never used for either. A site that answers `401` to a read
+without a credential therefore needs **`DOWNLOADS_READ_HEADERS`**, and both jobs read it:
+
+- One `Name: value` header per line, for example `Authorization: Bearer <token>`, or the two
+  service-token headers an access proxy in front of the site asks for. A read-only credential is
+  enough, because nothing writes over HTTPS.
+- It is passed to `curl` from a file and to `fetch` as headers. It never appears on a command line
+  and is never printed. If a line is not a header, the run says which line (without its value) and
+  hands nothing on.
+- If the secret is unset, the site is read with no credential, as before.
+
+If the sweep's read still answers `401` or `403` (no secret, or one the site refuses), the final is
+not handed on, and the release job reports it as an error instead of the daily warning: an
+`::error title=Downloads not shipped::` annotation and a summary banner that name the final and
+the status, plus, on github.com, a failing `downloads/<app>` commit status on the final's commit (a forge
+reads CI from commit statuses, so there the annotation stands alone). The job still
+exits 0, for the same reason a standing release refusal does: a red run on `main` would refuse the
+ship that fixes it. The publish job, given a `401` or `403`, fails and names the secret.
+
+The installers' own reads (`$SITE/<app>/latest.json` and the files) are made by the person
+installing, not by CI, so this secret does not reach them. An installer for a sign-in site has to
+get its credential from that person.
 
 ## Moving an existing publish script onto the template
 

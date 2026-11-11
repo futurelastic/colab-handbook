@@ -145,7 +145,11 @@
 # one (a complete version sends nothing), and when the site cannot be read from this job's runner —
 # a warning then, never a red run; the next daily run retries. The site is read at
 # vars.DOWNLOADS_URL/<downloads.app>/latest.json FROM THE RELEASE JOB'S RUNNER: a site only a private
-# network reaches needs the release job on a runner inside it (RUNNERS, below). The wiring:
+# network reaches needs the release job on a runner inside it (RUNNERS, below). A site that requires
+# sign-in (#714) is read with the optional DOWNLOADS_READ_HEADERS secret — one `Name: value` header
+# per line, the same secret publish-downloads.yml reads with; a 401/403 is not the transient warning
+# but an `::error title=Downloads not shipped::` plus a failing `downloads/<app>` commit status on
+# the final, naming it (still exit 0, for the reason "A REFUSAL IS NOT A FAILURE" gives). The wiring:
 #
 #   build-macos:                                    # EDIT: one job per platform you build
 #     needs: release
@@ -362,6 +366,7 @@ jobs:
       contents: write # push the tags (and, with promotion: main-loop, the promotion), publish the GitHub Release
       issues: write # finalize opens / comments on / closes the "release: vX.Y.Z" tracking issue
       actions: write # read the runs at a commit (ci-green, full-suite, trunk-green); dispatch CI after a promotion
+      statuses: write # the downloads sweep marks a final its site refused to read (401/403) failed (#714)
     # What the npm job below needs (#433) — empty / publish=false unless this run tagged something (or
     # the daily sweep found a final npm lacks, #612) AND .github/project.yml opts in with release.npm.
     outputs:
@@ -823,7 +828,8 @@ jobs:
       # when the site's latest.json does not name it yet (absent → never published, older → behind) — a
       # final a person tagged (early, #627, or `final: human`) is never tagged by a run, so without this
       # sweep it never reached the site. The site at that version or newer, no `downloads:` block, no
-      # DOWNLOADS_URL, or an unreadable site: nothing is handed on, and the step stays green.
+      # DOWNLOADS_URL, or an unreadable site: nothing is handed on, and the step stays green — a 401/403
+      # (#714) too, but as an error annotation and a failing commit status on the final, not a warning.
       - name: Read the downloads target [publish]
         id: downloads-target
         if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '' || (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch')
@@ -831,6 +837,8 @@ jobs:
           TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
           SWEEP: ${{ (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch' }}
           DOWNLOADS_URL: ${{ vars.DOWNLOADS_URL }}
+          # #714: a site that requires sign-in for every file. Optional; unset, the read sends no credential.
+          DOWNLOADS_READ_HEADERS: ${{ secrets.DOWNLOADS_READ_HEADERS }}
         run: |
           set -uo pipefail
           # The `downloads:` block's `app:` — the same key publish-downloads.mjs reads. No block, no target.
@@ -871,7 +879,20 @@ jobs:
             { echo "tag=$FINAL"; echo "swept=$FINAL"; } >> "$GITHUB_OUTPUT"
             echo "downloads sweep: $1 — handing $FINAL to the build and downloads jobs (#669)" | tee -a "$GITHUB_STEP_SUMMARY"
           }
-          if BODY="$(retry_transient curl -fsSL "$URL" 2> "$ERR")"; then
+          # #714: DOWNLOADS_READ_HEADERS — one `Name: value` header per line (docs/downloads.md, "A site
+          # that requires sign-in") — goes to curl from a file, never on its command line, and is never printed.
+          AUTH=()
+          if [ -n "${DOWNLOADS_READ_HEADERS:-}" ]; then
+            HDRS="$RUNNER_TEMP/downloads-read-headers"
+            trap 'rm -f "$HDRS"' EXIT
+            ( umask 077; printf '%s\n' "$DOWNLOADS_READ_HEADERS" | tr -d '\r' | sed '/^[[:space:]]*$/d' > "$HDRS" )
+            if grep -qvE '^[A-Za-z0-9!#$%&*+.^_`|~-]+:[[:space:]]*[^[:space:]]' "$HDRS"; then
+              echo "::error title=Downloads not shipped::the DOWNLOADS_READ_HEADERS secret has a line that is not a 'Name: value' header (the value is not shown) — $FINAL is not handed on"
+              exit 0 # a standing refusal, not a red run (the 401/403 branch below says why)
+            fi
+            AUTH=(-H "@$HDRS")
+          fi
+          if BODY="$(retry_transient curl -fsSL ${AUTH[@]+"${AUTH[@]}"} "$URL" 2> "$ERR")"; then
             SITE="$(jq -r '.version // empty' <<< "$BODY" 2> /dev/null || true)"
             if [ -z "$SITE" ]; then
               echo "::warning::downloads sweep: $URL names no version — $FINAL is not handed on in this run"
@@ -884,6 +905,29 @@ jobs:
             fi
           elif grep -q 'error: 404' "$ERR"; then
             hand_on "$FINAL is final on main and the site has no latest.json for $APP"
+          elif CODE="$(grep -oE 'error: 40[13]' "$ERR" | head -n 1 | grep -oE '40[13]')"; then
+            # #714: 401/403 is a refusal no later run clears by itself, so it is not the warning below: a
+            # final whose files would never ship. Visible, but exit 0 — the #467 rule (header, "A REFUSAL
+            # IS NOT A FAILURE"): a red run would make main's head not-green and refuse the very ship
+            # that fixes it. So: an error annotation, a summary banner, and a failing commit status
+            # `downloads/<app>` on the final's own commit. The next daily run re-reads and re-posts.
+            if [ -n "${DOWNLOADS_READ_HEADERS:-}" ]; then
+              WHY="the site refused the DOWNLOADS_READ_HEADERS credential — check or replace that secret"
+            else
+              WHY="the site requires sign-in and no DOWNLOADS_READ_HEADERS secret is set on this repo"
+            fi
+            MSG="$URL answered $CODE, so $FINAL is final on main but its files never ship: $WHY (docs/downloads.md, \"A site that requires sign-in\")"
+            echo "::error title=Downloads not shipped::downloads sweep: $MSG"
+            { echo "#### ⚠ Downloads not shipped — $FINAL"; echo; echo "$MSG"; } >> "$GITHUB_STEP_SUMMARY"
+            SHA="$(git rev-list -n 1 "$FINAL")"
+            # github.com only: a forge reads CI from commit statuses (#681), where a failing one would be the
+            # red main this branch exists to avoid. There the annotation stands alone.
+            if [ "${GITHUB_SERVER_URL:-https://github.com}" != "https://github.com" ]; then
+              :
+            elif ! retry_transient gh api --silent -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=failure \
+                -f context="downloads/$APP" -f description="$FINAL not on the site: latest.json answered $CODE" > /dev/null; then
+              echo "::warning::downloads sweep: could not post the failing downloads/$APP status on $FINAL — the annotation above stands"
+            fi
           else
             echo "::warning::downloads sweep: could not read $URL from this runner ($(tail -n 1 "$ERR" 2> /dev/null)) — $FINAL is not handed on in this run; the next daily run retries"
           fi
