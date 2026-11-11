@@ -704,6 +704,69 @@ test('#669 wiring: downloads-tag is a job output; the sweep runs on the daily ru
   assert.match(relHead, /TAGS: \$\{\{ steps\.cut\.outputs\.tag \}\} \$\{\{ steps\.finalize\.outputs\.tag \}\} \$\{\{ steps\.downloads-target\.outputs\.swept \}\}/);
 });
 
+// #714: a site that requires sign-in for every file answers 401 to the sweep's bare read, and that used to be the
+// daily transient warning — a final a person tagged then never shipped, and nothing went red. The stub answers 401
+// unless curl was given a header file holding the right credential (`-H @file`, never the value on the command line).
+const AUTH_SITE_STUB = [
+  'echo "curl $*" >> "$LOG"; hdr=""; prev=""',
+  'for a in "$@"; do [ "$prev" = "-H" ] && case "$a" in (@*) hdr="${a#@}" ;; esac; prev="$a"; done',
+  'if [ -n "$hdr" ] && grep -qx "Authorization: Bearer good" "$hdr"; then echo "{\\"version\\":\\"1.2.0\\",\\"files\\":{}}"; exit 0; fi',
+  'echo "curl: (22) The requested URL returned error: ${SITE_REFUSE:-401}" >&2; exit 22',
+].join('\n');
+const GH_STATUS_STUB = 'echo "gh $*" >> "$LOG"';
+function dlAuthSweep({ headers, refuse } = {}) {
+  const env = { TAGS: ' ', SWEEP: 'true', DOWNLOADS_URL: 'https://dl.example.invalid', GITHUB_REPOSITORY: 'o/app', GITHUB_SERVER_URL: 'https://github.com' };
+  if (headers !== undefined) env.DOWNLOADS_READ_HEADERS = headers;
+  if (refuse) env.SITE_REFUSE = refuse;
+  return runStep(DL_TARGET, { cwd: downloadsRepo(), stubs: { curl: AUTH_SITE_STUB, gh: GH_STATUS_STUB }, env });
+}
+
+test('#714 downloads sweep: on a sign-in site, DOWNLOADS_READ_HEADERS is sent from a file and a human-tagged final is handed on', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const r = dlAuthSweep({ headers: '\r\nAuthorization: Bearer good\r\n\n' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(r.output, { tag: 'v1.3.0', swept: 'v1.3.0' });
+  assert.match(r.log, /^curl -fsSL -H @\S+downloads-read-headers https:\/\/dl\.example\.invalid\/myapp\/latest\.json$/m);
+  assert.doesNotMatch(r.log + r.stdout + r.stderr, /Bearer good/, 'the credential is never on a command line or in the log');
+  assert.ok(!fs.existsSync(path.join(r.dir, 'downloads-read-headers')), 'the header file is removed when the step ends');
+  assert.doesNotMatch(r.log, /^gh /m, 'no failing status on a read that worked');
+});
+
+test('#714 downloads sweep: a 401/403 is a visible refusal naming the final and the status — never the daily warning', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  for (const [label, opts, why] of [
+    ['no credential', {}, /no DOWNLOADS_READ_HEADERS secret is set/],
+    ['a refused credential', { headers: 'Authorization: Bearer stale', refuse: '403' }, /refused the DOWNLOADS_READ_HEADERS credential/],
+  ]) {
+    const r = dlAuthSweep(opts);
+    const code = opts.refuse || '401';
+    assert.strictEqual(r.status, 0, `${label}: exit 0 — a red run would refuse the ship that fixes it (#467)`);
+    assert.deepStrictEqual(r.output, {}, `${label}: nothing handed on`);
+    assert.match(r.stdout, new RegExp(`::error title=Downloads not shipped::downloads sweep: \\S+myapp/latest\\.json answered ${code}, so v1\\.3\\.0 is final on main but its files never ship`), label);
+    assert.match(r.stdout, why, label);
+    assert.doesNotMatch(r.stdout, /::warning::downloads sweep: could not read/, `${label}: not the transient warning`);
+    assert.strictEqual((r.log.match(/^curl /gm) || []).length, 1, `${label}: a refusal is not retried as transient`);
+    assert.match(r.log, new RegExp(`^gh api --silent -X POST repos/o/app/statuses/[0-9a-f]{40} -f state=failure -f context=downloads/myapp -f description=v1\\.3\\.0 not on the site: latest\\.json answered ${code}$`, 'm'), label);
+    assert.match(fs.readFileSync(path.join(r.dir, 'summary'), 'utf8'), /Downloads not shipped — v1\.3\.0/, label);
+    assert.doesNotMatch(r.stdout, /Bearer/, `${label}: the credential is never printed`);
+  }
+  const forge = runStep(DL_TARGET, { cwd: downloadsRepo(), stubs: { curl: AUTH_SITE_STUB, gh: GH_STATUS_STUB }, env: { TAGS: ' ', SWEEP: 'true', DOWNLOADS_URL: 'https://dl.example.invalid', GITHUB_REPOSITORY: 'o/app', GITHUB_SERVER_URL: 'https://forge.example.invalid' } });
+  assert.match(forge.stdout, /::error title=Downloads not shipped::/);
+  assert.doesNotMatch(forge.log, /^gh /m, 'on a forge, whose CI is commit statuses (#681), no failing status is posted');
+});
+
+test('#714 downloads sweep: a DOWNLOADS_READ_HEADERS line that is not a header hands nothing on, without echoing it', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const r = dlAuthSweep({ headers: 'Authorization: Bearer good\nsecret-token-no-name' });
+  assert.deepStrictEqual([r.status, r.output, r.log], [0, {}, ''], 'the site is not asked');
+  assert.match(r.stdout, /::error title=Downloads not shipped::the DOWNLOADS_READ_HEADERS secret has a line that is not a 'Name: value' header/);
+  assert.doesNotMatch(r.stdout + r.stderr, /secret-token-no-name|Bearer good/);
+});
+
+test('#714 wiring: the sweep reads the optional secret, and the release job may post the failing status', () => {
+  const lines = TEXT.split('\n');
+  const at = lines.findIndex((l) => l.trim() === `- name: ${DL_TARGET}`);
+  assert.match(lines.slice(at + 1, at + 12).join('\n'), /DOWNLOADS_READ_HEADERS: \$\{\{ secrets\.DOWNLOADS_READ_HEADERS \}\}/);
+  assert.match(TEXT, /^ {6}statuses: write # /m);
+});
+
 test('npm job: a private repository, an unreadable visibility, or a token in the environment is refused', () => {
   const gh = (v) => (v === null ? 'exit 1' : `echo ${v}`);
   assert.strictEqual(runStep(REFUSE, { stubs: { gh: gh('false') }, env: { REPO: 'o/p' } }).status, 0);
@@ -812,7 +875,11 @@ test('npm job: GitHub-hosted, OIDC only, opt-in, and no token anywhere in the te
   assert.doesNotMatch(job('release'), /id-token/, 'the OIDC grant lives on the npm job alone');
   assert.doesNotMatch(job('npm-record'), /id-token/);
   const code = lines.filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/\s#.*$/, '')).join('\n');
-  assert.doesNotMatch(code, /secrets\./, 'no stored secret is read — no token fallback');
+  // #714: the one stored secret the template reads is the downloads site's READ credential, on the sweep step
+  // alone — never a registry token, and never in either npm job.
+  const reads = code.match(/.*secrets\..*/g) || [];
+  assert.deepStrictEqual(reads.map((l) => l.trim()), ['DOWNLOADS_READ_HEADERS: ${{ secrets.DOWNLOADS_READ_HEADERS }}'], 'no stored secret is read — no token fallback');
+  for (const j of ['npm', 'npm-record']) assert.doesNotMatch(job(j), /secrets\./, `${j}: no stored secret`);
   assert.doesNotMatch(code, /registry-url/, 'setup-node registry-url writes an .npmrc expecting a token');
 });
 

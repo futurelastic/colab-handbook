@@ -32,6 +32,9 @@
 //   DOWNLOADS_KEY_FILE              the private key file the workflow wrote from DOWNLOADS_SSH_KEY
 //   DOWNLOADS_KNOWN_HOSTS_FILE      the known-hosts file the workflow wrote from DOWNLOADS_SSH_KNOWN_HOSTS
 //   DOWNLOADS_RESERVED              names the site keeps for itself, refused as an app slug (space/comma list)
+//   DOWNLOADS_READ_HEADERS          optional (#714): a site that requires sign-in for every file. One `Name: value`
+//                                   HTTP header per line, sent on every read of the site (the requires check, the
+//                                   read-back); never printed. Unset, the site is read with no credential
 //
 // THE APPS IT REQUIRES (#653) come from manifest.json's optional `requires`: [{"slug": "<app>", "min": "X.Y.Z"}],
 // other apps on the same site that its installers install first. Before anything is sent, every slug must have a final
@@ -570,6 +573,29 @@ function runRsync({ rsync, sshArgs, args, log }) {
   if (r.status !== 0) throw new Error(`rsync failed (${r.status ?? r.signal}): ${(r.stderr || r.stdout || '').trim()}`)
 }
 
+/**
+ * DOWNLOADS_READ_HEADERS (#714) as a headers object: one `Name: value` per line, blank lines ignored. A line that is not
+ * a header throws naming its line number only — the value is a credential and is never echoed.
+ */
+export function readHeaders(text) {
+  const out = {}
+  const lines = String(text ?? '').split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line) continue
+    const m = /^([A-Za-z0-9!#$%&'*+.^_`|~-]+):[ \t]*(\S.*)$/.exec(line)
+    if (!m) throw new Error(`DOWNLOADS_READ_HEADERS: line ${i + 1} is not a "Name: value" header (the value is not shown); nothing was published`)
+    out[m[1].toLowerCase()] = m[2]
+  }
+  return out
+}
+
+/** `fetchImpl` with `headers` added to every request — how every read of the site carries DOWNLOADS_READ_HEADERS. */
+export function withHeaders(fetchImpl, headers) {
+  if (!Object.keys(headers).length) return fetchImpl
+  return (url, init = {}) => fetchImpl(url, { ...init, headers: { ...headers, ...(init.headers ?? {}) } })
+}
+
 async function get(fetchImpl, url, attempts = 3) {
   let last
   for (let i = 0; i < attempts; i++) {
@@ -589,6 +615,8 @@ async function get(fetchImpl, url, attempts = 3) {
 async function readBytes(fetchImpl, url) {
   const res = await get(fetchImpl, url)
   if (res.status === 404) return null
+  if (res.status === 401 || res.status === 403)
+    throw new Error(`${url} answered ${res.status} — the site requires sign-in: set or check the DOWNLOADS_READ_HEADERS secret (docs/downloads.md)`)
   if (!res.ok) throw new Error(`${url} answered ${res.status}`)
   return Buffer.from(await res.arrayBuffer())
 }
@@ -826,12 +854,13 @@ async function main(argv, env) {
   const dryRun = rest.includes('--dry-run')
   const assetsDir = resolve(rest.filter((a) => !a.startsWith('--'))[0] ?? '')
   const baseUrl = env.DOWNLOADS_URL
+  const fetchImpl = withHeaders(fetch, readHeaders(env.DOWNLOADS_READ_HEADERS))
   const outDir = mkdtempSync(join(tmpdir(), 'publish-downloads-'))
   const staged = await stage({ tag, assetsDir, outDir, baseUrl, root, config, manifest })
   console.log(`Staged ${config.app} ${staged.version}: ${[...Object.keys(staged.files), ...staged.images].join(', ')}`)
   await assertResolves(baseUrl)
   const target = dryRun ? { dest: 'DRY-RUN:', sshArgs: undefined } : sshCommand(env)
-  const result = await publish({ outDir, app: config.app, ...target, baseUrl, dryRun })
+  const result = await publish({ outDir, app: config.app, ...target, baseUrl, dryRun, fetchImpl })
   if (dryRun) console.log(`Dry run of ${result.version} done — nothing was uploaded`)
   else
     console.log(

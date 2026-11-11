@@ -659,3 +659,29 @@ test('portal fields: published and read back; a re-run is a no-op; a changed ima
   fs.writeFileSync(path.join(fx.assets, 'probe-1.2.0.tgz'), 'rebuilt');
   await assert.rejects(run(fx), /\(main\.png, probe-1\.2\.0\.tgz\).*publish a new version instead/);
 });
+
+// #714: a site that requires sign-in for every file. DOWNLOADS_READ_HEADERS (one `Name: value` per line) goes on every
+// read of the site; a 401/403 names the secret; a malformed line refuses without echoing the credential.
+test('#714 DOWNLOADS_READ_HEADERS: parsed per line, sent on every site read, and a 401 names the secret', async () => {
+  const m = await load();
+  assert.deepStrictEqual(m.readHeaders(undefined), {});
+  assert.deepStrictEqual(m.readHeaders('\r\nAuthorization: Bearer t0k\r\nCF-Access-Client-Id:  abc\n\n'), { authorization: 'Bearer t0k', 'cf-access-client-id': 'abc' });
+  for (const bad of ['just-a-token', 'Authorization:', 'Bad Name: v'])
+    assert.throws(() => m.readHeaders(`X-Ok: 1\n${bad}`), (e) => /line 2 is not a "Name: value" header/.test(e.message) && !e.message.includes(bad));
+
+  const fx = fixture();
+  const open = siteFetch(fx.site);
+  fs.mkdirSync(path.join(path.dirname(fx.site), 'svc', '1.0.0'), { recursive: true });
+  fs.writeFileSync(path.join(path.dirname(fx.site), 'svc', 'latest.json'), JSON.stringify({ version: '1.0.0', files: {} }));
+  fs.writeFileSync(path.join(path.dirname(fx.site), 'svc', 'manifest.json'), JSON.stringify(JSON.parse(fs.readFileSync(path.join(fx.repo, '.github', 'downloads', 'manifest.json'), 'utf8'))));
+  const sent = [];
+  const signIn = async (url, init = {}) => {
+    sent.push(init.headers ?? {});
+    return init.headers?.authorization === 'Bearer t0k' ? open(url) : new Response('sign in', { status: 401 });
+  };
+  const check = (fetchImpl) => m.checkRequires({ app: 'probe', manifest: { requires: [{ slug: 'svc', min: '1.0.0' }] }, baseUrl: BASE, fetchImpl });
+  await assert.rejects(check(signIn), /svc\/latest\.json answered 401 — the site requires sign-in: set or check the DOWNLOADS_READ_HEADERS secret/);
+  assert.deepStrictEqual(await check(m.withHeaders(signIn, m.readHeaders('Authorization: Bearer t0k'))), ['svc']);
+  assert.ok(sent.slice(1).every((h) => h.authorization === 'Bearer t0k' && h['cache-control'] === 'no-cache'), 'the credential rides with the no-cache header on every read');
+  assert.strictEqual(m.withHeaders(open, {}), open, 'unset: the plain fetch, unchanged');
+});

@@ -58,6 +58,10 @@
 #             repo set up before the rename keeps publishing; rename the secret when convenient.
 #   variable  DOWNLOADS_URL — the site's root address (https). The script appends /<app>; no host is ever
 #             written in the repository.
+#   secret    DOWNLOADS_READ_HEADERS — optional (#714), only for a site that requires sign-in for every file: one
+#             `Name: value` HTTP header per line (e.g. `Authorization: Bearer …`, or an access proxy's two
+#             service-token headers), sent on every read of the site. The same secret release-auto.yml's downloads
+#             sweep reads latest.json with. Unset, the site is read with no credential.
 #
 # THIS FILE DOES NOT CHANGE YOUR REPO'S EXPOSURE (OR LEGACY TIER): it publishes files a final already made.
 name: Publish downloads
@@ -174,6 +178,7 @@ jobs:
       - name: Publish
         env:
           ASSETS: ${{ steps.assets.outputs.dir }}
+          DOWNLOADS_READ_HEADERS: ${{ secrets.DOWNLOADS_READ_HEADERS }}
           DOWNLOADS_KEY_FILE: ${{ runner.temp }}/downloads-ssh/key
           DOWNLOADS_KNOWN_HOSTS_FILE: ${{ runner.temp }}/downloads-ssh/known_hosts
         run: |
