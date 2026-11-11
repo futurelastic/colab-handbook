@@ -12054,6 +12054,37 @@ function pushVerifiedWorkflowsAt(repoAbs, sha) {
   return names;
 }
 
+/**
+ * #723: the workflows that SHOULD have a push run at `sha`, the head of `branch` — read from the
+ * workflow files at that sha, the head commit's message (a skip directive), the repo's policy and the
+ * workflows API's state (verify-runs.js `expectedWorkflows`). Null when the tree cannot be read (the
+ * commit is not local and one fetch does not bring it): no expected set, so the runs that exist
+ * decide, as before. GitHub only — a forge's commit statuses carry no workflow identity to match.
+ */
+function expectedWorkflowsAt(repoAbs, sha, branch) {
+  if (!sha || !branch) return null;
+  if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) {
+    git.git(['fetch', '--quiet', git.remoteFor(repoAbs) || 'origin', sha], repoAbs);
+    if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) return null;
+  }
+  const ls = git.git(['ls-tree', '--name-only', `${sha}:.github/workflows`], repoAbs);
+  const defs = [];
+  if (ls.ok) {
+    for (const f of ls.stdout.split('\n').map((x) => x.trim()).filter((x) => /\.ya?ml$/.test(x))) {
+      const rel = `.github/workflows/${f}`;
+      const show = git.git(['show', `${sha}:${rel}`], repoAbs);
+      if (show.ok) defs.push({ path: rel, text: show.stdout });
+    }
+  }
+  if (!defs.length) return { expected: [], skipDirective: false };
+  const msg = git.git(['log', '-1', '--format=%B', sha], repoAbs);
+  const headMessage = msg.ok ? msg.stdout : null;
+  if (verifyRuns.skipsWorkflows(headMessage)) return { expected: [], skipDirective: true }; // no API call spent
+  return verifyRuns.expectedWorkflows({
+    defs, branch, policy: verifyRuns.parsePolicy(projectDoc(repoAbs)), states: git.ghWorkflowStates(repoAbs), headMessage,
+  });
+}
+
 /** Number of workflow files in `.github/workflows` at `sha`, or null when the tree cannot be read. */
 function trunkWorkflowFiles(repoAbs, sha) {
   if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) return null;
@@ -12479,7 +12510,9 @@ function shipStaleBaseCheck(repoAbs, gh, base, branch) {
     // head row below never refuses on a run that policy sets aside (a release lane, an ignored workflow).
     const rows = git.ghRunsForCommit(repoAbs, branch, headSha);
     run = git.summarizeRunsForCommit(rows, headSha);
-    verifiedRun = git.summarizeRunsForCommit(rows, headSha, { verifying: verifyingPolicy(repoAbs), finishedRed: true });
+    // #723: the workflows that should have fired at the head — one with no run there holds the head row.
+    const exp = rows ? expectedWorkflowsAt(repoAbs, headSha, branch) : null;
+    verifiedRun = git.summarizeRunsForCommit(rows, headSha, { verifying: verifyingPolicy(repoAbs), finishedRed: true, expected: exp ? exp.expected : [] });
   }
   // #606: `run`/`headSha` are additive — the docs-only row reads whether that run finished red.
   // #682: on a forge, `headCi` is the branch head's own CI verdict (green / red / pending), its own
@@ -16863,6 +16896,15 @@ Exit codes — branch on these, never on the text:
   4 RATE_LIMITED     GitHub refused for quota (403/429) — the wait ENDS, it does not retry
   5 UNKNOWN          a read failed or returned a state it cannot classify
   6 ALREADY_WAITING  another live ci-wait on this checkout holds the same run/sha
+  7 NO_RUN           --sha with --branch: the deadline passed and a workflow whose definition at the
+                     head fires on a push to that branch still had NO run there (#723). The runs that
+                     do exist never stand in for it, so such a head is pending, never GREEN. The
+                     output names it (\`no-run:<workflow>\`) and how to get it a run — a hint only
+
+Expected at a branch head (#723): a workflow file at the head sha triggered by \`push\`, whose
+branch filters match the branch, with no \`paths\`/\`paths-ignore\` filter, in ship-gate-workflows
+when declared, not in ship-ignore-workflows, and not disabled. None when the head commit carries a
+skip directive ([skip ci] …). Any doubt (an unreadable filter, an unread tree) means not expected.
 
 On a remote the machine config's \`forges\` names as Forgejo (#678, #682), --sha reads the commit's
 combined status instead — no gh call, no conditional request; a status has no run id, so <run-id>
@@ -16870,7 +16912,7 @@ is a usage error there. RED and --json name the contexts that are not green (\`n
 
 It prints the wait it did: outcome, elapsed time, polls, and how many were 304s.
   --json   { outcome, exit, target, polls, notModified, forced, waitedSec, deadlineSec, deadlineBasis,
-             detail, status, conclusion, url, notGreen? }`;
+             detail, status, conclusion, url, notGreen?, missing?, hint? }`;
 
 function cmdCiWait(argv) {
   const opts = parseArgs(argv, {
@@ -16938,6 +16980,10 @@ function cmdCiWait(argv) {
   }
 
   const verifyPolicy = verifyingPolicy(repoAbs);
+  // #723: on a branch head, the workflows that should have a run there — read once, before the loop. A
+  // missing one holds green as pending and ends the wait NO_RUN (exit 7) at the deadline.
+  const expectedSet = !fc && !runId && opts.branch ? expectedWorkflowsAt(repoAbs, opts.sha, opts.branch) : null;
+  const expected = expectedSet ? expectedSet.expected : [];
   // #681: inside a Forgejo Actions run (the release workflow waiting on CI at its own sha) the calling
   // workflow's own contexts are dropped — a run never waits on itself (#425's rule; a no-op elsewhere).
   const poll = fc ? () => ciWait.forgePoll(fc.ciVerdict(opts.sha, { branch: opts.branch || null, rowsFilter: (rows) => releaseCut.withoutOwnWorkflow(rows) }), fc.kind) : (etag) => {
@@ -16960,7 +17006,7 @@ function cmdCiWait(argv) {
       }
       // #503: the same verifying-runs policy ship reads — a wait on trunk's head ends when the CI
       // that verifies the code ends, not when the post-CI release run does.
-      summary = git.summarizeRunsForCommit(rows, opts.sha, { verifying: verifyPolicy });
+      summary = git.summarizeRunsForCommit(rows, opts.sha, { verifying: verifyPolicy, expected });
       const pick = rows.find((x) => x.databaseId === summary.databaseId);
       summary = { ...summary, url: pick ? pick.url : null };
     }
@@ -16985,13 +17031,14 @@ function cmdCiWait(argv) {
     status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
     ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),
     ...(Array.isArray(s.dispatchCounted) && s.dispatchCounted.length ? { dispatchCounted: s.dispatchCounted } : {}),
+    ...(Array.isArray(s.missing) && s.missing.length ? { missing: s.missing, hint: verifyRuns.missingHint(s.missing, opts.branch) } : {}), // #723
     ...(s.readVia ? { readVia: s.readVia } : {}), // #654: the verdict names how it was read
     ...(Array.isArray(s.notGreen) && s.notGreen.length ? { notGreen: s.notGreen } : {}), // #682: forge contexts not green
   };
   if (opts.json) print(JSON.stringify(out, null, 2));
   else {
     print(`${res.outcome} ${target} — waited ${ciWait.fmtDuration(res.waitedMs)}, ${res.polls} poll(s), ${res.notModified} of them 304` +
-      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}${verifyRuns.dispatchCountedNote(s.dispatchCounted)}${readViaNote(s)}${notGreenNote(s)}`);
+      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}${verifyRuns.dispatchCountedNote(s.dispatchCounted)}${verifyRuns.missingNote(s.missing, opts.branch)}${readViaNote(s)}${notGreenNote(s)}`);
   }
   return code;
 }

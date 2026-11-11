@@ -163,3 +163,18 @@ test('#691: without finishedRed (a hand-built summary) the summary conclusion de
   const r = githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'completed', conclusion: 'timed_out' } });
   assert.match(r.detail, /failing: conclusion=timed_out\./);
 });
+
+test('#723 githubBranchHeadRedVerdict: green from the runs that exist, an expected workflow with no run — pending, self-clearing, named, never null', () => {
+  const missing = [{ name: 'CI', path: '.github/workflows/ci.yml', dispatch: false }];
+  const r = githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'completed', conclusion: 'success', runCount: 1, missing } });
+  assert.deepStrictEqual([r.ok, r.verdict, r.selfClearing], [false, 'pending', true]);
+  assert.match(r.detail, /has no run of CI, though its definition fires on a push to this branch/);
+  assert.match(r.detail, /colab ci-wait --sha [0-9a-f]+ --branch /);
+  assert.match(r.detail, /draft PR/);
+  // A red still wins over a missing run: it is the finding, not a wait.
+  const red = githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'completed', conclusion: 'failure', missing } });
+  assert.strictEqual(red.verdict, 'red');
+  // workflow_dispatch → `gh workflow run` is offered instead.
+  const d = githubBranchHeadRedVerdict({ ...ghHead, run: { status: 'completed', conclusion: 'success', missing: [{ ...missing[0], dispatch: true }] } });
+  assert.match(d.detail, /`gh workflow run ci\.yml --ref /);
+});

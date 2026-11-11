@@ -146,6 +146,23 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   how B1a waits on it), a run that cannot arrive, and a `green` head. The cure and ci-grant doors
   already demand a green head, so this row never changes them. Measured before the fix: a head
   whose required secret-scan job had failed before scanning read READY on every row.
+- **[Hard — gate: colab ship holds a head where a workflow that should have run has no run]**
+  **The runs that exist never stand in for one that is missing (#723).** The verdict is the newest
+  run per workflow among the runs at the sha, so a workflow with no run there was not counted at
+  all, and one green unrelated run made the head green. Now `colab ship` (dry and real, the same
+  row) and `colab ci-wait --sha <head> --branch <b>` first read which workflows **should** have a
+  push run at that head: a workflow file at the head sha triggered by `push`, whose branch filters
+  match the branch, with no `paths`/`paths-ignore` filter, in `ship-gate-workflows` when declared,
+  not in `ship-ignore-workflows`, and not disabled. None are expected when the head commit carries a
+  skip directive (`[skip ci]` …). Every doubt (an unreadable filter, a tree that cannot be read)
+  means not expected, which is the old reading. A run stands for an expected workflow by its name or
+  its workflow id; a run carrying neither could be any workflow, so then nothing is missing. An expected workflow with no run holds a would-be
+  green: ship adds the row as `pending`, `SELF_CLEARING`; ci-wait keeps waiting, and at the deadline
+  ends `NO_RUN` (exit 7, `no-run:<workflow>`). A red still wins. Both name how to get the run, as a
+  hint only: `gh workflow run` where the workflow takes `workflow_dispatch` (#567 counts that run),
+  else a draft PR, or an empty re-push, which is the implementer's call. A head with no run at all
+  is still Branch CI's `none`. Measured: one push created only a small `instruction-files` run, the
+  repo's CI never got a run at that sha, and both `ci-wait` and `ship --dry` read it green.
 - **The quantifiers are the trunk rule's, unchanged (#92, #307).** `every … completed`: a
   fast sibling already green never answers for a slow one still running — that sha is
   `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
@@ -365,7 +382,7 @@ expectations as the GitHub adapter.
 |---|---|
 | trunk CI green, and B1's re-check before the merge | trunk's remote head, by commit status. The GitHub-only doors are not offered: by-commit re-read, docs-only tip, batch substitute, tree-green citation, no-workflow trunk, and the ci-grant and cure exemptions, which live on the tracker. A failed read is `SELF_CLEARING`. |
 | branch run contains current base (#395) | the branch head's commit status, through the same method. A branch behind trunk is `stale-base`. An unreadable status refuses as `unread`. |
-| branch CI green at its head (#682) | the same read, judged on its own: a failing context refuses `HUMAN_GATED` and is named; a context still running is not ready (`SELF_CLEARING`) and the row names the `colab ci-wait` to run. A head with no status adds no row: Branch CI's `none` governs it, as on GitHub. On GitHub the row appears only for a head whose run finished red (#691); a running or green head adds none, and code-ship B1a reads the class through `colab ci-wait`. |
+| branch CI green at its head (#682) | the same read, judged on its own: a failing context refuses `HUMAN_GATED` and is named; a context still running is not ready (`SELF_CLEARING`) and the row names the `colab ci-wait` to run. A head with no status adds no row: Branch CI's `none` governs it, as on GitHub. On GitHub the row appears only for a head whose run finished red (#691), or where a workflow that should have run there has none (#723); a running or green head adds none, and code-ship B1a reads the class through `colab ci-wait`. |
 | tracker writes after the push (🚢 evidence, group-label and container teardown, PR close) | skipped. One `B4:` line names the issues the adopter's tracker should close. Skipping never fails the ship. |
 
 **`colab ci-wait --sha` on such a repo** polls the same commit status until it is green, red, or the

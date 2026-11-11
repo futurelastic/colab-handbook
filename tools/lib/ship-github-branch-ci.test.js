@@ -214,3 +214,22 @@ test('#691 ship --dry: with trunk red, a GREEN head adds no row — the cure / c
   assert.ok(d.j.ciCure, 'the cure door was consulted');
   assert.match(d.j.ciCure.reason, /^branch's run is green, but/, JSON.stringify(d.j.ciCure));
 });
+
+test('#723 ship --dry: only an unrelated workflow ran at the head and CI (fired by its definition) never did — not READY, the row names CI', () => {
+  const fx = fixture();
+  branch(fx, 'fix/no-ci-run-79', 79);
+  fx.setState({ branches: { 'fix/no-ci-run-79': [{ status: 'completed', conclusion: 'success', workflowName: 'instruction-files' }] } });
+  const d = dry(fx, 'fix/no-ci-run-79');
+  assert.strictEqual(d.row(STALE_ROW).ok, true, 'the stale-base row is satisfied by the instruction-files run — which was the bug');
+  const head = d.row(HEAD_ROW);
+  assert.ok(head, `no branch-head row: ${JSON.stringify(d.names)}`);
+  assert.deepStrictEqual([head.ok, head.class, head.verdict], [false, 'self-clearing', 'pending'], JSON.stringify(head));
+  assert.match(head.detail, /has no run of CI, though its definition fires on a push to this branch/);
+  assert.match(head.detail, /colab ci-wait --sha [0-9a-f]{40} --branch fix\/no-ci-run-79/);
+  assert.strictEqual(d.j.ok, false, 'the dry run is not READY');
+  // Once CI has its run there, the row is gone and the head reads as before.
+  fx.setState({ branches: { 'fix/no-ci-run-79': [{ status: 'completed', conclusion: 'success', workflowName: 'instruction-files' }, { status: 'completed', conclusion: 'success', workflowName: 'CI' }] } });
+  const d2 = dry(fx, 'fix/no-ci-run-79');
+  assert.strictEqual(d2.row(HEAD_ROW), undefined, JSON.stringify(d2.row(HEAD_ROW)));
+  assert.strictEqual(d2.j.ok, true, JSON.stringify(d2.j.checks.filter((c) => !c.ok)));
+});

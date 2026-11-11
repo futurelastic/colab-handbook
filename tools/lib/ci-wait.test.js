@@ -325,3 +325,61 @@ test('#529: git.fullSha — 40-hex passes through, a short sha resolves, junk an
   assert.strictEqual(git.fullSha(fx.work, ''), null);
   fs.rmSync(fx.root, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------- #723: an expected workflow with no run
+
+const MISSING = [{ name: 'CI', path: '.github/workflows/ci.yml', dispatch: false }];
+
+test('#723 runState: a green summary with an expected workflow missing is pending; red stays red', () => {
+  assert.strictEqual(cw.runState({ status: 'completed', conclusion: 'success', missing: MISSING }), 'pending');
+  assert.strictEqual(cw.runState({ status: 'completed', conclusion: 'failure', missing: MISSING }), 'red');
+  assert.strictEqual(cw.runState({ status: 'none', missing: MISSING }), 'pending');
+  assert.strictEqual(cw.runState({ status: 'completed', conclusion: 'success', missing: [] }), 'green');
+});
+
+test('#723 waitLoop: the deadline with a workflow still runless ends NO_RUN (exit 7), naming it — never GREEN, never TIMEOUT', () => {
+  const c = clock();
+  const poll = () => ({ kind: 'ok', status: 200, etag: null, summary: { status: 'completed', conclusion: 'success', missing: MISSING },
+    state: cw.runState({ status: 'completed', conclusion: 'success', missing: MISSING }) });
+  const res = cw.waitLoop({ now: c.now, sleep: c.sleep, deadlineSec: 100, poll });
+  assert.strictEqual(res.outcome, 'NO_RUN');
+  assert.strictEqual(cw.EXIT.NO_RUN, 7);
+  assert.match(res.detail, /^no-run:CI — /);
+  // The run appearing green before the deadline ends it GREEN, as any pending wait does.
+  const c2 = clock();
+  const seq = [poll(), { kind: 'ok', status: 200, etag: null, summary: { status: 'completed', conclusion: 'success' }, state: 'green' }];
+  assert.strictEqual(cw.waitLoop({ now: c2.now, sleep: c2.sleep, deadlineSec: 100, poll: () => seq.shift() }).outcome, 'GREEN');
+});
+
+test('#723 CLI: --sha --branch where only an unrelated workflow ran and CI never did — NO_RUN (exit 7), not GREEN', () => {
+  const fx = fixture([
+    { out: JSON.stringify({ workflows: [{ path: '.github/workflows/ci.yml', state: 'active' }, { path: '.github/workflows/instr.yml', state: 'active' }] }), code: 0 },
+    { out: 'placeholder', code: 0 },
+  ]);
+  const g = (...a) => execFileSync('git', a, { cwd: fx.work, encoding: 'utf8' }).trim();
+  g('config', 'user.email', 't@example.invalid'); g('config', 'user.name', 't');
+  fs.mkdirSync(path.join(fx.work, '.github', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(fx.work, '.github', 'workflows', 'ci.yml'), 'name: CI\non:\n  push:\n    branches: ["feat/**"]\njobs: {}\n');
+  fs.writeFileSync(path.join(fx.work, '.github', 'workflows', 'instr.yml'), 'name: instruction-files\non: [push]\njobs: {}\n');
+  g('add', '-A'); g('commit', '-q', '-m', 'fix: the hot path');
+  const sha = g('rev-parse', 'HEAD');
+  const runs = { workflow_runs: [{ id: 5, head_sha: sha, status: 'completed', conclusion: 'success', name: 'instruction-files', event: 'push', html_url: 'u5' }] };
+  fs.writeFileSync(path.join(fx.root, 'r1.out'), http('200 OK', JSON.stringify(runs)));
+  const r = spawnSync('node', [COLAB, 'ci-wait', '--sha', sha, '--branch', 'feat/hot-1', '--repo', fx.work, '--timeout', '1s', '--json'], { encoding: 'utf8', env: fx.env });
+  assert.strictEqual(r.status, 7, r.stdout + r.stderr);
+  const body = JSON.parse(r.stdout);
+  assert.strictEqual(body.outcome, 'NO_RUN');
+  assert.deepStrictEqual(body.missing.map((x) => x.name), ['CI']);
+  assert.match(body.hint, /draft PR/);
+  assert.match(body.detail, /^no-run:CI/);
+  assert.match(fs.readFileSync(fx.log, 'utf8'), /^api repos\/\{owner\}\/\{repo\}\/actions\/workflows\?per_page=100$/m);
+  // A head whose commit says [skip ci] expects nothing: the instruction-files run decides, GREEN.
+  g('commit', '-q', '--allow-empty', '-m', 'chore: note [skip ci]');
+  const sha2 = g('rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(fx.root, 'seq'), '0');
+  fs.writeFileSync(path.join(fx.root, 'r0.out'), http('200 OK', JSON.stringify({ workflow_runs: [{ ...runs.workflow_runs[0], head_sha: sha2 }] })));
+  fs.writeFileSync(path.join(fx.root, 'r1.out'), http('200 OK', JSON.stringify({ workflow_runs: [{ ...runs.workflow_runs[0], head_sha: sha2 }] })));
+  const r2 = spawnSync('node', [COLAB, 'ci-wait', '--sha', sha2, '--branch', 'feat/hot-1', '--repo', fx.work, '--timeout', '1s', '--json'], { encoding: 'utf8', env: fx.env });
+  assert.strictEqual(r2.status, 0, r2.stdout + r2.stderr);
+  fs.rmSync(fx.root, { recursive: true, force: true });
+});

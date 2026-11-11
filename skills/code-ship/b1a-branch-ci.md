@@ -76,6 +76,7 @@ every step here runs in the coordinator's own worktree.
   | `4` | RATE_LIMITED | **stop the pass**, not just this candidate: the quota is gone for every agent until the reset time it prints. Record the defer with that time as the re-measure trigger; do not retry |
   | `5` | UNKNOWN | the read failed or returned an unknown state — defer, quoting its output |
   | `6` | ALREADY_WAITING | another session is waiting on this run — defer on its run id; do not start a second wait |
+  | `7` | NO_RUN | a workflow whose definition fires on this branch's push still has **no run** at the head (#723) — the runs that do exist are not its green. Defer, and send the hint it prints (dispatch, draft PR, or an empty re-push) to the implementer; never re-push yourself |
 
   **The cap expired** → record a
   defer with the clock *What a defer is for* requires — precondition: branch CI in flight
