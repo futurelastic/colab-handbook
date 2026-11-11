@@ -32,8 +32,9 @@
 # THE RUNNER (#594): `runs-on` defaults to ubuntu-latest. A caller whose org has no GitHub-hosted
 # minutes (spending limit, self-hosted-only org) has that job refused before it starts — a red
 # check on every PR it can never fix — so it passes its own runner: a bare label
-# (`runs-on: my-runner`) or a JSON label list (`runs-on: '["self-hosted","linux"]'`). The job needs
-# only git (actions/checkout) — Node comes from actions/setup-node — so any Linux runner works.
+# (`runs-on: my-runner`) or a JSON label list (`runs-on: '["self-hosted","quick"]'`) — a job class,
+# never a host (CONVENTIONS.md §7, "Runner classes", #720). The job needs only git
+# (actions/checkout) — Node comes from actions/setup-node — so any Linux runner works.
 name: instruction-files
 
 on:

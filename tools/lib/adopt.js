@@ -363,7 +363,7 @@ function releaseRungSteps(ctx = {}) {
   const texts = ctx.workflowTexts || {};
   const releaseWf = Object.keys(texts).find((f) => /colab release cut/.test(texts[f] || ''));
   if (releaseWf) {
-    steps.push({ n: 6, text: `Release workflow present (.github/workflows/${releaseWf}) — check its \`HANDBOOK_REF\` names a ref the handbook carries (#480) and its \`runs-on\` is the self-hosted label on a private repo` });
+    steps.push({ n: 6, text: `Release workflow present (.github/workflows/${releaseWf}) — check its \`HANDBOOK_REF\` names a ref the handbook carries (#480) and its \`runs-on\` is the trunk class, [self-hosted, trunk], on a private repo` });
   } else {
     steps.push({ n: 6, text: 'Copy the release workflow — `colab template release-auto`, then walk its `# EDIT:` points: `HANDBOOK_REF` (a channel or tag the handbook carries, #480), the test-suite workflow `name:`, and on a PRIVATE repo the self-hosted runner label from ci.yml on every job except `npm` (#492)' });
   }

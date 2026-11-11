@@ -65,7 +65,7 @@ test('the template as shipped: release and npm-record are hosted (the edit point
 
 test('the template carries the RUNNERS section and points both EDIT points at it', () => {
   assert.match(TEMPLATE, /^# RUNNERS — ON A PRIVATE REPO, YOUR OWN \(#453\)/m);
-  assert.match(TEMPLATE, /EDIT: PRIVATE repo → your ci\.yml's self-hosted trunk label/);
+  assert.match(TEMPLATE, /EDIT: PRIVATE repo → the trunk class, \[self-hosted, trunk\]/);
   assert.match(TEMPLATE, /EDIT: the same label as `release` above — PRIVATE repo → self-hosted/);
 });
 
@@ -91,7 +91,7 @@ test('no self-hosted label anywhere → generic hint, still reported', () => {
   const r = reader({ '.github/workflows/release-auto.yml': TEMPLATE });
   const out = rr.findings({ ...r, visibility: 'private' });
   assert.ok(out.length > 0);
-  assert.match(out[0], /use your self-hosted trunk runner label/);
+  assert.match(out[0], /use the trunk runner class: runs-on: \[self-hosted, trunk\]/);
 });
 
 test('public or unknown visibility → nothing', () => {

@@ -128,6 +128,7 @@ one-verdict-per-tree--quick-on-branches-full-once-719
 ci--what-it-is-follows-the-units-shape-how-much-follows-exposure
 ci-artifacts--your-own-store-not-the-allowance-601
 self-hosted-runners--capacity-is-the-agent-count-not-the-machine-355
+runner-classes--runs-on-names-a-job-class-never-a-host-720
 toolchain-versions--strict-precedence
 test-fixtures--neutralise-ambient-machine-state-dont-inherit-it
 8-conformance-and-reconciliation

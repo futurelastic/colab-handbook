@@ -64,7 +64,7 @@ jobs:
   # that concludes `success` when the nightly skips: a run whose jobs all skip reads as not-green.
   plan:
     name: What to test
-    runs-on: ubuntu-latest # EDIT: needs `gh` (GitHub-hosted images have it).
+    runs-on: ubuntu-latest # EDIT: self-hosted → the trunk class, never a host (CONVENTIONS.md §7, "Runner classes"); it needs `gh`.
     timeout-minutes: 5
     permissions:
       actions: read
@@ -129,7 +129,7 @@ jobs:
     name: Full suite @ ${{ needs.plan.outputs.sha }}
     needs: plan
     if: ${{ needs.plan.outputs.run == 'true' }}
-    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    runs-on: ubuntu-latest # EDIT: self-hosted → a class, never a host: e2e (service containers), browser (browser-driven), else trunk (CONVENTIONS.md §7, "Runner classes").
     timeout-minutes: 120 # EDIT: well above YOUR heavy p99; the default is 360.
     permissions:
       contents: read
@@ -357,7 +357,7 @@ jobs:
     name: Secret scan, full history (gitleaks)
     needs: plan
     if: ${{ needs.plan.outputs.run == 'true' }}
-    runs-on: ubuntu-latest # EDIT: the same label as ci.yml's gitleaks job.
+    runs-on: ubuntu-latest # EDIT: self-hosted → the trunk class, never a host (CONVENTIONS.md §7, "Runner classes").
     timeout-minutes: 30 # the whole history, not a range. EDIT: the default is 360.
     permissions:
       contents: read
@@ -482,7 +482,7 @@ jobs:
     name: Report a red nightly
     needs: [plan, heavy, secrets]
     if: ${{ always() && github.event_name == 'schedule' && (needs.heavy.result == 'failure' || needs.secrets.result == 'failure') }}
-    runs-on: ubuntu-latest # EDIT: needs `gh`.
+    runs-on: ubuntu-latest # EDIT: self-hosted → the trunk class; it needs `gh`.
     timeout-minutes: 5
     permissions:
       issues: write

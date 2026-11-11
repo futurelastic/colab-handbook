@@ -2258,7 +2258,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C7.runners.01 | default |  | A repo's capacity is how many agents it has, not how big the host is. | A repo's capacity is how many agents it has, not how big the host is. | tools/docs/ci-lanes.md | — |
 | C7.runners.02 | default |  | Measure queue and work separately, at job and step level, before optimising either. | Measure queue and work separately, at job and step level. | tools/docs/ci-lanes.md | — |
 | C7.runners.03 | default |  | Where the merge gate waits for a completed trunk run, give trunk its own agent. | Where the merge gate waits for a completed trunk run, give trunk its own agent. | tools/docs/ci-lanes.md | — |
-| C7.runners.04 | default |  | Use disjoint label sets: trunk gets a trunk-only label, everything else the general one, chosen in runs-on on github.ref. | label sets: trunk → a trunk-only label, everything else → the general one, | tools/docs/ci-lanes.md | — |
+| C7.runners.04 | default |  | Use disjoint label sets: trunk gets the trunk class, everything else quick or full, chosen in runs-on on github.ref. | label sets: trunk → the `trunk` class, everything else → `quick` or | tools/docs/ci-lanes.md | — |
 | C7.runners.05 | default |  | Register the agent before merging the routing, and change the routing in the same change that retires the agent. | Register the agent before merging the routing, and change the routing in the same | tools/docs/ci-lanes.md | — |
 | C7.runners.06 | default |  | Route every job of a trunk run, including non-blocking ones. | Route every job of a trunk run, including non-blocking ones. | tools/docs/ci-lanes.md | — |
 | C7.runners.07 | default |  | With few agents, fold a tiny job such as the secret scan into the main job as its first steps, with full history checked out. | Fold it into the main job as its first steps | tools/docs/ci-lanes.md | — |
@@ -2271,6 +2271,20 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C7.runners.14 | default |  | If a suite that was green times out on a self-hosted pool with no code change, check the slot's memory pressure and the worker count before widening any timeout. | If a suite that used to be green starts timing out on a self-hosted pool with | tools/docs/ci-lanes.md | — |
 | C7.runners.15 | default |  | Before adding an agent, check the runner's disk as well as its memory. | Before adding an agent, check the runner's disk as well as its memory. | tools/docs/ci-lanes.md | — |
 | C7.runners.16 | default |  | On a persistent runner tests must clean up after themselves. | A persistent runner never resets, so tests must clean up after themselves. | tools/docs/ci-lanes.md | — |
+
+### Runner classes — `runs-on` names a job class, never a host (#720)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C7.runner-classes.01 | default |  | A self-hosted runs-on names the class of job, never a machine; each runner advertises the classes it serves. | A self-hosted `runs-on` names the class of job, never a machine. | CONVENTIONS.md | — |
+| C7.runner-classes.02 | default |  | The trunk class is never a label a branch job matches. | **never** a label a branch job matches | CONVENTIONS.md | — |
+| C7.runner-classes.03 | default |  | Need first, then ref: e2e, browser and load follow the job; any other job takes quick or full on a branch and trunk on trunk. | `e2e`, `browser` and `load` follow the job wherever it runs | CONVENTIONS.md | — |
+| C7.runner-classes.04 | default |  | Restricted lanes (deploy, publish/signing, xserver, Windows and macOS) stay outside the classes. | Restricted lanes stay outside the classes | CONVENTIONS.md | — |
+| C7.runner-classes.05 | default |  | A repo above about 1,000 job-minutes a day gets a capped lane of its own, combined with a class. | A repo above ~1,000 job-minutes a day gets a capped lane | CONVENTIONS.md | — |
+| C7.runner-classes.06 | default |  | Class names are short and lowercase, and never name a machine or a site. | Names are short and lowercase, and never name a machine or a site. | CONVENTIONS.md | — |
+| C7.runner-classes.07 | default |  | The templates default to ubuntu-latest; switching to a class is the adopter's edit once its pool shows that class online. | The templates still default to `ubuntu-latest` | CONVENTIONS.md | — |
+| C7.runner-classes.08 | default |  | A pool moves off host labels additively: add class labels beside host labels, switch workflows to confirmed classes, drop host labels last. | Moving a pool off host labels is additive, in four steps. | tools/docs/ci-lanes.md | — |
+| C7.runner-classes.09 | default |  | A job that peaks above about 8 GB goes on browser or a heavier class, never quick or full. | Put a job that peaks above about 8 GB on `browser` | tools/docs/ci-lanes.md | — |
 
 ### Toolchain versions — strict precedence
 

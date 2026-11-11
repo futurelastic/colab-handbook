@@ -11,6 +11,7 @@ on:
 jobs:
   instruction-files:
     uses: futurelastic/colab-handbook/.github/workflows/instruction-files.yml@main
-    # No GitHub-hosted minutes (self-hosted-only org)? Pass your runner (#594) — a label or a JSON list:
+    # No GitHub-hosted minutes (self-hosted-only org)? Pass your runner (#594) — a label or a JSON list,
+    # naming a job class, never a host (CONVENTIONS.md §7, "Runner classes"):
     # with:
-    #   runs-on: '["self-hosted","linux"]'
+    #   runs-on: '["self-hosted","quick"]'

@@ -114,7 +114,7 @@ function findings({ readFile, workflows, visibility }) {
     const own = selfHostedLabel(workflows, readFile, wf);
     const hint = own
       ? `use the label your ${own.wf} already runs on: runs-on: [${own.labels.join(', ')}]`
-      : 'use your self-hosted trunk runner label';
+      : 'use the trunk runner class: runs-on: [self-hosted, trunk] (CONVENTIONS.md §7, "Runner classes")';
     for (const j of hosted) {
       out.push(`${wf} job \`${j.job}\` runs on GitHub-hosted (${j.runsOn.join(', ')}, line ${j.line}) on a ${String(visibility).toLowerCase()} repo — hosted minutes are billed here, and a billing refusal fails this run at trunk's head, which turns trunk red for \`colab ship\`; ${hint} (templates/release-auto.yml, RUNNERS)`);
     }

@@ -2702,6 +2702,31 @@ Where CI jobs keep the files they pass each other is the repo's business; the te
 Which runners a repo's CI uses is the repo's business. Guidance for self-hosted runners:
 [`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#self-hosted-runners--capacity-is-the-agent-count-not-the-machine-355).
 
+### Runner classes — `runs-on` names a job class, never a host (#720)
+
+**A self-hosted `runs-on` names the class of job, never a machine.** Each runner advertises the
+classes it serves, and hosts can change without any workflow changing.
+
+| Class | The job | The runner |
+|---|---|---|
+| `quick` | lint, types, unit: no Docker, ≤ 10 min, low memory | a small slot is enough |
+| `full` | a full suite on a branch | the default memory cap |
+| `trunk` | a landing or qualify run; any trunk-only job | priority; **never** a label a branch job matches |
+| `e2e` | a service stack in containers | Docker; kept apart from `full` |
+| `browser` | a browser suite, or any job peaking above ~8 GB | a larger memory cap |
+| `load` | a load or soak test | a slot nothing else shares |
+
+1. **Need first, then ref.** `e2e`, `browser` and `load` follow the job wherever it runs; any
+   other job takes `quick` or `full` on a branch and `trunk` on trunk (one `github.ref` expression).
+2. **Restricted lanes stay outside the classes**: deploy, publish/signing, `xserver`, and the
+   Windows and macOS lanes keep their own labels.
+3. **A repo above ~1,000 job-minutes a day gets a capped lane**: `[self-hosted, <repo-lane>, <class>]`.
+4. **Names are short and lowercase, and never name a machine or a site.**
+5. **The templates still default to `ubuntu-latest`**, which a public repo keeps
+   ([Runner policy](templates/README.md#runner-policy)). Switching a job to a class is the
+   adopter's own edit, made once its pool shows that class online:
+   [`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#runner-classes--moving-a-pool-from-host-labels-720).
+
 ### Toolchain versions — strict precedence
 
 **Never hardcode a version in CI.** Resolve it, in this order:

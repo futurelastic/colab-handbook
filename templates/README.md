@@ -428,8 +428,8 @@ Decided 2026-07-19, after a GitHub Actions billing lock stopped every
 | Repo class | `runs-on` | Why |
 |---|---|---|
 | **Public** repo | `ubuntu-latest` | Free minutes, unaffected by billing — and **never** self-hosted: a fork PR would execute arbitrary code on your runner. |
-| **Private** CI | the org's `[self-hosted, ...]` runner **where one exists**; `ubuntu-latest` otherwise | Immune to billing, persistent tool caches, local network. Runners are registered per-org — one org's runner serves nothing in another org. Register a runner for an org when its billing or scale makes it worth it, not preemptively. |
-| **Private** deploy | its own runner label | Deploys must never queue behind CI jobs. |
+| **Private** CI | `[self-hosted, <class>]` — a job class, never a host ([CONVENTIONS.md §7, *Runner classes*](../CONVENTIONS.md#runner-classes--runs-on-names-a-job-class-never-a-host-720)) — **where the org's pool carries that class online**; `ubuntu-latest` otherwise | Immune to billing, persistent tool caches, local network. Runners are registered per-org — one org's runner serves nothing in another org. Register a runner for an org when its billing or scale makes it worth it, not preemptively. Each template's `runs-on` `EDIT:` names the class its job takes. |
+| **Private** deploy | its own restricted runner label, outside the classes | Deploys must never queue behind CI jobs. |
 
 Self-hosted job hygiene: no `sudo`, install tools into `$RUNNER_TEMP`, never
 write outside the workspace, prefer the runner's native toolchains. A shared

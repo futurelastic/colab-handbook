@@ -107,7 +107,7 @@ jobs:
   release:
     name: Publish release
     needs: heavy
-    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    runs-on: ubuntu-latest # EDIT: self-hosted → the trunk class, never a host (CONVENTIONS.md §7, "Runner classes").
     permissions:
       # Required to create the release. Nothing else is needed — keep it minimal.
       contents: write

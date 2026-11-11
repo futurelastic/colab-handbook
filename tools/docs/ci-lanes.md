@@ -122,8 +122,9 @@ spends most of its wall time waiting rather than working.** Why, with the measur
   step's duration with the job's, before you optimise either.
 - **Where the merge gate waits for a completed trunk run, give trunk its own agent.**
   Branch runs that are informative only must not delay the one run a merge waits for.
-  Use **disjoint** label sets: trunk → a trunk-only label, everything else → the
-  general one, chosen in `runs-on` with an expression on `github.ref`. Until that lane
+  Use **disjoint** label sets: trunk → the `trunk` class, everything else → `quick` or
+  `full`, chosen in `runs-on` with an expression on `github.ref`
+  ([*Runner classes*](#runner-classes--moving-a-pool-from-host-labels-720)). Until that lane
   exists, a single shared agent is also why a copied template's every-branch trigger
   goes back to trunk-only, with `pull_request` restored ([*Branch CI*](ci-gate.md#branch-ci--the-candidates-own-run-read-as-a-class-314), #384, #512). Two traps:
   - **A label no online agent carries leaves the job queued forever, with no error.**
@@ -168,3 +169,42 @@ spends most of its wall time waiting rather than working.** Why, with the measur
 - **A persistent runner never resets, so tests must clean up after themselves.** A test
   that makes a temp dir and never removes it leaks on every run. The same persistence
   makes a hosted cache action redundant: the package cache is already on disk.
+
+## Runner classes — moving a pool from host labels (#720)
+
+The rule: [CONVENTIONS.md, *Runner classes — `runs-on` names a job class, never a host (#720)*](../../CONVENTIONS.md#runner-classes--runs-on-names-a-job-class-never-a-host-720).
+
+**Which class each template job takes**, once a private repo goes self-hosted (every template
+ships `ubuntu-latest`, and each `runs-on` line's `EDIT:` names its class):
+
+| Job | Class |
+|---|---|
+| `dedupe`, `gitleaks`, the light-lane `build` (ci-node/python/laravel) | `quick` or `full` on a branch — `quick` only when the whole job keeps quick's promise; `trunk` on trunk |
+| a service-container job (the Laravel database, the migration round-trip) | `e2e`, on every ref |
+| the heavy lane's suite (`*-heavy.yml`) | `e2e` with service containers, `browser` when browser-driven, else `trunk` |
+| the heavy lane's `plan`, `secrets`, `report`, and the release jobs (`release-tag.yml`, `release-auto.yml`) | `trunk` — they run only on trunk or a tag |
+| deploy, publish/signing, `deploy-xserver.yml`, Windows/macOS builds | their own restricted label, outside the classes |
+
+The ref expression, for a job that takes `trunk` on trunk and `full` elsewhere:
+
+```yaml
+runs-on: ${{ fromJSON(github.ref == 'refs/heads/main' && '["self-hosted","trunk"]' || '["self-hosted","full"]') }}
+```
+
+On a repo with its own capped lane, every list gains the lane label: `["self-hosted","<repo-lane>","trunk"]`.
+
+**Moving a pool off host labels is additive, in four steps.** A runner reads its labels only when
+it starts, so each label change needs an idle restart of each slot.
+
+1. **The class names are fixed** — the table in CONVENTIONS §7.
+2. **The pool adds the class labels beside the host labels** it carries today, restarts each slot
+   while it is idle, and confirms each class is online.
+3. **Workflows switch to class labels**, one repo at a time, and only to a class the pool has
+   confirmed. A job asking for a label no online runner carries stays queued forever and never
+   fails.
+4. **The pool drops the host labels last**, once no adopter's workflow names one. A host label is
+   kept only until every adopter has moved.
+
+**Memory decides between classes.** A slot's memory cap counts the job's in-RAM work directory.
+Put a job that peaks above about 8 GB on `browser` (or a heavier class the pool defines), never on
+`quick` or `full`.
