@@ -54,7 +54,11 @@ function substituteTrunk(text, p) {
   swap('concurrency group', `(${tplEq.join(' || ')}) && format(`, `(${p.refs.map(eq).join(' || ')}) && format(`);
   swap('cancel-in-progress', `cancel-in-progress: \${{ ${TEMPLATE_REFS.map(ne).join(' && ')} }}`,
     `cancel-in-progress: \${{ ${p.refs.map(ne).join(' && ')} }}`);
-  swap("dedupe guard's if:", `github.event.created || ${tplEq.join(' || ')})`, `github.event.created || ${p.refs.map(eq).join(' || ')})`);
+  // #721: the reusable-workflow caller (templates/ci-call.yml) names its trunk refs in the `trunk-branches`
+  // input instead of a guard `if:` of its own — the guard lives in the called workflow.
+  const tplList = `trunk-branches: '${JSON.stringify(TEMPLATE_REFS)}'`;
+  if (out.includes(tplList)) swap('trunk-branches input', tplList, `trunk-branches: '${JSON.stringify(p.refs)}'`);
+  else swap("dedupe guard's if:", `github.event.created || ${tplEq.join(' || ')})`, `github.event.created || ${p.refs.map(eq).join(' || ')})`);
   // ci-laravel's test tier (only present there): the release-gating branch is the trunk on a one-branch repo.
   if (!p.twoBranch && p.trunk !== 'main' && out.includes('[ "$REF" = "refs/heads/main" ] || [ "$trunk" = "main" ]')) {
     out = out.split('[ "$BASE_REF" = "main" ]').join(`[ "$BASE_REF" = "${p.trunk}" ]`);
@@ -71,10 +75,25 @@ function substituteTrunk(text, p) {
  * `colab update` uses the same rendering both to recognise a pristine copy and to refresh one, so
  * a refreshed file stays byte-identical to what `colab template <name> --force` would write.
  */
-function renderForRepo(name, body, doc) {
+function renderForRepo(name, body, doc, version) {
   if (!/^ci-/.test(String(name || ''))) return body;
+  const pinned = version ? pinHandbookTag(body, version).text : body;
   const p = protectedRefs(doc);
-  return p ? substituteTrunk(body, p).text : body;
+  return p ? substituteTrunk(pinned, p).text : pinned;
 }
 
-module.exports = { TEMPLATE_REFS, protectedRefs, substituteTrunk, renderForRepo };
+/**
+ * #721: the reusable-workflow caller pins the handbook by tag — `uses: …/ci-light.yml@HANDBOOK_TAG`
+ * in the template. A copy is written with the version its stamp records, so "copied from handbook X"
+ * and "calls handbook X" are one fact, and a refresh moves both together. `v0` (an untagged handbook)
+ * pins nothing: there is no tag to call, and the token is left for the copier to see.
+ */
+const HANDBOOK_TAG = 'HANDBOOK_TAG';
+function pinHandbookTag(text, version) {
+  const token = `@${HANDBOOK_TAG}`;
+  if (!String(text).includes(token)) return { text, pinned: null };
+  if (!version || version === 'v0') return { text, pinned: null, unpinned: true };
+  return { text: text.split(token).join(`@${version}`), pinned: version };
+}
+
+module.exports = { TEMPLATE_REFS, HANDBOOK_TAG, protectedRefs, substituteTrunk, renderForRepo, pinHandbookTag };

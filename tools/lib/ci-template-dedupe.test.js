@@ -30,7 +30,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const FILES = ['templates/ci-node.yml', 'templates/ci-laravel.yml', 'templates/ci-python.yml', '.github/workflows/ci.yml'];
+const FILES = ['templates/ci-node.yml', 'templates/ci-laravel.yml', 'templates/ci-python.yml', '.github/workflows/ci.yml', '.github/workflows/ci-light.yml'];  // ci-light: the reusable workflow (#721)
 const read = (f) => fs.readFileSync(path.join(REPO_ROOT, f), 'utf8');
 
 // Top-level jobs as { name: [lines of its body] } (2-space job keys under `jobs:`).

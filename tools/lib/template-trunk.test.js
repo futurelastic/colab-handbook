@@ -155,3 +155,28 @@ test('colab update: a CI copy rendered for its repo still reads pristine (behind
   assert.strictEqual(stamp.classifyStamped({ ...base, localText: local }).state, 'diverged', 'without the rendering it would never refresh');
   assert.strictEqual(stamp.classifyStamped({ ...base, localText: `${local}# my edit\n`, render }).state, 'diverged');
 });
+
+// #721: the reusable-workflow caller names its trunk refs in the `trunk-branches` input (no guard `if:` of its
+// own), and pins the handbook by tag — the version its stamp records.
+test('ci-call: trunk-branches rewritten instead of a guard if:, nothing missed; the pin follows the stamp (#721)', () => {
+
+  const body = fs.readFileSync(path.join(__dirname, '..', '..', 'templates', 'ci-call.yml'), 'utf8');
+  const r = tt.substituteTrunk(body, tt.protectedRefs({ trunk: 'dev', exposure: 'live' }));
+  assert.deepStrictEqual(r.missed, []);
+  assert.deepStrictEqual(r.changes, []); // main + dev is the template's own pair
+  assert.match(r.text, /^      trunk-branches: '\["main","dev"\]'$/m);
+  const m = tt.substituteTrunk(body, tt.protectedRefs({ trunk: 'master' }));
+  assert.deepStrictEqual(m.missed, []);
+  assert.ok(m.changes.includes('trunk-branches input'), m.changes.join(', '));
+  const one = m.text;
+  assert.match(one, /^      trunk-branches: '\["master"\]'$/m);
+  assert.match(one, /cancel-in-progress: \$\{\{ github\.ref != 'refs\/heads\/master' \}\}/);
+  // The pin: a real version replaces the token; v0 (no tag) leaves it, and says so.
+  assert.match(body, /ci-light\.yml@HANDBOOK_TAG$/m);
+  assert.match(tt.pinHandbookTag(body, 'v1.9.0').text, /ci-light\.yml@v1\.9\.0$/m);
+  assert.deepStrictEqual(tt.pinHandbookTag(body, 'v0'), { text: body, pinned: null, unpinned: true });
+  assert.deepStrictEqual(tt.pinHandbookTag('no token here', 'v1.9.0'), { text: 'no token here', pinned: null });
+  // renderForRepo applies both, so `colab update` reads a fresh copy as pristine at its stamped version.
+  assert.match(tt.renderForRepo('ci-call', body, { trunk: 'master' }, 'v1.9.0'), /ci-light\.yml@v1\.9\.0$/m);
+  assert.strictEqual(tt.renderForRepo('ci-call', body, null), body);
+});

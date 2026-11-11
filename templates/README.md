@@ -2,10 +2,11 @@
 
 Starting points you **copy into your own repo**. That is the entire model.
 
-> **These are NOT called remotely — with one exception.** `instruction-files.yml` is a caller:
+> **These are NOT called remotely — with two exceptions.** `instruction-files.yml` is a caller:
 > its one job `uses:` this handbook's reusable `.github/workflows/instruction-files.yml` (#588,
-> kept for compatibility — see *Where each file lives* below). Every other file here is copied,
-> not called. (`dist-refs.yml` is a
+> kept for compatibility — see *Where each file lives* below). `ci-call.yml` is the other: it calls
+> the reusable light lane `.github/workflows/ci-light.yml`, pinned to a release tag (#721 — see
+> *The reusable light lane* below). Every other file here is copied, not called. (`dist-refs.yml` is a
 > `workflow_call` workflow, but its caller is your own release workflow, in the same repo, via
 > `uses: ./.github/workflows/dist-refs.yml` — the file still lives, in full, where it runs.) An earlier version of this
 > handbook told repos to call shared workflows; that was reversed. Every other workflow now
@@ -102,6 +103,7 @@ check that reads one of these files is that tool's behaviour, documented with th
 
 | File | Copy to | For | Notes |
 |---|---|---|---|
+| `ci-call.yml` | `.github/workflows/ci.yml` | Any Node, Python or Laravel repo that wants the light lane **called, not copied** (#721) | **A caller, not a copy:** triggers, concurrency and one `uses:` of the handbook's reusable `.github/workflows/ci-light.yml` — the dedupe gate, the secret scan, a `quick` and a `full` job, job-class `runs-on`. `colab template ci-call` writes this repo's trunk refs and pins the call to the release it stamps. Your commands go in `with:` (`toolchain`, `install`, `quick`, `full`); your own jobs sit beside the call. A copied gate is reported as drift. |
 | `ci-node.yml` | `.github/workflows/ci.yml` | Pure Node repos: Vite SPA, node libs, Astro static, **Capacitor apps** | Resolves Node version from `project.yml` → `.nvmrc`/`engines` → **fails**. Never a default. Opt-in `Migration round-trip` job — `--roundtrip` writes it live, see *Migration round-trip* below. |
 | `ci-laravel.yml` | `.github/workflows/ci.yml` | Laravel + Inertia + Vite fullstack (with route/type codegen) | Same resolution for **both** PHP and Node. Includes the sqlite bootstrap + explicit wayfinder step, and a `migrations` job that round-trips the schema (migrate → rollback → seed → migrate, schema compared) on the test engine **and** the deploy engine (a MariaDB/MySQL service container at production's version). Its data-dependent checks need `ROUNDTRIP_SEEDER` — see *Migration round-trip* below. |
 | `ci-node-heavy.yml`, `ci-python-heavy.yml`, `ci-laravel-heavy.yml` | `.github/workflows/ci-heavy.yml` | The heavy lane beside the matching `ci-<stack>.yml` (above) | `schedule` + `workflow_dispatch` + `workflow_call`, never a push. Toolchain and install steps are copied from the light lane's `build` job, so the two resolve the same versions — keep them in step; the `secrets` job's gitleaks install and `GITLEAKS_VERSION` likewise follow the light lane's `gitleaks` job. `TRUNK` is an edit point. |
@@ -175,6 +177,25 @@ The rule all of this keeps: [one verdict per tree](../CONVENTIONS.md#one-verdict
 
 Opt out with `tree-reuse: off` (`project.schema.md`) when trunk's run proves something a branch
 run cannot: secrets only trunk gets, `github.ref`-conditional steps, unpinned runner images.
+
+### The reusable light lane — calling instead of copying (#721)
+
+The guard above drifted copy by copy: measured across adopters (2026-11-09 → 11-11), missing in six
+repositories and present but never skipping in three, and #717's fix reached a copy only through a manual
+sync. `.github/workflows/ci-light.yml` carries the same guard, the same secret scan and the descriptor check
+once, for every caller; `ci-call.yml` is the caller. What changes for you:
+
+- **Only the caller is yours**: the triggers and `concurrency` (a called workflow cannot own either), the
+  `with:` block, and your own jobs beside the call. A job behind the gate reads `needs: ci` +
+  `if: ${{ !cancelled() && needs.ci.outputs.tested != 'true' }}`; a trunk-only job outside it is named
+  in `trunk-only-jobs` (#717).
+- **Pinned to a release tag, never `main`.** `colab template ci-call` writes the version it stamps the copy
+  with; `colab update` moves a pristine copy's stamp and pin together.
+- **The quick/full split is two jobs**: `quick` (descriptor check, lint, types, unit — the `quick` class)
+  and `full` (the light suite, the build — the `full` class); both run on every push the gate does not skip,
+  and both take the `trunk` class on a trunk ref under `runs-on: classes`.
+- The copied `ci-<stack>.yml` templates still work and are still copied; moving them onto the caller is
+  tracked in #724. A repo carrying one is reported as drift.
 
 ### Migration round-trip — have it from the first copy
 

@@ -83,11 +83,16 @@ Where each of the four rules is kept today:
 
 | Rule | Kept by | Reads as |
 |---|---|---|
-| 1. A tree's green run is reused where the tree lands | the light templates' `dedupe` guard: sha mode on a ref's first push (#418); tree mode on a trunk push (#493) and on a `ship-batch/**` ref's first push (#717) — sha first (#552), newest reusable first (#592) | `tree-already-green` notice naming the run relied on ([ci-gate](ci-gate.md)) |
+| 1. A tree's green run is reused where the tree lands | the reusable `.github/workflows/ci-light.yml` (#721, called through `templates/ci-call.yml`) and the light templates' `dedupe` guard: sha mode on a ref's first push (#418); tree mode on a trunk push (#493) and on a `ship-batch/**` ref's first push (#717) — sha first (#552), newest reusable first (#592) | `tree-already-green` notice naming the run relied on ([ci-gate](ci-gate.md)) |
 | 2. Light on branches; full/heavy once per sha, where the profile says | the two lanes and [`integration-profile:`](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610) | the table above |
 | 3. A schedule skips a passed sha; one dispatch per sha | the heavy templates' `plan` job: the nightly skips when its tip is the last green nightly's sha, or a green dispatched run of the same workflow tested it (#719); `colab ship` / `colab release` dispatch the heavy lane only when no run exists at that sha | `heavy-skipped` notice |
 | 4. A trunk-only job never blocks reuse | a separate workflow, or `TRUNK_ONLY_JOBS` in the guard (#717) | — |
 
+- **Called, the guard reads the same runs a copy did** (#721): a called workflow's `github` context is the
+  caller's, so the run id and the workflow id are the caller's. Its jobs are listed as `<caller job> / <job>`,
+  so #511's skip rule matches the guard and every `trunk-only-jobs` name exactly or as that ` / <name>`
+  suffix. The audit reports a copied gate, and a gate that never skipped in its last 10 trunk runs, as
+  drift ([handbook-sync §7](../../skills/handbook-sync/7-convention-drift.md#a-copied-ci-gate-or-one-that-never-skips-721)).
 - **Rule 1 does not reach a branch's later pushes.** The guard is skipped at scheduling on a non-creating
   branch push, so a session's first real commit always gets a run of its own at its own sha (#418).
 - **Under `gated`, a landing's light run may still be a reuse** — the landing's verdict is its heavy run

@@ -332,6 +332,7 @@ opencode
 templates/README.md
 templates/adr-README.md
 templates/branch-name.yml
+templates/ci-call.yml
 templates/ci-laravel-heavy.yml
 templates/ci-laravel.yml
 templates/ci-node-heavy.yml
