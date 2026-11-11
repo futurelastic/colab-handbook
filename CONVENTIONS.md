@@ -2616,8 +2616,8 @@ declares where the heavy lane runs and what a green trunk promises. The four pro
 
 ### One verdict per tree — quick on branches, full once (#719)
 
-**A CI verdict is keyed on the git tree id: a workflow never tests a tree, or a sha, it already
-passed.** Four rules, each kept by the templates; how the guard reads them:
+**A CI verdict is keyed on the git tree id: a workflow never tests a tree, or a sha, it already passed.** Four rules, kept once by the reusable `ci-light.yml` (`templates/ci-call.yml`, #721) — a copied or
+never-skipping gate is drift, not customisation; how the guard reads them:
 [`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#one-verdict-per-tree--quick-on-branches-full-once-719).
 
 1. **A green run of a tree is reused wherever that tree lands** — trunk, a batch-landing ref

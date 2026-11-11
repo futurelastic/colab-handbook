@@ -123,6 +123,8 @@ const npmGuard = require("../tools/lib/npm-publish-guard.js");
 const installRoute = require("../tools/lib/install-route.js");
 const releaseRunner = require("../tools/lib/release-runner.js"); // #453
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush, instructionFilesCallerFindings } = require("../tools/lib/workflow-triggers.js");
+// #721: a copied CI gate, or one that never skips, is drift — the pure reading lives with its tests.
+const gateDrift = require("../tools/lib/gate-drift.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
 const integrationProfile = require("../tools/lib/integration-profile.js"); // #610
 const ciProfile = require("../tools/lib/ci-profile.js"); // #559
@@ -584,6 +586,13 @@ function listRemoteDir(slug, path) {
   }
 }
 
+// #721: one GitHub REST read, parsed — null when it could not be read (offline, no auth, an API error).
+function readRemoteJson(slug, path) {
+  const r = remoteCache.get(slug, `repos/${slug}/${path}`);
+  if (r.status !== "ok") return null;
+  try { return JSON.parse(r.text); } catch { return null; }
+}
+
 function listRemoteBranches(slug) {
   const r = remoteCache.get(slug, `repos/${slug}/branches`, { paginate: true });
   return r.status === "ok" ? r.items.map((b) => String(b.name)) : null; // null = could not determine, distinct from "no branches"
@@ -872,6 +881,12 @@ function makeSource(target) {
         const slug = url ? githubSlugFromRemote(url) : null;
         return slug ? readRemoteIssue(slug, num) : null;
       },
+      // #721: a REST read under repos/<slug>/ on the same resolved remote; null = unreadable.
+      ghApi: (p) => {
+        const url = gitRemote.remoteUrl(root);
+        const slug = url ? githubSlugFromRemote(url) : null;
+        return slug ? readRemoteJson(slug, p) : null;
+      },
       // Same remote-slug resolution as labels() above, one API call, and only when the
       // identity scan was explicitly asked for — see readRemoteMetadata for the contract.
       // An unresolvable remote is its own status, not "no-remote": the scan was asked for
@@ -930,6 +945,7 @@ function makeSource(target) {
     isLinkedWorktree: () => false,
     labels: () => listRemoteLabels(target.slug),
     issue: (num) => readRemoteIssue(target.slug, num),
+    ghApi: (p) => readRemoteJson(target.slug, p),
     // Anchor-link check is local-only by design (#158) — enumerating markdown remotely
     // would be N `gh api` calls per repo across a fleet sweep. Empty list = the check
     // scans nothing and emits nothing for a remote source, matching checkRunbook's
@@ -2187,6 +2203,8 @@ function auditRepoInner(target, ctx) {
   info.predatesAxes = [];
   info.suggestions = [];
   const suggest = (t) => info.suggestions.push(t);
+  // #721: the CI dedupe gate maintained once — a copy of it, or a gate that never skips, is drift.
+  checkGateDrift(src, workflows, cfg?.trunk ?? null, warn, { self: isSelf, suggest });
   if (integrationSuggestion) suggest(integrationSuggestion); // #610
   if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes, writesRaw, suggest });
 
@@ -2851,6 +2869,58 @@ function checkInstructionFileShape(src, warn, fail = warn, opts = {}) {
 // fail: the caller is a copy the repo owns, and handbook-sync's trigger graft is the fix.
 function checkInstructionFilesCaller(src, workflows, trunk, warn) {
   for (const f of instructionFilesCallerFindings({ readFile: (p) => src.readFile(p), workflows, trunk })) warn(f.text);
+}
+
+// ---- CI gate drift (#721) ----------------------------------------------------
+// The dedupe gate lives once, in the handbook's reusable workflow (.github/workflows/ci-light.yml).
+// Two readings, both warn (drift, not customisation — the repo still owns its files):
+//   1. a workflow carrying its own copy of the gate instead of calling ci-light.yml — static, always;
+//   2. a guarded workflow whose last N trunk push runs never skipped although one landed a tree another
+//      ref had already passed green — read from run history, so only where GitHub can be read.
+// The handbook itself is the source: its ci.yml and ci-light.yml carry the gate by design, so the
+// static reading is off here (self-audit); the history reading still runs.
+// Reading 1 is a warn only once the handbook's latest release tag carries ci-light.yml: before that
+// there is nothing to switch TO (a caller pins a tag), so it is a suggestion — the #607 posture for a
+// CI copy — and it turns into drift by itself the day a release ships the workflow.
+let reusableReleasedMemo;
+function reusableReleased() {
+  if (reusableReleasedMemo !== undefined) return reusableReleasedMemo;
+  const hb = handbookInfo(HANDBOOK_ROOT);
+  reusableReleasedMemo = false;
+  if (hb.hasGit && !hb.untagged) {
+    try {
+      execFileSync("git", ["-C", HANDBOOK_ROOT, "cat-file", "-e", `${hb.version}:${gateDrift.REUSABLE_PATH}`], { stdio: "ignore" });
+      reusableReleasedMemo = hb.version;
+    } catch { reusableReleasedMemo = false; }
+  }
+  return reusableReleasedMemo;
+}
+function checkGateDrift(src, workflows, trunk, warn, { self = false, suggest = () => {} } = {}) {
+  const { callers, copies } = gateDrift.copiedGates({ readFile: (p) => src.readFile(p), workflows });
+  if (!self && copies.length) {
+    const released = reusableReleased();
+    for (const wf of copies) {
+      if (released) warn(gateDrift.copiedGateText(wf));
+      else suggest(`${wf}: ${gateDrift.copiedGateText(wf)} — a suggestion until a handbook release tag carries ${gateDrift.REUSABLE_PATH}`);
+    }
+  }
+  if (!trunk || typeof src.ghApi !== "function") return;
+  for (const wf of [...callers, ...copies]) {
+    if (self && wf === "ci-light.yml") continue; // the callee: its runs are its callers'
+    const q = (p) => src.ghApi(`actions/workflows/${encodeURIComponent(wf)}/${p}`);
+    const trunkList = q(`runs?branch=${encodeURIComponent(trunk)}&event=push&status=completed&per_page=${gateDrift.RECENT_TRUNK_RUNS}`);
+    if (!trunkList || !Array.isArray(trunkList.workflow_runs)) continue; // unreadable or offline — say nothing
+    const greenList = q("runs?event=push&status=success&per_page=50"); // the guard's own window (#493)
+    if (!greenList || !Array.isArray(greenList.workflow_runs)) continue;
+    const tree = (r) => (r.head_commit && r.head_commit.tree_id) || null;
+    const trunkRuns = trunkList.workflow_runs.slice(0, gateDrift.RECENT_TRUNK_RUNS).map((r) => {
+      const j = src.ghApi(`actions/runs/${r.id}/jobs?per_page=100`);
+      return { id: r.id, tree: tree(r), created: r.created_at, jobs: j && Array.isArray(j.jobs) ? j.jobs : null };
+    });
+    const greenRuns = greenList.workflow_runs.map((r) => ({ id: r.id, branch: r.head_branch, tree: tree(r), created: r.created_at }));
+    const r = gateDrift.gateNeverSkips({ trunkRuns, greenRuns, trunk });
+    if (r.verdict === "drift") warn(gateDrift.inertGateText(wf, r));
+  }
 }
 
 // ---- a deploy trigger that fires on a pre-release tag (#332) ---------------

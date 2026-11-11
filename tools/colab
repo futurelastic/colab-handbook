@@ -10113,6 +10113,17 @@ function cmdTemplate(argv) {
       if (r.missed.length) trunkNotes.push(`  ⚠ trunk: not found in this template, check by hand: ${r.missed.join(', ')}.`);
     }
   }
+  // #721: the reusable-workflow caller calls the handbook version this copy is stamped with.
+  if (ext === 'yml') {
+    const pin = require('./lib/template-trunk').pinHandbookTag(body, version);
+    body = pin.text;
+    if (pin.pinned) trunkNotes.push(`  pin: calls the reusable workflow at ${pin.pinned} — the version this copy is stamped with.`);
+    if (pin.pinned && stamp.handbookInfo(root).hasGit) {
+      const cr = spawnSync('git', ['-C', root, 'cat-file', '-e', `${pin.pinned}:.github/workflows/ci-light.yml`], { stdio: 'ignore' });
+      if (!cr.error && cr.status !== 0) trunkNotes.push(`  ⚠ pin: ${pin.pinned} does not carry .github/workflows/ci-light.yml — this copy cannot run until it calls a release that does; set the tag by hand.`);
+    }
+    if (pin.unpinned) trunkNotes.push('  ⚠ pin: the handbook has no tag, so `@HANDBOOK_TAG` is left in place — set it to a release tag that carries .github/workflows/ci-light.yml.');
+  }
   // #625: the round-trip job written live, at copy — the commit that creates the workflows.
   const roundtripNotes = [];
   if (opts.roundtrip && roundtrip.ALWAYS_ON.has(stem)) {
@@ -10261,7 +10272,7 @@ function inspectRepo(entry, ctx) {
       const c = stamp.classifyStamped({
         root: ctx.handbookRoot, hb: ctx.hb, tmplNames: ctx.tmplNames,
         templateName: st.name, stampVersion: st.version, localText: text, comparable: true,
-        render: (body) => require('./lib/template-trunk').renderForRepo(st.name, body, descDoc),
+        render: (body) => require('./lib/template-trunk').renderForRepo(st.name, body, descDoc, st.version),
       });
       artifacts.push({ file: rel, template: st.name, applicable: c.state === 'behind', ...c });
     } else {
@@ -10355,7 +10366,7 @@ function refreshArtifact(repo, art, ctx) {
   const src = path.join(ctx.templatesDir, `${art.template}.yml`);
   if (!fs.existsSync(src)) return { ok: false, err: `template ${art.template}.yml is not in the handbook` };
   // Rendered exactly as `colab template <name> --force` would write it here (#526).
-  const body = require('./lib/template-trunk').renderForRepo(art.template, fs.readFileSync(src, 'utf8'), repoDescriptorDoc(repo.path));
+  const body = require('./lib/template-trunk').renderForRepo(art.template, fs.readFileSync(src, 'utf8'), repoDescriptorDoc(repo.path), ctx.hb.version);
   const dest = path.join(repo.path, art.file);
   try {
     fs.mkdirSync(path.dirname(dest), { recursive: true });

@@ -1,0 +1,73 @@
+# CI (light lane) — CALLER of the handbook's reusable workflow (#721). Copy to .github/workflows/ci.yml
+# with `colab template ci-call --dest .github/workflows/ci.yml`: it writes this repo's trunk refs and pins the call to the handbook
+# release it stamps the copy with. Unlike templates/ci-<stack>.yml, nothing below the `uses:` line is
+# yours to maintain — the dedupe gate, the secret scan, the quick/full split and the job-class
+# `runs-on` live once, in .github/workflows/ci-light.yml of the handbook, and a release moves them.
+#
+# EDIT POINTS are marked `# EDIT:` — the `with:` block is the only real one.
+#
+# Kept HERE because a called workflow cannot declare them (CONVENTIONS.md §7, "One verdict per tree"):
+#   - the triggers: every branch (#384 — a candidate gets a run of its own before the merge; '**'
+#     also covers `ship-batch/**`), no `pull_request` beside push (#512), and workflow_dispatch (the
+#     release workflow dispatches CI on a promotion its token cannot trigger, #440);
+#   - concurrency: one live run per branch, a trunk run never cancelled and in a group of its own (#512).
+#     Its trunk refs and the `trunk-branches` input name the same branches — `colab template` writes both.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+
+# The called jobs can only narrow these: the gate lists this workflow's runs and reads git objects.
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  ci:
+    # Pinned to a handbook release, never a branch: a caller tracking `main` would take every gate
+    # change the moment it merges there, untested against this repo. Move the tag deliberately
+    # (`colab update` refreshes a pristine copy to the current release).
+    uses: futurelastic/colab-handbook/.github/workflows/ci-light.yml@HANDBOOK_TAG
+    with:
+      trunk-branches: '["main","dev"]'
+      # EDIT: one stack — keep the lines for yours, delete the rest. Versions are resolved from
+      # .github/project.yml, then the manifest (.nvmrc / engines.node, .python-version /
+      # requires-python, composer.json require.php); none declared fails the job, never a default.
+      #
+      # Node:
+      toolchain: node
+      install: auto # npm ci / pnpm install --frozen-lockfile, from the lockfile
+      quick: npm run --if-present typecheck && npm run --if-present lint
+      full: npm test --if-present && npm run --if-present build
+      #
+      # Python:
+      # toolchain: python
+      # install: auto # pip install -e . (or -r requirements.txt), then requirements-dev.txt
+      # quick: python -m ruff check . && python -m mypy src
+      # full: python -m pytest -q -m "not heavy" || [ $? -eq 5 ]
+      #
+      # Laravel (PHP + Vite):
+      # toolchain: php,node
+      # install: auto # composer install, then npm ci
+      # quick: vendor/bin/pint --test
+      # full: cp .env.example .env && php artisan key:generate && npm run build && php artisan migrate --force && vendor/bin/pest --ci --exclude-group=heavy
+      #
+      # EDIT: self-hosted runners — `classes` runs each job on ["self-hosted", <class>]: `trunk` on a
+      # trunk ref, else `quick` or `full` (CONVENTIONS.md §7, "Runner classes"). A public repo keeps
+      # the default, ubuntu-latest. A bare label or a JSON label list also works.
+      # runs-on: classes
+      # runner-lane: my-repo-lane # only for a capped lane (rule 3)
+      #
+      # EDIT: name your trunk-only jobs below (deploy, publish) when they sit outside the gate (#717).
+      # trunk-only-jobs: Deploy
+
+  # Your own jobs go here, beside the call. Behind the gate (they skip when the tree already passed):
+  #   needs: ci
+  #   if: ${{ !cancelled() && needs.ci.outputs.tested != 'true' }}
+  # Trunk-only and ungated: no `if:` on the guard, and list the job's name in `trunk-only-jobs` above.

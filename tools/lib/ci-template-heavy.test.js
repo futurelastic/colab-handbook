@@ -455,7 +455,8 @@ test('audit: unstamped light and heavy CI copies are suggestions — no fail, no
     stdout = execFileSync('node', [path.join(REPO_ROOT, 'audit', 'audit.mjs'), '--json', '--local', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   } catch (err) { stdout = err.stdout || ''; }
   const r = JSON.parse(stdout).results[0];
-  const texts = r.findings.map((f) => `${f.level}: ${f.text}`);
+  // #721: a copied dedupe GATE is the one exception — drift, not customisation (gate-drift.js), reported on its own.
+  const texts = r.findings.filter((f) => !/^drift: /.test(f.text)).map((f) => `${f.level}: ${f.text}`);
   assert.ok(!texts.some((t) => /crashed/.test(t)), texts.join(' | '));
   assert.ok(!texts.some((t) => /ci(-heavy)?\.yml/.test(t)), `a CI copy's difference is never a finding: ${texts.join(' | ')}`);
   assert.ok(r.suggestions.some((s) => /^ci\.yml unstamped/.test(s)), r.suggestions.join(' | '));

@@ -166,3 +166,30 @@ Offer the move as a proposal per repo, following [`docs/downloads.md`](../../doc
 *Moving an existing publish script onto the template* — never a blind overwrite: the old script's file
 list becomes the `downloads:` block, and the repo's secrets are renamed by the operator, not by the sync.
 Verify with a `dry_run` dispatch; a version already on the site then reads back as a verified no-op.
+
+### A copied CI gate, or one that never skips (#721)
+
+The dedupe gate ([§7, *One verdict per tree*](../../CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719))
+is maintained once, in the handbook's reusable `.github/workflows/ci-light.yml`. A repo's own copy of
+it is **drift, not customisation**: a copy changes only through this sync, so a gate fix never reaches
+it (#717 did not — measured 2026-11-09 → 11-11, the gate was missing in six adopters and present but
+never skipping in three). The audit reports two shapes, both starting `drift:`, both `warn` — except that a
+copied gate is a *suggestion* until the handbook's latest release tag carries `ci-light.yml` (a caller pins
+a tag, so before that there is nothing to switch to; `colab template ci-call` warns the same way):
+
+- **A copied gate** — a workflow carrying the guard's step (`Look for a green run of this workflow at
+  this sha or tree`) or its `GUARD_NAME` env, with no call to `ci-light.yml`. Offer the caller:
+  `colab template ci-call --dest .github/workflows/ci.yml` writes it with this repo's trunk refs and the
+  handbook release it is stamped with, then move the copy's own commands into its `with:` block
+  (`install`, `quick`, `full`) and its own jobs (deploy, a migration round-trip) beside the call —
+  behind the gate with `needs: ci` + `if: needs.ci.outputs.tested != 'true'`, or ungated and named in
+  `trunk-only-jobs`. A proposal per repo, never a blind overwrite: the copy's edits are the repo's.
+- **A gate that never skips** — of the guarded workflow's last 10 trunk push runs none skipped,
+  though at least one landed a tree a push run on another ref had already passed green. Read from run
+  history, so it needs GitHub (silent under `--offline`); it catches the gate that *looks* right — a
+  renamed guard job with a stale `GUARD_NAME`, a trunk missing from the guard's `if:`, a branch run that
+  always skips some job (#511). The finding names one trunk run and the run it could have cited: open
+  both, and fix the copy — or replace it with the caller, which has none of these to get wrong.
+
+The handbook itself is the source (its `ci.yml` and `ci-light.yml` carry the gate by design), so only
+the history reading applies to it.

@@ -30,7 +30,10 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const FILES = ['templates/ci-node.yml', 'templates/ci-laravel.yml', 'templates/ci-python.yml', '.github/workflows/ci.yml'];
+const FILES = ['templates/ci-node.yml', 'templates/ci-laravel.yml', 'templates/ci-python.yml', '.github/workflows/ci.yml', '.github/workflows/ci-light.yml'];
+// The reusable workflow (#721) has no `on:`/`concurrency:` of its own — the caller does — so its trunk refs are the
+// `trunk-branches` input, not a concurrency list.
+const REUSABLE = '.github/workflows/ci-light.yml';
 const read = (f) => fs.readFileSync(path.join(REPO_ROOT, f), 'utf8');
 const HAVE_JQ = spawnSync('jq', ['--version']).status === 0;
 const GUARD = 'Already tested at this sha or tree?';
@@ -144,6 +147,13 @@ for (const file of FILES) {
 
   test(`${file}: dedupe admits exactly concurrency's trunk refs, can read contents, exposes cited (#493)`, () => {
     const d = jobs.dedupe;
+    if (file === REUSABLE) {
+      assert.strictEqual(key(d, 'if'), "github.event_name == 'push' && (github.event.created || contains(fromJSON(inputs.trunk-branches), github.ref_name))");
+      const body = d.join('\n');
+      assert.match(body, /^    permissions:\n      actions: read\n      contents: read$/m);
+      assert.match(body, /^      cited: \$\{\{ steps\.check\.outputs\.cited \}\}$/m);
+      return;
+    }
     const conc = text.match(/cancel-in-progress: \$\{\{ (.*) \}\}/)[1];
     const trunks = [...conc.matchAll(/github\.ref != '([^']+)'/g)].map((m) => m[1]).sort();
     const groupLine = text.match(/^  group: (.*)$/m)[1];
@@ -266,7 +276,7 @@ for (const file of FILES) {
       r = run({ same: [runObj(90, 'ship-batch/abc1234', 'abc123', 'T1')], jobs: { 90: [{ name: 'Nightly', conclusion: 'skipped' }] } });
       assert.deepStrictEqual(r.out, { tested: 'false' });
       // The guard reads its own name from GUARD_NAME — the workflow sets it to this job's name.
-      const env = jobs.dedupe.join('\n').match(/GUARD_NAME: (.*?) # EDIT/);
+      const env = jobs.dedupe.join('\n').match(/GUARD_NAME: (.*?) # /);
       assert.ok(env, 'dedupe sets GUARD_NAME');
       assert.strictEqual(env[1], key(jobs.dedupe, 'name'));
     } finally {
@@ -345,9 +355,43 @@ for (const file of FILES) {
       assert.strictEqual(r.out.tested, 'true');
 
       // The copy ships the list empty — #511 unchanged until an adopter names an ungated job.
+      // The reusable workflow (#721) reads it from the `trunk-only-jobs` input, whose default is empty.
+      if (file === REUSABLE) {
+        assert.match(jobs.dedupe.join('\n'), /^\s+TRUNK_ONLY_JOBS: \$\{\{ inputs\.trunk-only-jobs \}\}$/m);
+        assert.match(text, /^      trunk-only-jobs:\n(?:        .*\n)*?        default: ""$/m);
+        return;
+      }
       const decl = jobs.dedupe.join('\n').match(/^\s+TRUNK_ONLY_JOBS: "(.*)"$/m);
       assert.ok(decl, 'dedupe declares TRUNK_ONLY_JOBS');
       assert.strictEqual(decl[1], '');
+    } finally {
+      cleanup();
+    }
+  });
+
+  // #721: a called workflow's jobs are listed as "<caller job> / <job name>". The #511 rule must see the
+  // guard and each declared trunk-only job under that name too — or every caller's cited run reads as
+  // "skipped Already tested…" and trunk never reuses a tree.
+  if (file === REUSABLE) test(`${file}: called-job names — "<caller> / <name>" counts as the guard and as a trunk-only job (#721)`, { skip: !HAVE_JQ && 'jq not installed' }, () => {
+    const { run, cleanup } = makeRunner(guardScript(jobs.dedupe));
+    try {
+      const green = runObj(77, 'feat/x-1', 'bbb222', 'T1');
+      const called = (extra = []) => ({ list: [green], trees: { bbb222: 'T1' }, jobs: { 77: [
+        { name: `ci / ${GUARD}`, conclusion: 'skipped' }, { name: 'ci / Quick (lint, types, unit)', conclusion: 'success' },
+        { name: 'ci / Full (test, build)', conclusion: 'success' }, ...extra] } });
+      // The guard skipped under its called name: reused, cited.
+      let r = run(called());
+      assert.deepStrictEqual(r.out, { tested: 'true', cited: 'https://github.com/o/r/actions/runs/77' });
+      // A called suite job skipped: never reused, and named.
+      r = run(called([{ name: 'ci / E2E', conclusion: 'skipped' }]));
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      assert.match(r.stdout, /Run 77 skipped ci \/ E2E/);
+      // A caller-level trunk-only job (no prefix) and a nested one (with one) are both excused when listed.
+      assert.strictEqual(run({ ...called([{ name: 'Deploy', conclusion: 'skipped' }]), env: { TRUNK_ONLY_JOBS: 'Deploy' } }).out.tested, 'true');
+      assert.strictEqual(run({ ...called([{ name: 'release / Deploy', conclusion: 'skipped' }]), env: { TRUNK_ONLY_JOBS: 'Deploy' } }).out.tested, 'true');
+      // The suffix is " / <name>", whole: a name merely ending in the listed text excuses nothing.
+      assert.strictEqual(run({ ...called([{ name: 'ci / PreDeploy', conclusion: 'skipped' }]), env: { TRUNK_ONLY_JOBS: 'Deploy' } }).out.tested, 'false');
+      assert.strictEqual(run({ ...called([{ name: 'Deploy', conclusion: 'skipped' }]), env: { TRUNK_ONLY_JOBS: '' } }).out.tested, 'false');
     } finally {
       cleanup();
     }

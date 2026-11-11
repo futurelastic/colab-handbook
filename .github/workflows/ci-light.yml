@@ -1,0 +1,809 @@
+# CI light lane — REUSABLE workflow (#721). Repos CALL this file instead of copying a template:
+#
+#   jobs:
+#     ci:
+#       uses: futurelastic/colab-handbook/.github/workflows/ci-light.yml@<handbook release tag>
+#       with: { toolchain: node, install: auto, quick: "npm run --if-present lint", full: "npm test" }
+#
+# The caller is templates/ci-call.yml (copy that, ~60 lines). Nothing here is copied, which is the
+# point: the copied templates' dedupe gate and quick/full split drifted copy by copy — measured
+# across adopters 2026-11-09 → 11-11, the gate was missing in six repositories and present but never
+# skipping in three — and a fix to a template (#717) reached a copy only through a manual sync. One
+# file, maintained once, pinned by tag; the audit reports a copied gate as drift (handbook-sync).
+#
+# WHAT THIS FILE OWNS
+#   - The dedupe gate (job `dedupe`): one CI verdict per git tree (CONVENTIONS.md §7, "One verdict
+#     per tree"). Its script is the light templates' guard, unchanged except for the job-name match
+#     below (#418 sha mode, #493 tree mode, #511 skip rule, #552 sha first, #592 newest reusable,
+#     #717 batch refs + trunk-only jobs).
+#   - The secret scan (job `gitleaks`): the pinned release binary, the #716 range.
+#   - The quick / full split (jobs `quick` and `full`): `quick` runs the caller's lint/types/unit
+#     command on a small slot; `full` runs its test/build command. Both run on every push the gate
+#     does not skip; the heavy lane (templates/ci-<stack>-heavy.yml) stays where it is.
+#   - The job-class `runs-on` (CONVENTIONS.md §7, "Runner classes", #720).
+#   - The descriptor check of .github/project.yml (#416), inside `quick`.
+#
+# WHAT ONLY THE CALLER CAN OWN — a called workflow cannot declare them:
+#   - `on:` (a called workflow's only trigger is workflow_call) and `concurrency:` (the same group in
+#     caller and callee deadlocks). templates/ci-call.yml carries both as fixed text; their policy —
+#     which refs are trunk, and that a trunk run is never cancelled — is the `trunk-branches` input.
+#   - Jobs of its own (deploy, publish, a migration round-trip). Gate one on the guard with
+#     `needs: ci` + `if: needs.ci.outputs.tested != 'true'`, or keep it ungated and name it in
+#     `trunk-only-jobs`.
+#
+# REUSABLE-WORKFLOW FACTS the gate absorbs: the `github` context is the caller's, so `github.run_id`
+# is the caller's run and its workflow id is the caller's workflow — the run listing reads the same
+# runs a copied guard read. A called job is listed in the jobs API as "<caller job> / <job name>", so
+# the #511 skip rule matches GUARD_NAME and every `trunk-only-jobs` name either exactly or as that
+# " / <name>" suffix.
+name: CI light lane (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      trunk-branches:
+        description: >-
+          JSON list of the branches whose pushes are trunk runs — the caller's `concurrency` names the
+          same ones. Default ["main","dev"]; `colab template ci-call` writes this repo's.
+        type: string
+        required: false
+        default: '["main","dev"]'
+      toolchain:
+        description: >-
+          Toolchains to resolve and set up, comma-separated: node, python, php. Each version is
+          resolved from .github/project.yml, then the ecosystem manifest, else the job FAILS —
+          never a default (CONVENTIONS.md §7, "Toolchain versions"). Empty = none.
+        type: string
+        required: false
+        default: ""
+      working-directory:
+        description: The directory holding the app's manifest (package.json, pyproject.toml, composer.json).
+        type: string
+        required: false
+        default: "."
+      install:
+        description: >-
+          Shell run before `quick` and before `full`. `auto` = the toolchain's own install (npm ci /
+          pnpm from the lockfile, pip from pyproject.toml or requirements.txt, composer install).
+          Empty = no install.
+        type: string
+        required: false
+        default: auto
+      quick:
+        description: Shell for the quick job — lint, types, unit tests. Empty = the job runs only the descriptor check.
+        type: string
+        required: false
+        default: ""
+      full:
+        description: Shell for the full job — the light test suite, the build. Empty = the job is a no-op that passes.
+        type: string
+        required: false
+        default: ""
+      runs-on:
+        description: >-
+          `ubuntu-latest` (default), any bare label, a JSON label list, or `classes`: then each job runs on
+          ["self-hosted", <class>] — `trunk` on a trunk ref, else `quick` (gate, scan, quick) or `full` (full).
+        type: string
+        required: false
+        default: ubuntu-latest
+      runner-lane:
+        description: >-
+          With `runs-on: classes`, a capped lane label inserted before the class (rule 3 of "Runner classes").
+        type: string
+        required: false
+        default: ""
+      trunk-only-jobs:
+        description: >-
+          Comma-separated names of the CALLER's jobs that are trunk-only and sit outside the gate (#717).
+          A cited branch run that skipped them is still reused. Never name a gated job.
+        type: string
+        required: false
+        default: ""
+      gitleaks-version:
+        description: The pinned gitleaks release. Bump deliberately.
+        type: string
+        required: false
+        default: "8.30.1"
+      quick-timeout-minutes:
+        type: number
+        required: false
+        default: 15
+      full-timeout-minutes:
+        description: Keep it well above YOUR p99 (#572).
+        type: number
+        required: false
+        default: 60
+    outputs:
+      tested:
+        description: "'true' when the gate found this sha or tree already green and the suite was skipped."
+        value: ${{ jobs.dedupe.outputs.tested }}
+      cited:
+        description: The run the gate relied on, when it skipped by tree.
+        value: ${{ jobs.dedupe.outputs.cited }}
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  GITLEAKS_VERSION: ${{ inputs.gitleaks-version }}
+
+jobs:
+  # Already tested? The job that concludes `success` when the suite is skipped: a run whose jobs ALL
+  # skip concludes `skipped`, which `colab ship` reads as not-green. Any doubt — no run, red, an API
+  # error — runs the suite; this job never fails the run.
+  dedupe:
+    name: Already tested at this sha or tree?
+    if: github.event_name == 'push' && (github.event.created || contains(fromJSON(inputs.trunk-branches), github.ref_name))
+    runs-on: ${{ inputs.runs-on == 'classes' && fromJSON(format('["self-hosted",{0}"{1}"]', inputs.runner-lane != '' && format('"{0}",', inputs.runner-lane) || '', contains(fromJSON(inputs.trunk-branches), github.ref_name) && 'trunk' || 'quick')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on) }}
+    timeout-minutes: 5 # one `gh api` listing; a hung call must not hold the slot.
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tested: ${{ steps.check.outputs.tested }}
+      cited: ${{ steps.check.outputs.cited }}
+    steps:
+      - name: Look for a green run of this workflow at this sha or tree
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          CREATED: ${{ github.event.created }}
+          REF_NAME: ${{ github.ref_name }}
+          GUARD_NAME: Already tested at this sha or tree? # this job's `name:` — listed as "<caller job> / <name>" (#721).
+          # #717: the caller's trunk-only jobs outside the gate (input `trunk-only-jobs`).
+          TRUNK_ONLY_JOBS: ${{ inputs.trunk-only-jobs }}
+        run: |
+          tested=false
+          cited=
+          # #511: a cited run is reusable only if it skipped no job but this guard. A called job is listed as
+          # "<caller job> / <name>" (#721), so the guard and each trunk-only name match exactly or as that suffix. A job gated on
+          # the trunk ref is `skipped` on every branch push and a skipped job does not fail the
+          # run, so citing that run would skip the trunk-only job on trunk a second time — unless
+          # the job is named in TRUNK_ONLY_JOBS: it sits outside the gate and runs here anyway (#717).
+          reusable() {
+            if ! SK="$(gh api "repos/$REPO/actions/runs/$1/jobs?per_page=100" \
+                   --jq 'if .total_count > (.jobs | length) then "(more than 100 jobs)" else [.jobs[] | select(.conclusion == "skipped" and .name != env.GUARD_NAME and (.name | endswith(" / " + env.GUARD_NAME) | not)) | .name | select(. as $n | any((env.TRUNK_ONLY_JOBS // "") | split(",")[] | gsub("^\\s+|\\s+$"; "") | select(. != ""); . as $t | $n == $t or ($n | endswith(" / " + $t))) | not)] | join(", ") end' 2>/dev/null)"; then
+              echo "::notice::Could not list the jobs of run $1 — running the full suite (#511)."
+              return 1
+            elif [ -n "$SK" ]; then
+              echo "::notice::Run $1 skipped $SK, which this push may run — running the full suite (#511)."
+              return 1
+            fi
+          }
+          # The candidate runs, one per line as "<id> <head sha> <url> <branch>", newest first: green
+          # push runs of this workflow on another ref of this repo. #552: those at THIS sha first (a
+          # `ship-batch/*` run trunk fast-forwarded to), an exact query; then those whose commit has
+          # THIS tree (#493). The query's own per_page bounds the walk (#592).
+          same_sha() {
+            gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&event=push&status=success&per_page=20" \
+              --jq ".workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\"" 2>/dev/null
+          }
+          same_tree() {
+            gh api "repos/$REPO/actions/workflows/$WFID/runs?event=push&status=success&per_page=50" \
+              --jq ".workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\"" 2>/dev/null
+          }
+          # #592: cite the newest candidate on stdin that passes every check. One that fails a check
+          # is passed over, not the end of the search: the newest green run can be a skip-chained one
+          # (#511) while an older run at the same sha or tree ran every job. A run already tried (the
+          # sha query's runs reappear in the tree listing) is not tried twice.
+          cite() {
+            local CID CSHA URL BR CTREE
+            while read -r CID CSHA URL BR; do
+              [ -n "$CID" ] || continue
+              case " $TRIED " in *" $CID "*) continue ;; esac
+              TRIED="$TRIED $CID"
+              if ! CTREE="$(gh api "repos/$REPO/git/commits/$CSHA" --jq .tree.sha 2>/dev/null)" || [ "$CTREE" != "$OURS" ]; then
+                echo "::notice::Could not confirm the tree of $CSHA — passing over run $CID (#493)."
+              elif reusable "$CID"; then
+                tested=true
+                cited="$URL"
+                echo "::notice title=tree-already-green::$URL tree=$OURS head=$CSHA branch=$BR"
+                echo "Tree $OURS already passed this workflow at $CSHA on $BR ($URL) — skipping the suite (#493)."
+                echo "Already tested: tree \`$OURS\` passed this workflow on \`$BR\` — [the run relied on]($URL); suite skipped (#493)." >> "$GITHUB_STEP_SUMMARY"
+                return 0
+              fi
+            done
+            return 1
+          }
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "::notice::gh is not installed on this runner — running the full suite (#418)."
+          elif ! WFID="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id 2>/dev/null)" || [ -z "$WFID" ]; then
+            echo "::notice::Could not read this run's workflow id — running the full suite (#418)."
+          elif [ "${CREATED:-}" = "false" ] || [[ "$REF_NAME" == ship-batch/* ]]; then
+            # Tree mode (#493): a non-creating push to trunk, or the creating push of a batch-landing
+            # ref (#717), whose new sha often carries a tree a member branch already passed. Same
+            # checks either way; only the trunk check is the ref's own. Every branch below but one
+            # runs the suite.
+            if ! DESC="$(gh api "repos/$REPO/contents/.github/project.yml?ref=$SHA" -H 'Accept: application/vnd.github.raw' 2>/dev/null)" || [ -z "$DESC" ]; then
+              echo "::notice::Could not read .github/project.yml at $SHA — running the full suite (#493)."
+            elif grep -Eq '^tree-reuse[[:space:]]*:' <<< "$DESC"; then
+              echo "::notice::tree-reuse is declared in .github/project.yml — running the full suite (#493)."
+            elif [ "${CREATED:-}" = "false" ] && [ "$(printf '%s\n' "$DESC" | sed -nE "s/^trunk:[[:space:]]*[\"']?([A-Za-z0-9._/-]+).*/\\1/p" | head -n 1)" != "$REF_NAME" ]; then
+              echo "::notice::$REF_NAME is not this repo's trunk — running the full suite (#493)."
+            elif ! OURS="$(gh api "repos/$REPO/git/commits/$SHA" --jq .tree.sha 2>/dev/null)" || [ -z "$OURS" ]; then
+              echo "::notice::Could not read the tree of $SHA — running the full suite (#493)."
+            else
+              TRIED=
+              SC="$(same_sha)" || SC=    # the sha query failing falls through to the tree listing (#552)
+              if [ -n "$SC" ] && cite <<< "$SC"; then
+                :
+              elif ! TC="$(same_tree)"; then
+                echo "::notice::Could not list this workflow's green runs — running the full suite (#493)."
+              elif [ -z "$SC$TC" ]; then
+                echo "No green run of this workflow on another ref has sha $SHA or tree $OURS — running the full suite."
+              elif ! cite <<< "$TC"; then
+                echo "No green run of this workflow at sha $SHA or tree $OURS can be cited — running the full suite (#592)."
+              fi
+            fi
+          elif ! N="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&status=success&per_page=20" \
+                 --jq "[.workflow_runs[] | select(.id != $RUN_ID and .event != \"pull_request\")] | length" 2>/dev/null)"; then
+            echo "::notice::Could not list this workflow's runs at $SHA — running the full suite (#418)."
+          elif [ "${N:-0}" -ge 1 ] 2>/dev/null; then
+            tested=true
+            echo "This workflow already passed at $SHA ($N green run(s)) — skipping the suite (#418)."
+            echo "Already tested: this workflow has a green run at \`$SHA\` — suite skipped (#418)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No green run of this workflow at $SHA yet — running the full suite."
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+          [ -z "$cited" ] || echo "cited=$cited" >> "$GITHUB_OUTPUT"
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    needs: dedupe
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
+    runs-on: ${{ inputs.runs-on == 'classes' && fromJSON(format('["self-hosted",{0}"{1}"]', inputs.runner-lane != '' && format('"{0}",', inputs.runner-lane) || '', contains(fromJSON(inputs.trunk-branches), github.ref_name) && 'trunk' || 'quick')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on) }}
+    timeout-minutes: 15 # a scan of the checkout.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # Full history: the scan's range is computed against trunk (origin/<trunk>..HEAD), and
+          # the two ends of that range have to be in the clone. The range itself is narrow — see
+          # "gitleaks detect" below (#716).
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Kept between jobs (#696) — GitHub-hosted only: a fresh VM has nothing on disk, so the
+      # binary comes back from here and the install step below downloads nothing.
+      #   - Self-hosted → off. A persistent runner keeps its tool cache on disk already, and a
+      #     remote cache on top was measured as a loss, not a saving (#512).
+      #   - Keyed on the pin and the platform: a version bump is a miss. The post step saves
+      #     only when the job passes, so a failed download is never what gets cached.
+      # A NEW step, skipped on self-hosted. "Install gitleaks (pinned release binary)" keeps
+      # its name: handbook-sync recognises a copy of this job by it.
+      # EDIT: self-hosted runners are already off; to turn it off everywhere, delete this step.
+      - name: Restore gitleaks cache
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/gitleaks/${{ env.GITLEAKS_VERSION }}
+          key: gitleaks-${{ env.GITLEAKS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install gitleaks (pinned release binary)
+        env:
+          # Authenticated (#698). Under load GitHub sheds ANONYMOUS release downloads first:
+          # measured 2026-11-09, ~90 min of instant 504s from github.com/…/releases/download,
+          # while the API asset path below answered 200 with the same file. The job's own token
+          # is enough — reading a public release needs an identity, not a permission.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Deliberately NOT gitleaks/gitleaks-action@v2: that action requires a paid
+          # GITLEAKS_LICENSE for repositories owned by an organization (free only for
+          # personal repos). The release binary itself is MIT and has no such gate.
+          # Repos also carry a local pre-commit gitleaks hook; this is the second layer.
+          # The asset is OS/arch-specific, so resolve both from uname instead of
+          # assuming the GitHub-hosted default: a hardcoded linux_x64 binary on a
+          # macOS self-hosted runner is an ELF the kernel cannot exec, and the step
+          # fails with exit 126 rather than anything mentioning the platform.
+          case "$(uname -s)" in
+            Darwin) os=darwin ;;
+            Linux)  os=linux ;;
+            *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            arm64|aarch64) arch=arm64 ;;
+            x86_64|amd64)  arch=x64 ;;
+            *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
+          esac
+          # Kept between jobs (#696): a pinned version is downloaded once per runner, not on
+          # every run. A release download can answer 504 for hours (measured: 20 of 20 tries),
+          # which outlasts any retry, so the binary has to be on the runner already.
+          # Into the runner's tool cache, not /usr/local/bin: no sudo, no global write — the
+          # per-runner directory setup-node and setup-python install into. A persistent
+          # self-hosted runner keeps it on disk; a GitHub-hosted VM gets it back from the
+          # "Restore gitleaks cache" step above. The version is in the path, so a pin bump is a
+          # miss, never a stale binary. EDIT: an ephemeral self-hosted runner keeps neither and
+          # downloads on every run.
+          dir="${RUNNER_TOOL_CACHE:-$RUNNER_TEMP}/gitleaks/${GITLEAKS_VERSION}/${os}-${arch}"
+          if [ -x "$dir/gitleaks" ]; then
+            echo "gitleaks ${GITLEAKS_VERSION} already on this runner: $dir"
+          else
+            mkdir -p "$dir"
+            tmp="$(mktemp -d "$dir.XXXXXX")"
+            trap 'rm -rf "$tmp"' EXIT
+            asset="gitleaks_${GITLEAKS_VERSION}_${os}_${arch}.tar.gz"
+            sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+            # fetch <accept> <url> <file> — every request of this step, one curl line.
+            # --fail: on an HTTP error curl otherwise saves the error page and exits 0, and tar
+            # then fails with "not in gzip format", naming neither the download nor the host.
+            # --retry: a re-run during the same upstream error spends the one re-run branch CI
+            # allows, so a brief error is retried here first. A longer outage still fails, at
+            # curl, naming the status (#690).
+            # The token reaches api.github.com only: curl drops an -H Authorization header when
+            # the asset's 302 leads to another host, so the download CDN never sees it.
+            fetch() {
+              curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 10 --max-time 120 \
+                -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: $1" -o "$3" "$2"
+            }
+            # The API serves an asset by id, not by name, so look the ids up in the release. No jq:
+            # a self-hosted runner need not have it. Splitting on , { [ leaves one key per line
+            # whether the JSON comes pretty or compact; within an asset, "url" precedes "name". Were
+            # that order ever to change, the wrong file would arrive and the sha256 check below
+            # would refuse it — a loud failure, never a wrong binary.
+            fetch application/vnd.github+json \
+              "https://api.github.com/repos/gitleaks/gitleaks/releases/tags/v${GITLEAKS_VERSION}" "$tmp/release.json"
+            for f in "$asset" "$sums"; do
+              url="$(tr ',{[' '\n\n\n' < "$tmp/release.json" | awk -F'"' -v want="$f" '
+                $2 == "url" && $4 ~ /\/releases\/assets\/[0-9]+$/ { u = $4 }
+                $2 == "name" && $4 == want && !found { print u; found = 1 }')"
+              if [ -z "$url" ]; then
+                echo "::error::gitleaks release v${GITLEAKS_VERSION} has no asset $f"; exit 1
+              fi
+              fetch application/octet-stream "$url" "$tmp/$f"
+            done
+            # Verified before tar (#698): an error page, a truncated file or a wrong archive stops
+            # here, naming the file, instead of reaching tar — or, for a valid archive, the PATH.
+            want="$(awk -v f="$asset" '$2 == f { print $1 }' "$tmp/$sums")"
+            if command -v sha256sum >/dev/null; then got="$(sha256sum "$tmp/$asset" | awk '{ print $1 }')"
+            else got="$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }')"; fi # macOS self-hosted
+            if [ -z "$want" ]; then
+              echo "::error::$sums does not list $asset, so it cannot be verified"; exit 1
+            fi
+            if [ "$got" != "$want" ]; then
+              echo "::error::sha256 mismatch for $asset: got $got, $sums lists $want"; exit 1
+            fi
+            tar -xzf "$tmp/$asset" -C "$tmp" gitleaks
+            chmod +x "$tmp/gitleaks"
+            # One rename on one filesystem: a job sharing this tool cache sees no binary or a
+            # whole one, never half of one.
+            mv -f "$tmp/gitleaks" "$dir/gitleaks"
+          fi
+          echo "$dir" >> "$GITHUB_PATH"
+
+      # The scan range (#716): only the commits this run brings, never `git log --all`. A
+      # fetch-depth-0 checkout holds every branch and tag, and gitleaks' default range is all of
+      # them — so one unshipped branch's finding turned EVERY branch's run red, a trunk cure
+      # included, until that branch rewrote its history.
+      #   - A branch push: the commits not yet on trunk (origin/<trunk>..HEAD).
+      #   - A trunk push: the pushed range (before..HEAD).
+      #   - No range to read (a dispatch, a first or forced trunk push, trunk not fetched): HEAD's
+      #     own history — still never another branch's.
+      # Trunk is `trunk:` in .github/project.yml, else the repository's default branch. Every
+      # commit trunk's tip can reach is scanned by the heavy lane instead (templates/
+      # ci-<stack>-heavy.yml, job `secrets`), which blocks no merge. The step keeps its name.
+      - name: gitleaks detect
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          trunk="$(sed -nE "s/^trunk:[[:space:]]*[\"']?([A-Za-z0-9._/-]+).*/\\1/p" .github/project.yml 2>/dev/null | head -n 1 || true)"
+          trunk="${trunk:-$DEFAULT_BRANCH}"
+          commit() { [ -n "$1" ] && git rev-parse --verify -q "$1^{commit}" >/dev/null; }
+          if [ -n "$trunk" ] && [ "$REF_NAME" = "$trunk" ]; then
+            if [ "$EVENT" = push ] && commit "$BEFORE" && git merge-base --is-ancestor "$BEFORE" HEAD; then
+              range="$BEFORE..HEAD"
+            else
+              range=HEAD
+            fi
+          elif [ -n "$trunk" ] && commit "refs/remotes/origin/$trunk"; then
+            range="refs/remotes/origin/$trunk..HEAD"
+          else
+            range=HEAD
+          fi
+          echo "Secret scan range: $range ($(git rev-list --count "$range") commit(s))"
+          gitleaks detect --source . --no-banner --log-opts="$range"
+
+  quick:
+    name: Quick (lint, types, unit)
+    needs: dedupe
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
+    runs-on: ${{ inputs.runs-on == 'classes' && fromJSON(format('["self-hosted",{0}"{1}"]', inputs.runner-lane != '' && format('"{0}",', inputs.runner-lane) || '', contains(fromJSON(inputs.trunk-branches), github.ref_name) && 'trunk' || 'quick')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.quick-timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # ---------------------------------------------------------------------------
+      # Descriptor check (#416). A value `colab ship` cannot use does not fail there —
+      # it fails closed to the safe default, silently. `ship-batch: 5` (the cap was 3)
+      # once turned every landing in a busy repo back to serial while this CI stayed
+      # green; only a ship dry run noticed. So the value fails HERE, where the person
+      # who changed project.yml is looking. Same rule as `colab ship` and the audit
+      # (tools/lib/ship-batch.js parseShipBatch): absent/empty/null, or 1–8. Why the
+      # cap is 8: project.schema.md, `ship-batch`. `ship-batch-wait` (#555) the same way
+      # (parseShipBatchWait): absent/empty/null, or a whole number with a unit (s, m, h).
+      # `ship-batch-steps` (#557, parseShipBatchSteps): absent/empty/null, or ascending
+      # whole numbers within ship-batch — 2,4,8 or [2, 4, 8].
+      # `ci-wait-factor` (#564) too (tools/lib/ci-profile.js parseFactor): absent, or a number >= 1.
+      # ---------------------------------------------------------------------------
+      - name: Descriptor check (.github/project.yml)
+        working-directory: ${{ github.workspace }}
+        run: |
+          [ -f .github/project.yml ] || exit 0
+          # The scalar after `<key>:` — comment, trailing blanks and one level of quotes stripped.
+          field() {
+            grep -E "^$1[[:space:]]*:" .github/project.yml | head -1 \
+              | sed -E -e "s/^$1[[:space:]]*:[[:space:]]*//" \
+                -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]+$//' \
+                -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/" || true
+          }
+          v="$(field ship-batch)"
+          case "$v" in
+            ''|'~'|null|1|2|3|4|5|6|7|8) echo "ship-batch: ${v:-absent} — ok" ;;
+            *)
+              echo "::error file=.github/project.yml::ship-batch is '$v', expected an integer 1-8 (omit for serial). colab ship ignores any other value and lands serially. Why the cap is 8: project.schema.md, ship-batch."
+              exit 1 ;;
+          esac
+          # ship-batch-steps (#557): ascending whole numbers, each within ship-batch (the ceiling read above).
+          s="$(field ship-batch-steps)"
+          case "$s" in
+            ''|'~'|null) echo "ship-batch-steps: absent — ok (fixed size)" ;;
+            *)
+              case "$v" in ''|'~'|null) ceil=1 ;; *) ceil="$v" ;; esac
+              list="$(printf '%s' "$s" | sed -E -e 's/^\[(.*)\]$/\1/' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' -e 's/[[:space:]]*,[[:space:]]*/,/g')"
+              if printf '%s\n' "$list" | grep -Eq '^[1-9][0-9]*(,[1-9][0-9]*)*$' \
+                && printf '%s\n' "$list" | tr ',' '\n' | awk -v n="$ceil" '{ if ($1 + 0 <= p || $1 + 0 > n + 0) bad = 1; p = $1 + 0 } END { exit bad }'; then
+                echo "ship-batch-steps: $list — ok"
+              else
+                echo "::error file=.github/project.yml::ship-batch-steps is '$s', expected strictly ascending whole numbers within ship-batch ($ceil), like 2,4,8 (omit for a fixed size). colab ship ignores any other value and uses the fixed size. See project.schema.md, ship-batch-steps."
+                exit 1
+              fi ;;
+          esac
+          # ship-batch-wait (#555): a whole number with a unit — 90s, 6m, 1h. No ceiling: the repo chooses.
+          w="$(field ship-batch-wait)"
+          case "$w" in
+            ''|'~'|null) echo "ship-batch-wait: absent — ok" ;;
+            *)
+              if printf '%s\n' "$w" | grep -Eq '^[0-9]+[smh]$'; then
+                echo "ship-batch-wait: $w — ok"
+              else
+                echo "::error file=.github/project.yml::ship-batch-wait is '$w', expected a whole number with a unit: 90s, 6m, 1h (omit for no wait). colab ship ignores any other value and does not wait."
+                exit 1
+              fi ;;
+          esac
+          # ci-wait-factor (#559): a number >= 1 — a multiple of the repo's measured CI duration. No ceiling.
+          # Same reading as tools/lib/ci-profile.js parseFactor on the raw scalar the audit hands it.
+          f="$(field ci-wait-factor)"
+          case "$f" in
+            ''|'~'|null) echo "ci-wait-factor: absent — ok (default 2)" ;;
+            *)
+              if printf '%s\n' "$f" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v n="$f" 'BEGIN { exit !(n + 0 >= 1) }'; then
+                echo "ci-wait-factor: $f — ok"
+              else
+                echo "::error file=.github/project.yml::ci-wait-factor is '$f', expected a number >= 1 (a multiple of the measured CI duration; omit for 2). colab ship and colab ci-wait ignore any other value and use 2. See project.schema.md, ci-wait-factor."
+                exit 1
+              fi ;;
+          esac
+          # thresholds (#560): one level of `name: whole number`, each name known and at or above its
+          # floor (and, for a percent, at most 100) — the table in tools/lib/thresholds.js (SPEC),
+          # which a test holds this list to.
+          # A bad entry falls back to the default everywhere, silently, so it fails here.
+          bad=0
+          while IFS= read -r t; do
+            case "$t" in =*)
+              echo "::error file=.github/project.yml::thresholds is '${t#=}', expected a map of 'name: whole number' pairs. See project.schema.md, thresholds."
+              bad=1; continue ;;
+            esac
+            k="${t%%:*}"
+            n="$(printf '%s' "${t#*:}" | sed -E -e 's/^[[:space:]]+//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/")"
+            max=999999999
+            case "$k" in
+              hot-file-count|claude-md-line-multiple) min=2 ;;
+              dependents-count|hold-stale-days|smoke-minutes|claude-md-kb|transitional-days|batch-min-samples) min=1 ;;
+              claude-md-line-floor-bytes|doc-budget-slack) min=0 ;;
+              batch-first-green-pct-min|batch-eviction-pct-max|batch-overlap-pct) min=0 max=100 ;;
+              *) echo "::error file=.github/project.yml::thresholds.$k is not a known threshold (colab thresholds lists them). See project.schema.md, thresholds."
+                 bad=1; continue ;;
+            esac
+            case "$n" in ''|'~'|null) continue ;; esac
+            if printf '%s\n' "$n" | grep -Eq '^[0-9]{1,9}$' && [ "$n" -ge "$min" ] && [ "$n" -le "$max" ]; then
+              echo "thresholds.$k: $n — ok"
+            else
+              echo "::error file=.github/project.yml::thresholds.$k is '$n', expected a whole number from $min to $max. Every reader ignores it (a batch-* key is then not judged; any other uses its default). See project.schema.md, thresholds."
+              bad=1
+            fi
+          done < <(awk '
+            /^thresholds[[:space:]]*:/ { b = 1; v = $0
+              sub(/^thresholds[[:space:]]*:[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v); sub(/[[:space:]]+$/, "", v)
+              if (v != "" && v != "~" && v != "null") print "=" v
+              next }
+            b && /^[[:space:]]*(#|$)/ { next }
+            b && /^[[:space:]]/ { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+#.*$/, "", l); sub(/[[:space:]]+$/, "", l); print l; next }
+            { b = 0 }' .github/project.yml)
+          [ "$bad" = 0 ] || exit 1
+
+      # ---------------------------------------------------------------------------
+      # Toolchain resolution. Precedence, highest first:
+      #   1. .github/project.yml  ->  node: <version>
+      #   2. .nvmrc, else package.json -> engines.node
+      #   3. FAIL.
+      #
+      # There is deliberately NO fallback default. A silent default is exactly how a
+      # repo here ended up building on Node 20 in CI while deploying on Node 22 —
+      # CI was green and proved nothing about what actually shipped. If the version
+      # is not declared anywhere, that is a bug in the repo, and the build says so.
+      # ---------------------------------------------------------------------------
+
+      # Toolchain versions — strict precedence (CONVENTIONS.md §7): .github/project.yml's key, then the
+      # ecosystem's own manifest, else FAIL. The same resolution the copied templates carry, per toolchain.
+      - name: Resolve toolchain versions
+        id: toolchain
+        if: inputs.toolchain != ''
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          set -euo pipefail
+          normalise() {
+            printf '%s' "$1" \
+              | tr -d '"' \
+              | sed -E 's/^[^0-9]*//' \
+              | sed -E 's/[[:space:],].*$//' \
+              | sed -E 's/\.(x|\*)$//' \
+              | sed -E 's/[^0-9.].*$//' \
+              | sed -E 's/\.$//'
+          }
+          from_project_yml() {
+            [ -f "$GITHUB_WORKSPACE/.github/project.yml" ] || return 0
+            sed -nE "s/^[[:space:]]*$1:[[:space:]]*\"?([^\"#[:space:]]+)\"?.*/\1/p" "$GITHUB_WORKSPACE/.github/project.yml" | head -1
+          }
+          json_key() { # json_key <file> <js expression over the parsed file c>
+            if command -v node >/dev/null 2>&1; then
+              node -e "try{const c=require('./$1');process.stdout.write(String(($2)||''))}catch(_){}" || true
+            elif command -v python3 >/dev/null 2>&1; then
+              python3 -c "import json,sys;c=json.load(open('$1'));print(eval(sys.argv[1]) or '')" "$3" 2>/dev/null || true
+            fi
+          }
+          want() { case ",$(printf '%s' "$TOOLCHAIN" | tr -d '[:space:]')," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+          refuse() {
+            echo "::error::No $1 version is declared in this repository, and this workflow refuses to guess one."
+            echo "Declare it in .github/project.yml ($2: \"<version>\", preferred) or in $3. Use the version the DEPLOY target runs." >&2
+            exit 1
+          }
+          for t in $(printf '%s' "$TOOLCHAIN" | tr ',' ' '); do
+            case "$t" in node|python|php) ;; *) echo "::error::toolchain '$t' is not one of node, python, php"; exit 1 ;; esac
+          done
+          if want node; then
+            V="$(from_project_yml node || true)"; SRC=".github/project.yml (node:)"
+            if [ -z "$V" ] || [ "$V" = null ]; then
+              V=""; [ -f .nvmrc ] && V="$(grep -vE '^[[:space:]]*(#|$)' .nvmrc | head -1 | tr -d '[:space:]' || true)"; SRC=".nvmrc"
+            fi
+            if [ -z "$V" ] && [ -f package.json ]; then
+              V="$(json_key package.json '(c.engines||{}).node' "(c.get('engines') or {}).get('node')")"; SRC="package.json (engines.node)"
+            fi
+            [ -n "$V" ] || refuse Node node ".nvmrc or package.json engines.node"
+            echo "node-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "Node **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if want python; then
+            V="$(from_project_yml python || true)"; SRC=".github/project.yml (python:)"
+            if [ -z "$V" ] || [ "$V" = null ]; then
+              V=""; [ -f .python-version ] && V="$(grep -vE '^[[:space:]]*(#|$)' .python-version | head -1 | tr -d '[:space:]' || true)"; SRC=".python-version"
+            fi
+            if [ -z "$V" ] && [ -f pyproject.toml ]; then
+              V="$(sed -nE 's/^[[:space:]]*requires-python[[:space:]]*=[[:space:]]*["'"'"']([^"'"'"']+)["'"'"'].*/\1/p' pyproject.toml | head -1 || true)"; SRC="pyproject.toml (requires-python)"
+            fi
+            [ -n "$V" ] || refuse Python python ".python-version or pyproject.toml requires-python (requirements.txt does not count)"
+            echo "python-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "Python **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if want php; then
+            V="$(from_project_yml php || true)"; SRC=".github/project.yml (php:)"
+            if { [ -z "$V" ] || [ "$V" = null ]; } && [ -f composer.json ]; then
+              V="$(json_key composer.json '(c.require||{}).php' "(c.get('require') or {}).get('php')")"; SRC="composer.json (require.php)"
+            fi
+            [ -n "$V" ] && [ "$V" != null ] || refuse PHP php "composer.json require.php"
+            echo "php-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "PHP **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Setup Node
+        if: steps.toolchain.outputs.node-version != ''
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ steps.toolchain.outputs.node-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles(format('{0}/package-lock.json', inputs.working-directory)) != '' && 'npm' || '' }}
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+          package-manager-cache: false
+
+      - name: Setup Python
+        if: steps.toolchain.outputs.python-version != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ steps.toolchain.outputs.python-version }}
+
+      - name: Setup PHP
+        if: steps.toolchain.outputs.php-version != ''
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ steps.toolchain.outputs.php-version }}
+          coverage: none
+
+      - name: Install dependencies
+        env:
+          INSTALL: ${{ inputs.install }}
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          set -eo pipefail
+          if [ -z "$INSTALL" ]; then echo "::notice::No install (input \`install\` is empty)."; exit 0; fi
+          if [ "$INSTALL" != auto ]; then bash -eo pipefail -c "$INSTALL"; exit 0; fi
+          want() { case ",$(printf '%s' "$TOOLCHAIN" | tr -d '[:space:]')," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+          if want php && [ -f composer.json ]; then
+            composer install --no-interaction --prefer-dist --optimize-autoloader --no-scripts
+          fi
+          if want python; then
+            python -m pip install --upgrade pip
+            if [ -f pyproject.toml ]; then pip install -e .
+            elif [ -f requirements.txt ]; then pip install -r requirements.txt
+            else echo "::warning::No pyproject.toml or requirements.txt — nothing to install."; fi
+            if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          fi
+          if want node && [ -f package.json ]; then
+            if [ -f pnpm-lock.yaml ]; then corepack enable; pnpm install --frozen-lockfile
+            elif [ -f package-lock.json ]; then npm ci
+            else echo "::warning::No lockfile found — falling back to 'npm install'. Commit a lockfile so CI is reproducible."; npm install; fi
+          fi
+      - name: Quick
+        env:
+          QUICK: ${{ inputs.quick }}
+        run: |
+          if [ -z "$QUICK" ]; then echo "::notice::No quick command (input \`quick\`) — nothing to run."; exit 0; fi
+          bash -eo pipefail -c "$QUICK"
+
+  full:
+    name: Full (test, build)
+    needs: dedupe
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
+    runs-on: ${{ inputs.runs-on == 'classes' && fromJSON(format('["self-hosted",{0}"{1}"]', inputs.runner-lane != '' && format('"{0}",', inputs.runner-lane) || '', contains(fromJSON(inputs.trunk-branches), github.ref_name) && 'trunk' || 'full')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.full-timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # Toolchain versions — strict precedence (CONVENTIONS.md §7): .github/project.yml's key, then the
+      # ecosystem's own manifest, else FAIL. The same resolution the copied templates carry, per toolchain.
+      - name: Resolve toolchain versions
+        id: toolchain
+        if: inputs.toolchain != ''
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          set -euo pipefail
+          normalise() {
+            printf '%s' "$1" \
+              | tr -d '"' \
+              | sed -E 's/^[^0-9]*//' \
+              | sed -E 's/[[:space:],].*$//' \
+              | sed -E 's/\.(x|\*)$//' \
+              | sed -E 's/[^0-9.].*$//' \
+              | sed -E 's/\.$//'
+          }
+          from_project_yml() {
+            [ -f "$GITHUB_WORKSPACE/.github/project.yml" ] || return 0
+            sed -nE "s/^[[:space:]]*$1:[[:space:]]*\"?([^\"#[:space:]]+)\"?.*/\1/p" "$GITHUB_WORKSPACE/.github/project.yml" | head -1
+          }
+          json_key() { # json_key <file> <js expression over the parsed file c>
+            if command -v node >/dev/null 2>&1; then
+              node -e "try{const c=require('./$1');process.stdout.write(String(($2)||''))}catch(_){}" || true
+            elif command -v python3 >/dev/null 2>&1; then
+              python3 -c "import json,sys;c=json.load(open('$1'));print(eval(sys.argv[1]) or '')" "$3" 2>/dev/null || true
+            fi
+          }
+          want() { case ",$(printf '%s' "$TOOLCHAIN" | tr -d '[:space:]')," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+          refuse() {
+            echo "::error::No $1 version is declared in this repository, and this workflow refuses to guess one."
+            echo "Declare it in .github/project.yml ($2: \"<version>\", preferred) or in $3. Use the version the DEPLOY target runs." >&2
+            exit 1
+          }
+          for t in $(printf '%s' "$TOOLCHAIN" | tr ',' ' '); do
+            case "$t" in node|python|php) ;; *) echo "::error::toolchain '$t' is not one of node, python, php"; exit 1 ;; esac
+          done
+          if want node; then
+            V="$(from_project_yml node || true)"; SRC=".github/project.yml (node:)"
+            if [ -z "$V" ] || [ "$V" = null ]; then
+              V=""; [ -f .nvmrc ] && V="$(grep -vE '^[[:space:]]*(#|$)' .nvmrc | head -1 | tr -d '[:space:]' || true)"; SRC=".nvmrc"
+            fi
+            if [ -z "$V" ] && [ -f package.json ]; then
+              V="$(json_key package.json '(c.engines||{}).node' "(c.get('engines') or {}).get('node')")"; SRC="package.json (engines.node)"
+            fi
+            [ -n "$V" ] || refuse Node node ".nvmrc or package.json engines.node"
+            echo "node-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "Node **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if want python; then
+            V="$(from_project_yml python || true)"; SRC=".github/project.yml (python:)"
+            if [ -z "$V" ] || [ "$V" = null ]; then
+              V=""; [ -f .python-version ] && V="$(grep -vE '^[[:space:]]*(#|$)' .python-version | head -1 | tr -d '[:space:]' || true)"; SRC=".python-version"
+            fi
+            if [ -z "$V" ] && [ -f pyproject.toml ]; then
+              V="$(sed -nE 's/^[[:space:]]*requires-python[[:space:]]*=[[:space:]]*["'"'"']([^"'"'"']+)["'"'"'].*/\1/p' pyproject.toml | head -1 || true)"; SRC="pyproject.toml (requires-python)"
+            fi
+            [ -n "$V" ] || refuse Python python ".python-version or pyproject.toml requires-python (requirements.txt does not count)"
+            echo "python-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "Python **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if want php; then
+            V="$(from_project_yml php || true)"; SRC=".github/project.yml (php:)"
+            if { [ -z "$V" ] || [ "$V" = null ]; } && [ -f composer.json ]; then
+              V="$(json_key composer.json '(c.require||{}).php' "(c.get('require') or {}).get('php')")"; SRC="composer.json (require.php)"
+            fi
+            [ -n "$V" ] && [ "$V" != null ] || refuse PHP php "composer.json require.php"
+            echo "php-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "PHP **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Setup Node
+        if: steps.toolchain.outputs.node-version != ''
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ steps.toolchain.outputs.node-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles(format('{0}/package-lock.json', inputs.working-directory)) != '' && 'npm' || '' }}
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+          package-manager-cache: false
+
+      - name: Setup Python
+        if: steps.toolchain.outputs.python-version != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ steps.toolchain.outputs.python-version }}
+
+      - name: Setup PHP
+        if: steps.toolchain.outputs.php-version != ''
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ steps.toolchain.outputs.php-version }}
+          coverage: none
+
+      - name: Install dependencies
+        env:
+          INSTALL: ${{ inputs.install }}
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          set -eo pipefail
+          if [ -z "$INSTALL" ]; then echo "::notice::No install (input \`install\` is empty)."; exit 0; fi
+          if [ "$INSTALL" != auto ]; then bash -eo pipefail -c "$INSTALL"; exit 0; fi
+          want() { case ",$(printf '%s' "$TOOLCHAIN" | tr -d '[:space:]')," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+          if want php && [ -f composer.json ]; then
+            composer install --no-interaction --prefer-dist --optimize-autoloader --no-scripts
+          fi
+          if want python; then
+            python -m pip install --upgrade pip
+            if [ -f pyproject.toml ]; then pip install -e .
+            elif [ -f requirements.txt ]; then pip install -r requirements.txt
+            else echo "::warning::No pyproject.toml or requirements.txt — nothing to install."; fi
+            if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          fi
+          if want node && [ -f package.json ]; then
+            if [ -f pnpm-lock.yaml ]; then corepack enable; pnpm install --frozen-lockfile
+            elif [ -f package-lock.json ]; then npm ci
+            else echo "::warning::No lockfile found — falling back to 'npm install'. Commit a lockfile so CI is reproducible."; npm install; fi
+          fi
+      - name: Full
+        env:
+          FULL: ${{ inputs.full }}
+        run: |
+          if [ -z "$FULL" ]; then echo "::notice::No full command (input \`full\`) — nothing to run."; exit 0; fi
+          bash -eo pipefail -c "$FULL"
