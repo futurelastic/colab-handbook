@@ -187,27 +187,168 @@ function sleep(ms) {
   while (Date.now() < end) { /* spin */ }
 }
 
-/** Acquire the mkdir lock, run fn, always release. Returns fn's result. */
-function withLock(fn, { tries = 100, waitMs = 100 } = {}) {
+/*
+ * The state lock (#712). `mkdir LOCK_DIR` is still the acquire — atomic, and the same primitive an
+ * older colab on this machine uses, so the two still exclude each other. What changed is that the
+ * holder now writes LOCK_OWNER inside it, and a waiter uses that record to tell a dead lock from a
+ * live one. Before, the directory recorded nothing: a holder that died inside the critical section
+ * left it forever, every state write on the machine (claims, worktrees, ports, places, ship) failed
+ * with "Lock stuck", and nobody could tell whether removing it by hand was safe.
+ *
+ * A waiter breaks the lock itself, logging one line, only when the holder is provably gone:
+ *   - its pid is dead (same host), or
+ *   - its pid is alive but started at a different time than the record says (pid reused), or
+ *   - liveness cannot be proven at all — no readable owner (an older colab, or a holder that died
+ *     between mkdir and writing the record), another host, or a start time `ps` cannot give — AND
+ *     the lock is older than LOCK_STALE_MS, far above any real critical section (they are
+ *     synchronous file edits: milliseconds).
+ * A live, matching holder is never broken, however old: the waiter gives up with the holder named.
+ *
+ * Breaking is race-safe in two layers. Breakers serialize on LOCK_BREAK (a second mkdir lock, held
+ * for microseconds), and inside it the breaker renames LOCK_DIR to a private name and re-reads the
+ * owner from THAT copy: only the exact stale owner it judged (same token) is removed. Anything else
+ * — a waiter that acquired a fresh lock in between — is renamed straight back.
+ */
+const LOCK_OWNER = 'owner.json';
+const LOCK_BREAK = LOCK_DIR + '.break';
+const LOCK_STALE_MS = 60 * 1000;
+const PROC_START_MS = Date.now() - Math.round(process.uptime() * 1000);
+const START_TOLERANCE_MS = 3000;   // `ps -o lstart` truncates to whole seconds; uptime starts after exec
+
+function lockOwnerRecord() {
+  return {
+    pid: process.pid, host: os.hostname(), start: PROC_START_MS, at: Date.now(),
+    token: `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  };
+}
+
+/** The owner record in `dir`, or null when absent/unreadable (an older colab, or mid-write). */
+function readLockOwner(dir = LOCK_DIR) {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(dir, LOCK_OWNER), 'utf8'));
+    return o && Number.isInteger(o.pid) && typeof o.token === 'string' ? o : null;
+  } catch (_) { return null; }
+}
+
+/** true = alive, false = no such process, null = cannot tell. */
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) {
+    if (e.code === 'ESRCH') return false;
+    if (e.code === 'EPERM') return true;    // exists, owned by someone else
+    return null;
+  }
+}
+
+/** Start time (ms) of a live pid per `ps`, or null when ps cannot say. */
+function pidStartMs(pid) {
+  try {
+    const out = require('child_process').execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).trim();
+    const t = Date.parse(out);
+    return Number.isFinite(t) ? t : null;
+  } catch (_) { return null; }
+}
+
+/**
+ * Judge the lock currently at LOCK_DIR. Returns { stale, owner, ageMs, reason } or null when there
+ * is no lock to judge. `startCache` (token -> ps start) keeps `ps` to once per holder per wait.
+ */
+function judgeLock(startCache = new Map(), now = Date.now()) {
+  let st;
+  try { st = fs.statSync(LOCK_DIR); } catch (_) { return null; }
+  const owner = readLockOwner();
+  const ageMs = Math.max(0, now - (owner && Number.isFinite(owner.at) ? owner.at : st.mtimeMs));
+  const old = ageMs > LOCK_STALE_MS;
+  if (!owner) return { stale: old, owner, ageMs, reason: 'no owner record' };
+  if (owner.host && owner.host !== os.hostname()) return { stale: old, owner, ageMs, reason: `held from host ${owner.host}` };
+  const alive = pidAlive(owner.pid);
+  if (alive === false) return { stale: true, owner, ageMs, reason: `pid ${owner.pid} is gone` };
+  if (alive === null) return { stale: old, owner, ageMs, reason: `pid ${owner.pid} liveness unknown` };
+  if (!startCache.has(owner.token)) startCache.set(owner.token, pidStartMs(owner.pid));
+  const psStart = startCache.get(owner.token);
+  if (psStart == null || !Number.isFinite(owner.start)) {
+    return { stale: old, owner, ageMs, reason: `pid ${owner.pid} alive, start time unverifiable` };
+  }
+  if (Math.abs(psStart - owner.start) > START_TOLERANCE_MS) {
+    return { stale: true, owner, ageMs, reason: `pid ${owner.pid} was reused by another process` };
+  }
+  return { stale: false, owner, ageMs, reason: `pid ${owner.pid} is alive` };
+}
+
+function describeHolder(j) {
+  if (!j) return 'holder unknown (lock vanished)';
+  const age = `${Math.round(j.ageMs / 1000)}s old`;
+  if (!j.owner) return `no owner recorded, ${age}`;
+  return `held by pid ${j.owner.pid} on ${j.owner.host || '?'}, ${age} — ${j.reason}`;
+}
+
+function rmLockDir(dir) {
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+}
+
+/**
+ * Remove the lock `judged` found stale — but only if it is still that same lock. Returns true when
+ * it removed it. Never throws: a failed break just means the waiter keeps waiting.
+ */
+function breakStaleLock(judged, log = (m) => process.stderr.write(m + '\n')) {
+  try { fs.mkdirSync(LOCK_BREAK); } catch (e) {
+    // Another breaker is at it. A breaker that died mid-break leaves an empty LOCK_BREAK; clear it
+    // once it is far older than the microseconds a break takes, and let the next round retry.
+    try { if (Date.now() - fs.statSync(LOCK_BREAK).mtimeMs > 10 * 1000) fs.rmdirSync(LOCK_BREAK); } catch (_) { /* gone */ }
+    return false;
+  }
+  try {
+    const grave = `${LOCK_DIR}.stale-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+    try { fs.renameSync(LOCK_DIR, grave); } catch (_) { return false; }   // released meanwhile
+    const now = readLockOwner(grave);
+    const same = judged.owner ? (now && now.token === judged.owner.token) : !now;
+    if (!same) {
+      // A fresh lock replaced the stale one between judging and renaming — put it back untouched.
+      try { fs.renameSync(grave, LOCK_DIR); } catch (_) { /* LOCK_DIR re-taken: nothing safe to do */ }
+      return false;
+    }
+    rmLockDir(grave);
+    log(`colab: broke a stale state lock ${LOCK_DIR} (${describeHolder(judged)})`);
+    return true;
+  } finally {
+    try { fs.rmdirSync(LOCK_BREAK); } catch (_) { /* gone */ }
+  }
+}
+
+/** Acquire the state lock, run fn, always release. Returns fn's result. */
+function withLock(fn, { tries = 100, waitMs = 100, log } = {}) {
   ensureDir();
-  let acquired = false;
+  const startCache = new Map();
+  let me = null;
+  let written = false;
+  let last = null;
   for (let i = 0; i < tries; i++) {
     try {
       fs.mkdirSync(LOCK_DIR);
-      acquired = true;
+      me = lockOwnerRecord();
+      try { fs.writeFileSync(path.join(LOCK_DIR, LOCK_OWNER), JSON.stringify(me) + '\n'); written = true; } catch (_) {
+        // Unrecorded is still a held lock — it just ages out like an older colab's would.
+      }
       break;
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
+      last = judgeLock(startCache);
+      if (last && last.stale && breakStaleLock(last, log)) continue;   // retry the mkdir at once
       sleep(waitMs);
     }
   }
-  if (!acquired) {
-    throw new Error(`Lock stuck: ${LOCK_DIR} (remove it by hand if you are sure no session holds it)`);
+  if (!me) {
+    const holder = describeHolder(judgeLock(startCache) || last);
+    throw new Error(`Lock stuck: ${LOCK_DIR} (${holder}). `
+      + 'A live holder is never broken automatically; remove the directory by hand only if that process is not a colab writer.');
   }
   try {
     return fn();
   } finally {
-    try { fs.rmdirSync(LOCK_DIR); } catch (_) { /* already gone */ }
+    // Release only our own lock: if a waiter judged us dead and broke it, LOCK_DIR is now theirs —
+    // including an ownerless one, when we did write our record and it is no longer there.
+    const cur = readLockOwner();
+    if (cur ? cur.token === me.token : !written) rmLockDir(LOCK_DIR);
   }
 }
 
@@ -257,6 +398,7 @@ function mutate(fn) {
 }
 
 module.exports = {
-  COLAB_DIR, STATE_FILE, CONFIG_FILE, LOCK_DIR, STATE_VERSION, DEFAULT_CONFIG,
+  COLAB_DIR, STATE_FILE, CONFIG_FILE, LOCK_DIR, LOCK_OWNER, LOCK_STALE_MS, STATE_VERSION, DEFAULT_CONFIG,
   loadConfig, saveConfig, loadState, saveState, withLock, mutate, emptyState, atomicWrite,
+  _lock: { judgeLock, breakStaleLock, readLockOwner },   // for tools/lib/state-lock.test.js
 };

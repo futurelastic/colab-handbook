@@ -661,7 +661,10 @@ Everything lives under `~/.colab/` (override the directory with the `COLAB_HOME`
 whose plan file `colab ship` retired — code-ship B4; #663), and — only if you opt in — `journal.jsonl`
 (history; see `journal` below). Writes to the first are atomic (temp file + `rename`) and guarded by
 a `mkdir`-based lock (`state.lock`) so concurrent sessions don't lose writes; the journal is
-append-only and never participates in that lock.
+append-only and never participates in that lock. The lock records its holder (`state.lock/owner.json`:
+pid, host, process start, time), so a waiter breaks a lock whose holder is provably gone — dead pid,
+reused pid, or no provable owner and older than 60 s — and logs one line; a live holder is never
+broken, and `Lock stuck` names it with its age (#712).
 
 ### `~/.colab/config.json`
 
