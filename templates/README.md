@@ -164,7 +164,14 @@ notice back and print the run they relied on. Three things to keep in a copy:
   name, edit all three. Until you do, the guard simply never fires on trunk — nothing breaks;
   but a trunk left out of `group:` and `cancel-in-progress:` has its runs cancelled.
 - **Never put a trunk-only job behind it.** Publish, deploy and release jobs must run whatever
-  the guard says. Give them their own `if:` that does not read `needs.dedupe`.
+  the guard says. Give them their own `if:` that does not read `needs.dedupe` — and **name them
+  in the guard's `TRUNK_ONLY_JOBS`** (#717), or move them to a workflow of their own. A branch run
+  skips such a job, and an unlisted skip makes that run unusable on trunk (#511), so a workflow
+  that mixes trunk-only jobs with its suite otherwise never reuses anything.
+- **A batch-landing ref gets the same tree mode** (#717): the first push of a `ship-batch/**`
+  ref skips the suite when a member branch already passed its exact tree. Nothing to edit.
+
+The rule all of this keeps: [one verdict per tree](../CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719).
 
 Opt out with `tree-reuse: off` (`project.schema.md`) when trunk's run proves something a branch
 run cannot: secrets only trunk gets, `github.ref`-conditional steps, unpinned runner images.

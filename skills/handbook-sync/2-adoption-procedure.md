@@ -129,6 +129,9 @@ as stubs, so every link into them still resolves. Mechanics of `colab adopt`, `c
    row's route is a proposal for the human to confirm, never a choice the agent makes.
    **Under `migration-grant: reviewer`, copy the CI with its round-trip in the same act** —
    `colab template <ci-node|ci-python> --roundtrip` (#625; why: [templates/README](../../templates/README.md#migration-round-trip--have-it-from-the-first-copy)).
+   **Keep the copy on [one verdict per tree](../../CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719)
+   from the first run** (#719): leave the `dedupe` guard in, and put a trunk-only job (publish,
+   deploy, release) in a workflow of its own — or ungated, named in the guard's `TRUNK_ONLY_JOBS`.
 7. **Register the repo** — `colab register`, updating both the audit fleet list and the
    reserved-ports aggregation. Unregistered = invisible to the fleet audit.
 8. **Leave existing branches alone** — grandfathered.

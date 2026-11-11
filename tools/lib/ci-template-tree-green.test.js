@@ -13,7 +13,9 @@
  *     contents (descriptor + git objects), and it exposes `cited`;
  *   - match: an exact tree match, confirmed through the git object, says tested=true and cites
  *     the run (output + a `tree-already-green` notice `colab ship` reads back);
- *   - mismatch / lookup failure / opt-out / not-trunk: tested=false, exit 0, every time.
+ *   - mismatch / lookup failure / opt-out / not-trunk: tested=false, exit 0, every time;
+ *   - a batch-landing ref's first push (`ship-batch/**`) gets the same tree mode, and a declared
+ *     trunk-only job's skip in the cited run does not stop reuse (#717).
  *
  * The fake `gh` serves fixtures by URL and applies the guard's own `--jq` program with the real
  * `jq`, so the selection logic (own run excluded, trunk ref excluded, foreign fork excluded, tree
@@ -267,6 +269,85 @@ for (const file of FILES) {
       const env = jobs.dedupe.join('\n').match(/GUARD_NAME: (.*?) # EDIT/);
       assert.ok(env, 'dedupe sets GUARD_NAME');
       assert.strictEqual(env[1], key(jobs.dedupe, 'name'));
+    } finally {
+      cleanup();
+    }
+  });
+
+  test(`${file}: a batch-landing ref's first push reuses a tree a branch already passed (#717)`, { skip: !HAVE_JQ && 'jq not installed' }, () => {
+    const { run, cleanup } = makeRunner(guardScript(jobs.dedupe));
+    try {
+      const batch = { CREATED: 'true', REF_NAME: 'ship-batch/abc1234' };
+      const green = runObj(77, 'feat/x-1', 'bbb222', 'T1');
+      const base = { list: [green], trees: { bbb222: 'T1' }, env: batch };
+
+      // match: the batch's new sha carries the tree feat/x-1 passed — cited, with the notice ship reads.
+      let r = run(base);
+      assert.deepStrictEqual(r.out, { tested: 'true', cited: 'https://github.com/o/r/actions/runs/77' });
+      assert.match(r.stdout, /^::notice title=tree-already-green::https:\/\/github\.com\/o\/r\/actions\/runs\/77 tree=T1 head=bbb222 branch=feat\/x-1$/m);
+      // The same checks as trunk: descriptor read AT this sha, the listing confirmed by the git object.
+      assert.match(r.args, /repos\/o\/r\/contents\/\.github\/project\.yml\?ref=abc123/);
+      assert.match(r.args, /\.head_branch != "ship-batch\/abc1234"/);
+      // The trunk check is trunk's own: a batch ref is not the trunk and is still reused.
+      assert.strictEqual(run({ ...base, desc: 'trunk: dev\n' }).out.tested, 'true');
+
+      // mismatch, opt-out, lookup failure, #511 — the full suite, every time.
+      assert.deepStrictEqual(run({ ...base, trees: { bbb222: 'T2' } }).out, { tested: 'false' });
+      assert.deepStrictEqual(run({ ...base, desc: 'trunk: main\ntree-reuse: off\n' }).out, { tested: 'false' });
+      assert.deepStrictEqual(run({ ...base, desc: null }).out, { tested: 'false' });
+      for (const k of ['commit-abc123', 'list', 'commit-bbb222', 'jobs-77']) {
+        assert.deepStrictEqual(run({ ...base, fail: [k] }).out, { tested: 'false' }, `${k} failing`);
+      }
+      r = run({ ...base, jobs: { 77: [{ name: GUARD, conclusion: 'skipped' }, { name: 'Build', conclusion: 'success' }, { name: 'E2E (trunk only)', conclusion: 'skipped' }] } });
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      // A run of this very batch ref is never its own citation.
+      assert.deepStrictEqual(run({ ...base, list: [runObj(78, 'ship-batch/abc1234', 'ccc333', 'T1')], trees: { ccc333: 'T1' } }).out, { tested: 'false' });
+
+      // Any other creating push stays on #418's sha mode — never the tree queries.
+      r = run({ ...base, env: { CREATED: 'true', REF_NAME: 'feat/ship-batch-x' } });
+      assert.doesNotMatch(r.args, /git\/commits|contents/);
+      // A later push to a batch ref (not creating, not trunk) is not tree mode's to reuse.
+      assert.deepStrictEqual(run({ ...base, env: { CREATED: 'false', REF_NAME: 'ship-batch/abc1234' } }).out, { tested: 'false' });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test(`${file}: a cited run that skipped a declared trunk-only job is still reused (#717)`, { skip: !HAVE_JQ && 'jq not installed' }, () => {
+    const { run, cleanup } = makeRunner(guardScript(jobs.dedupe));
+    try {
+      const green = runObj(77, 'feat/x-1', 'bbb222', 'T1');
+      const withDeploy = [{ name: GUARD, conclusion: 'skipped' }, { name: 'Build', conclusion: 'success' }, { name: 'Deploy', conclusion: 'skipped' }];
+      const base = { list: [green], trees: { bbb222: 'T1' }, jobs: { 77: withDeploy } };
+
+      // Undeclared: #511 exactly as before.
+      let r = run(base);
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      assert.match(r.stdout, /Run 77 skipped Deploy/);
+      // Declared: Deploy sits outside the gate and runs on this trunk push anyway — reuse, with the notice.
+      r = run({ ...base, env: { TRUNK_ONLY_JOBS: 'Deploy' } });
+      assert.deepStrictEqual(r.out, { tested: 'true', cited: 'https://github.com/o/r/actions/runs/77' });
+      assert.match(r.stdout, /^::notice title=tree-already-green::/m);
+      // A list, spaces around the commas.
+      assert.strictEqual(run({ ...base, env: { TRUNK_ONLY_JOBS: ' Publish , Deploy ' } }).out.tested, 'true');
+      // Exact names only: a different job, or a prefix, excuses nothing.
+      assert.strictEqual(run({ ...base, env: { TRUNK_ONLY_JOBS: 'Publish' } }).out.tested, 'false');
+      assert.strictEqual(run({ ...base, env: { TRUNK_ONLY_JOBS: 'Dep' } }).out.tested, 'false');
+      // A listed name excuses only its own skip: an unlisted one still refuses, and is the one named.
+      r = run({ ...base, env: { TRUNK_ONLY_JOBS: 'Deploy' }, jobs: { 77: [...withDeploy, { name: 'E2E (trunk only)', conclusion: 'skipped' }] } });
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      assert.match(r.stdout, /Run 77 skipped E2E \(trunk only\), which/);
+      // A skip-chained run (the suite itself skipped) is still never reused.
+      r = run({ ...base, env: { TRUNK_ONLY_JOBS: 'Deploy' }, jobs: { 77: [{ name: GUARD, conclusion: 'success' }, { name: 'Build', conclusion: 'skipped' }, { name: 'Deploy', conclusion: 'skipped' }] } });
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      // The batch-landing ref reads the same list.
+      r = run({ ...base, env: { TRUNK_ONLY_JOBS: 'Deploy', CREATED: 'true', REF_NAME: 'ship-batch/abc1234' } });
+      assert.strictEqual(r.out.tested, 'true');
+
+      // The copy ships the list empty — #511 unchanged until an adopter names an ungated job.
+      const decl = jobs.dedupe.join('\n').match(/^\s+TRUNK_ONLY_JOBS: "(.*)"$/m);
+      assert.ok(decl, 'dedupe declares TRUNK_ONLY_JOBS');
+      assert.strictEqual(decl[1], '');
     } finally {
       cleanup();
     }

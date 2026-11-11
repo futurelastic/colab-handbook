@@ -176,6 +176,38 @@ test('plan: a nightly on a moved trunk runs, and names the last green nightly as
   assert.deepStrictEqual(r.outputs, { sha: SHA, run: 'true', since: OLD });
 });
 
+test('plan: a nightly skips a sha a green dispatched run already tested, and keeps the nightly range start (#719)', () => {
+  const r = runWithGh(PLAN, {
+    env: planEnv('schedule'),
+    rules: [
+      [/^api repos\/o\/r\/commits\/main /, `${SHA}\n`],
+      [/runs\?event=schedule/, '901\n'],
+      [/runs\/901\/jobs/, `${OLD}\n`],
+      [/workflows\/ci-heavy\.yml\/runs\?event=workflow_dispatch&status=success/, '951\n950\n'],
+      [/runs\/951\/jobs/, `${OLD}\n`],
+      [/runs\/950\/jobs/, `${SHA}\n`],
+    ],
+  });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(r.outputs, { sha: SHA, run: 'false', since: OLD });
+  assert.match(r.stdout, /heavy-skipped::a+ already passed this workflow in dispatched run 950/);
+});
+
+test('plan: a nightly runs when no green dispatched run tested this sha, or the listing fails (#719)', () => {
+  for (const dispatch of [[/runs\?event=workflow_dispatch/, '951\n'], null]) {
+    const rules = [
+      [/^api repos\/o\/r\/commits\/main /, `${SHA}\n`],
+      [/runs\?event=schedule/, '901\n'],
+      [/runs\/901\/jobs/, `${OLD}\n`],
+      [/runs\/951\/jobs/, `${OLD}\n`],
+    ];
+    if (dispatch) rules.push(dispatch);
+    const r = runWithGh(PLAN, { env: planEnv('schedule'), rules });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(r.outputs, { sha: SHA, run: 'true', since: OLD });
+  }
+});
+
 test('plan: an unreadable history runs the suite (never skips on doubt)', () => {
   const r = runWithGh(PLAN, { env: planEnv('schedule'), rules: [[/^api repos\/o\/r\/commits\/main /, `${SHA}\n`]] });
   assert.strictEqual(r.status, 0, r.stderr);

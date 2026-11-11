@@ -124,6 +124,7 @@ downloads--finals-to-a-self-hosted-site-648
 what-ship-reads--the-ci-contract-607
 two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607
 integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610
+one-verdict-per-tree--quick-on-branches-full-once-719
 ci--what-it-is-follows-the-units-shape-how-much-follows-exposure
 ci-artifacts--your-own-store-not-the-allowance-601
 self-hosted-runners--capacity-is-the-agent-count-not-the-machine-355

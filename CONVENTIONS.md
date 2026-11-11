@@ -2614,6 +2614,30 @@ nightly; the templates ship that shape. The lanes and how the CLI reads them:
 declares where the heavy lane runs and what a green trunk promises. The four profiles:
 [`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610).
 
+### One verdict per tree — quick on branches, full once (#719)
+
+**A CI verdict is keyed on the git tree id: a workflow never tests a tree, or a sha, it already
+passed.** Four rules, each kept by the templates; how the guard reads them:
+[`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#one-verdict-per-tree--quick-on-branches-full-once-719).
+
+1. **A green run of a tree is reused wherever that tree lands** — trunk, a batch-landing ref
+   (`ship-batch/**`), and a ref's first push at a sha that already passed. *Example:* a branch
+   passes at tree `T`; its squash onto trunk has a new sha and tree `T`, so trunk's run skips the
+   suite and cites the branch run (`tree-already-green`).
+2. **Branch pushes run the light lane (tier `affected`); the `full` and `heavy` tiers run once per
+   sha, where the [integration profile](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610)
+   puts them** — at each landing under `gated`, otherwise on the heavy lane's clock, nightly or
+   release gate. A branch still lands only on its own green, at its own head (C7.contract.03).
+   *Example:* under `release-heavy` a landing re-runs no tree its branch passed, and the nightly
+   tests trunk's tip once.
+3. **A scheduled run skips a sha its workflow already passed; a dispatched gate is dispatched once
+   per sha.** *Example:* a gated landing's heavy run went green at `abc`; that night's run on the
+   unmoved tip `abc` skips (`heavy-skipped`), and ship dispatches only where no heavy run exists.
+4. **A trunk-only job (release, publish, deploy) never stops a tree verdict from being reused** —
+   it lives in a workflow of its own, or outside the gate and named in the guard's trunk-only list.
+   *Example:* a branch run skipped `Deploy`; listed and ungated, trunk reuses the branch's verdict
+   and still runs `Deploy`.
+
 ### CI — what it is follows the unit's shape, how much follows exposure
 
 **What CI *is* comes from whether the unit has a branch — a fact about the session, not a
@@ -2928,6 +2952,7 @@ an adoption must leave true, in words that name no tool.
 
 Contract items 1–6. The nine steps, the question table and the label set:
 [`2-adoption-procedure.md`](skills/handbook-sync/2-adoption-procedure.md#any-repo-first-time-adoption).
+A new repo's CI starts with [one verdict per tree](#one-verdict-per-tree--quick-on-branches-full-once-719).
 
 ### Going live: Tier B → Tier C or Tier A
 

@@ -75,6 +75,29 @@ picks one shape. Every profile keeps the light lane on session branches; ship, r
 
 Why each shape, and why only `gated` changes ship: [ADR 610](../../docs/adr/610-integration-profiles.md).
 
+## One verdict per tree — quick on branches, full once (#719)
+
+The rule: [CONVENTIONS.md, *One verdict per tree — quick on branches, full once (#719)*](../../CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719).
+
+Where each of the four rules is kept today:
+
+| Rule | Kept by | Reads as |
+|---|---|---|
+| 1. A tree's green run is reused where the tree lands | the light templates' `dedupe` guard: sha mode on a ref's first push (#418); tree mode on a trunk push (#493) and on a `ship-batch/**` ref's first push (#717) — sha first (#552), newest reusable first (#592) | `tree-already-green` notice naming the run relied on ([ci-gate](ci-gate.md)) |
+| 2. Light on branches; full/heavy once per sha, where the profile says | the two lanes and [`integration-profile:`](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610) | the table above |
+| 3. A schedule skips a passed sha; one dispatch per sha | the heavy templates' `plan` job: the nightly skips when its tip is the last green nightly's sha, or a green dispatched run of the same workflow tested it (#719); `colab ship` / `colab release` dispatch the heavy lane only when no run exists at that sha | `heavy-skipped` notice |
+| 4. A trunk-only job never blocks reuse | a separate workflow, or `TRUNK_ONLY_JOBS` in the guard (#717) | — |
+
+- **Rule 1 does not reach a branch's later pushes.** The guard is skipped at scheduling on a non-creating
+  branch push, so a session's first real commit always gets a run of its own at its own sha (#418).
+- **Under `gated`, a landing's light run may still be a reuse** — the landing's verdict is its heavy run
+  at that sha; the light lane's skip only avoids testing the same tree twice.
+- **`TRUNK_ONLY_JOBS` names jobs outside the gate only.** A cited branch run that skipped one of them is
+  still reused, because that job's `if:` never reads the guard's `tested` output and so runs on trunk
+  anyway. A suite job, or any job behind the gate, must never be listed: trunk would then skip it a second
+  time — exactly what #511 refuses. Empty (as copied) keeps #511 unchanged. A workflow of its own is
+  simpler and needs no list.
+
 ## CI artifacts — your own store, not the allowance (#601)
 
 The rule: [CONVENTIONS.md, *CI artifacts — your own store, not the allowance (#601)*](../../CONVENTIONS.md#ci-artifacts--your-own-store-not-the-allowance-601).
