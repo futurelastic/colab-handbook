@@ -13514,8 +13514,9 @@ function shipMode(repoAbs, target, branch, commits) {
  * this ship actually closed, read its NATIVE parent and let lib/container-close.js decide; close
  * the parent with an evidence comment only on `close`, then ask the same question of ITS parent
  * (an epic of epics empties from the bottom up). Every other verdict leaves the parent exactly as
- * it is; the ones a human should see (`not-container`, `unfiled-items`, `unknown`) are printed as
- * findings. Best-effort like every post-merge write: a failure here warns, never fails the ship —
+ * it is; the ones a human should see (`not-container`, `unfiled-items`, `done-when`, `unknown`)
+ * are printed as findings. `done-when` (#713) also gets a one-line proposal comment on the epic —
+ * every filed child is closed, but the body's `Done when` acceptance is the coordinator's to read. Best-effort like every post-merge write: a failure here warns, never fails the ship —
  * the merge already landed. A lagging `subIssuesSummary` reads as `children-open` and is caught by
  * the next ship of a sibling or by code-sweep §5, never by guessing.
  */
@@ -13540,6 +13541,10 @@ function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
       if (c.verdict !== 'close') {
         const finding = containerClose.containerFinding({ ...c, number: c.number === null ? pnum : c.number });
         if (finding) warn(`container ${finding}`);
+        if (c.verdict === 'done-when') {
+          const pc = git.ghIssueComment(repoAbs, pnum, containerClose.containerProposalComment({ child, sha, total: c.total, target }));
+          if (!pc.ok) warnDeferred(`could not post the done-when proposal on #${pnum} — it stays open either way`);
+        }
         break;
       }
       const body = containerClose.containerCloseComment({ child, sha, total: c.total, target });

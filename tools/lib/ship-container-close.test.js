@@ -158,6 +158,28 @@ test('#371: an epic still listing an unticked item is a finding, never closed', 
   assert.match(r.out + r.err, /1 unticked item/);
 });
 
+test('#713: an epic with one closed child and a Done-when line is left open, with a proposal comment', () => {
+  const fx = fixture({ 70: child(40), 40: epic(40, {
+    body: '## Goal\n\nPhase epic; code issues filed after design approval.\n\n## Done when\n\n- the importer runs nightly\n',
+    subIssuesSummary: { total: 1, completed: 1 },
+  }) });
+  const r = shipChild(fx, 70);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(ghLog(fx), /issue close 40\b/);
+  assert.doesNotMatch(ghLog(fx), /Closed by colab ship/);
+  assert.match(ghLog(fx), /issue comment 40 --body 📋 All 1 sub-issue\(s\) closed — its last open sub-issue #70 shipped to main at [0-9a-f]+\. Left open: check `Done when`/);
+  assert.match(r.out + r.err, /#40: all 1 sub-issue\(s\) closed, but its body states `Done when`/);
+  assert.doesNotMatch(r.out, /closed container #40/);
+});
+
+test('#713: a Done-when epic stops the climb — its own parent is never evaluated', () => {
+  const fx = fixture({ 70: child(40), 40: epic(40, { body: 'Done when: x\n', parent: ref(30) }), 30: epic(30) });
+  const r = shipChild(fx, 70);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(ghLog(fx), /issue (comment|close) 30\b/);
+  assert.doesNotMatch(ghLog(fx), /issue close 40\b/);
+});
+
 test('#371: an epic of epics empties bottom-up — the grandparent closes too', () => {
   const fx = fixture({ 70: child(40), 40: epic(40, { parent: ref(30) }), 30: epic(30) });
   const r = shipChild(fx, 70);

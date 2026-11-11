@@ -29,9 +29,12 @@ gh issue view $N --json parent -q '.parent.number // "none"'
   native parent, and `tools/lib/container-close.js` decides. The parent is closed, with a
   `📦 Closed by colab ship` evidence comment naming the child and the sha, only when it
   carries `epic`, every native sub-issue is closed, its body lists no unticked `- [ ]`
-  item, and it is not a release tracking record. Then the same question goes to its own
-  parent. Any other shape stays open. A parent with no `epic` label, or one still listing
-  an unticked item, prints as a `container #P: …` warning for a human. Deciding by hand
+  item, its body states no `Done when` acceptance (#713), and it is not a release tracking
+  record. Then the same question goes to its own parent. Any other shape stays open. A
+  parent with no `epic` label, or one still listing an unticked item, prints as a
+  `container #P: …` warning for a human. An epic stating `Done when` prints the same
+  warning and gets a one-line `📋 All K sub-issue(s) closed … check \`Done when\`` comment:
+  closing it is the coordinator's reading of that line, never ship's. Deciding by hand
   (a parent `colab ship` did not reach) — the reads are `gh`, the close is `colab close`,
   which also releases any claim on the parent and tells the observer (#381):
 
@@ -40,6 +43,7 @@ gh issue view $N --json parent -q '.parent.number // "none"'
   [ -n "$P" ] && gh issue view $P --json state,labels,body,subIssuesSummary
   # close only on: OPEN · labels ∋ epic · subIssuesSummary.total > 0 and completed == total
   #                · no unticked "- [ ]" line in body · body does not open with <!-- colab:release
+  #                · no "Done when" line or heading in body — if there is one, read it: close only if met (#713)
   colab close $P --comment "📦 Closed — its last open sub-issue #$N shipped at <sha>; all sub-issues closed (#371)."
   ```
 

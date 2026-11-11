@@ -1998,14 +1998,14 @@ the same step, with an evidence comment, when all of these hold:
 - it carries the `epic` label;
 - it has native sub-issues, and every one of them is closed;
 - its body lists no unticked checklist item (`- [ ]`);
+- its body states no `Done when` acceptance — a `Done when:` line or heading (#713);
 - it is not a release tracking record, which `colab release finalize` closes.
 
 Then it asks the same question of that parent's own parent. Any other shape is left open.
-A parent whose sub-issues are all closed but which has no `epic` label, or which still
-lists an unticked item, is reported as a finding for a human. A hand-written checklist
-with no native sub-issues is never closed this way (`code-ship` B2c). `code-sweep` §5 closes containers whose
-last child closed by some other route, using the same conditions
-(`tools/lib/container-close.js`).
+A parent whose sub-issues are all closed but which has no `epic` label, or which still lists an unticked item, is reported as a finding for a human.
+An epic stating `Done when` stays open with one comment asking the coordinator to check that line and close if met: every *filed* child closed is not the end state holding.
+A hand-written checklist with no native sub-issues is never closed this way (`code-ship` B2c). `code-sweep` §5 closes containers whose
+last child closed by some other route, using the same conditions (`tools/lib/container-close.js`).
 
 **A container never carries a `delivery:*` label (#371).** `code-triage` reports one as a finding in its epic bucket.
 
