@@ -183,7 +183,12 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   is reused only if it skipped no job but the guard: a job gated on the trunk ref is `skipped`
   on every branch push, and reusing that run would skip it on trunk too (#511); matches are
   walked newest first and the first that passes is cited, so a skipping one never hides an older
-  full run (#592). A trunk-only job (publish, deploy, release) never sits behind this gate. One reading turns such a run red: a
+  full run (#592). A trunk-only job (publish, deploy, release) never sits behind this gate: it
+  lives in a workflow of its own, or ungated and named in the guard's `TRUNK_ONLY_JOBS`, whose
+  skip in a cited run is excused because it runs on trunk anyway (#717). **A batch-landing ref's
+  first push (`ship-batch/**`) gets the same tree mode** — the same checks, minus the trunk one —
+  so a batch whose tree a member branch already passed skips the suite too (#717). The rule these
+  serve: [one verdict per tree](../../CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719). One reading turns such a run red: a
   cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
   trunk is untested at that sha). A citation that cannot be read leaves the run green and says
   so, because the run's own `success` is the verdict, exactly as for #418. Why: [ADR 539](../../docs/adr/539-branch-ci-rationale.md).

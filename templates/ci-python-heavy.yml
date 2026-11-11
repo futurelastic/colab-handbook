@@ -7,7 +7,8 @@
 # HEAVY LANE (#607): the whole suite, including tests marked heavy, plus anything too slow for
 # every merge (integration, browser/e2e, load). The light lane (ci.yml) runs on every push and
 # is the only lane `colab ship` reads. This one runs:
-#   - NIGHTLY, on trunk's tip. Skipped when trunk has not moved since the last green nightly.
+#   - NIGHTLY, on trunk's tip. Skipped when trunk has not moved since the last green nightly, or
+#     when a green dispatched run of this workflow already tested that exact sha (#719).
 #     A red nightly opens one `trunk-red` issue naming the commit range that could have caused
 #     it. It never blocks a merge.
 #   - On every OFFICIAL BUILD: release-tag.yml calls this file and publishes only when it is
@@ -22,6 +23,8 @@
 #   the pytest marker `heavy` (`@pytest.mark.heavy`, registered in pytest.ini or
 #   pyproject.toml). The light lane deselects it; this lane runs everything.
 #
+# One verdict per sha: never test a commit this workflow already passed (CONVENTIONS.md §7,
+# "One verdict per tree").
 # Deliberately NOT triggered by push or pull_request: a run of this workflow must never count as
 # a merge verdict (tools/lib/verify-runs.js sets schedule and dispatch runs aside).
 # No concurrency block: a heavy run is never cancelled — a release may be waiting on it.
@@ -100,6 +103,20 @@ jobs:
             if [ "$since" = "$sha" ]; then
               run=false
               echo "::notice title=heavy-skipped::$TRUNK has not moved since the last green nightly ($sha)"
+            else
+              # One verdict per sha (#719): a green DISPATCHED run of this workflow already tested this
+              # exact commit (a gated landing, a release candidate) — the nightly does not test it again.
+              # `since` stays the last green NIGHTLY: the trunk-red range is read from nightlies only.
+              for id in $(gh api "repos/$REPO/actions/workflows/$wf/runs?event=workflow_dispatch&status=success&per_page=10" \
+                            --jq '.workflow_runs[].id' 2>/dev/null); do
+                done_at="$(gh api "repos/$REPO/actions/runs/$id/jobs" \
+                  --jq '[.jobs[] | select(.conclusion == "success" and (.name | startswith("Full suite @ "))) | .name | ltrimstr("Full suite @ ")][0] // ""' 2>/dev/null || true)"
+                if [ "$done_at" = "$sha" ]; then
+                  run=false
+                  echo "::notice title=heavy-skipped::$sha already passed this workflow in dispatched run $id"
+                  break
+                fi
+              done
             fi
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"

@@ -2225,6 +2225,17 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C7.profiles.08 | default |  | Revert first: bisect with isolated re-runs of the failing tests, retry once before calling red, auto-revert only a proven culprit, and hand the fixer a full brief. | bisect the red window with | tools/docs/ci-lanes.md | #610 |
 | C7.profiles.09 | default |  | Start batch size at 4–6 and tune from the per-branch wave failure rate and the flake rate. | start at 4–6 | tools/docs/ci-lanes.md | #610 |
 
+### One verdict per tree — quick on branches, full once (#719)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C7.verdict.01 | default |  | A CI verdict is keyed on the git tree id: a workflow never tests a tree, or a sha, it already passed. | a workflow never tests a tree, or a sha, it already | CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719 | #719 |
+| C7.verdict.02 | default |  | A green run of a tree is reused wherever that tree lands: trunk, a batch-landing ref, a ref's first push at a passed sha. | A green run of a tree is reused wherever that tree lands | CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719 | #719 |
+| C7.verdict.03 | default |  | Branch pushes run the light lane; full and heavy tiers run once per sha where the integration profile puts them. | Branch pushes run the light lane (tier `affected`) | CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719 | #719 |
+| C7.verdict.04 | default |  | A scheduled run skips a sha its workflow already passed; a dispatched gate is dispatched once per sha. | A scheduled run skips a sha its workflow already passed | CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719 | #719 |
+| C7.verdict.05 | default |  | A trunk-only job never stops a tree verdict from being reused: a workflow of its own, or ungated and on the guard's trunk-only list. | never stops a tree verdict from being reused | CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719 | #719 |
+| C7.verdict.06 | default |  | TRUNK_ONLY_JOBS names jobs outside the gate only; a suite job or any gated job is never listed, and empty keeps #511 unchanged. | names jobs outside the gate only | tools/docs/ci-lanes.md#one-verdict-per-tree--quick-on-branches-full-once-719 | #717 |
+
 ### CI — what it is follows the unit's shape, how much follows exposure
 
 | id | class | gate | rule | key | dest | source |
