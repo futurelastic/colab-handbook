@@ -30,7 +30,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const FILES = ['templates/ci-node.yml', 'templates/ci-laravel.yml', 'templates/ci-python.yml', '.github/workflows/ci.yml', '.github/workflows/ci-light.yml'];
+// The light templates call ci-light.yml since #724 — the guard is checked where it lives.
+const FILES = ['.github/workflows/ci.yml', '.github/workflows/ci-light.yml'];
 // The reusable workflow (#721) has no `on:`/`concurrency:` of its own — the caller does — so its trunk refs are the
 // `trunk-branches` input, not a concurrency list.
 const REUSABLE = '.github/workflows/ci-light.yml';

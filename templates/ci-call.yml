@@ -1,6 +1,7 @@
 # CI (light lane) — CALLER of the handbook's reusable workflow (#721). Copy to .github/workflows/ci.yml
 # with `colab template ci-call --dest .github/workflows/ci.yml`: it writes this repo's trunk refs and pins the call to the handbook
-# release it stamps the copy with. Unlike templates/ci-<stack>.yml, nothing below the `uses:` line is
+# release it stamps the copy with. Like templates/ci-<stack>.yml (callers too since #724, each with one
+# stack's `with:` filled in — this one is the generic caller, for a hybrid), nothing below the `uses:` line is
 # yours to maintain — the dedupe gate, the secret scan, the quick/full split and the job-class
 # `runs-on` live once, in .github/workflows/ci-light.yml of the handbook, and a release moves them.
 #
@@ -69,5 +70,5 @@ jobs:
 
   # Your own jobs go here, beside the call. Behind the gate (they skip when the tree already passed):
   #   needs: ci
-  #   if: ${{ !cancelled() && needs.ci.outputs.tested != 'true' }}
+  #   if: ${{ !cancelled() && needs.ci.result == 'success' && needs.ci.outputs.tested != 'true' }}
   # Trunk-only and ungated: no `if:` on the guard, and list the job's name in `trunk-only-jobs` above.

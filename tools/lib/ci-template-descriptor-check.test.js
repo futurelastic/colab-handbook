@@ -10,7 +10,8 @@
  * the same values. A shell copy of a rule is a second source of truth, so these tests hold it
  * to the one in tools/lib/ship-batch.js: the step's own `run:` script is extracted from each
  * template and executed against a set of descriptors, and its verdict must equal
- * parseShipBatch's on every one. The three templates must carry the identical step, too.
+ * parseShipBatch's on every one. Since #724 the step lives once, in the reusable light lane's `quick`
+ * job (.github/workflows/ci-light.yml), and the light templates call it instead of copying it.
  */
 
 const test = require('node:test');
@@ -22,7 +23,9 @@ const { spawnSync } = require('child_process');
 const shipBatch = require('./ship-batch.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const TEMPLATES = ['ci-node.yml', 'ci-laravel.yml', 'ci-python.yml'];
+// #724: the light templates call the reusable light lane, so the step lives once, in its `quick` job.
+const TEMPLATES = ['.github/workflows/ci-light.yml'];
+const CALLERS = ['ci-node.yml', 'ci-laravel.yml', 'ci-python.yml'];
 const STEP_NAME = 'Descriptor check (.github/project.yml)';
 
 // The step's `run: |` block, dedented — the exact text the runner would execute.
@@ -93,16 +96,20 @@ function runCase(script, line) {
 
 const scripts = {};
 for (const file of TEMPLATES) {
-  scripts[file] = stepScript(fs.readFileSync(path.join(REPO_ROOT, 'templates', file), 'utf8'));
+  scripts[file] = stepScript(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'));
 }
 
 test('every CI template carries the descriptor check (#416)', () => {
   for (const file of TEMPLATES) assert.ok(scripts[file], `${file}: no "${STEP_NAME}" step with a run: block`);
 });
 
-test('the three copies of the descriptor check are identical', () => {
-  const [first, ...rest] = TEMPLATES;
-  for (const file of rest) assert.strictEqual(scripts[file], scripts[first], `${file} differs from ${first}`);
+test('the light templates carry no copy of it: they call the workflow that runs it (#724)', () => {
+  const { isCiLightCaller } = require('./gate-drift.js');
+  for (const file of CALLERS) {
+    const text = fs.readFileSync(path.join(REPO_ROOT, 'templates', file), 'utf8');
+    assert.ok(isCiLightCaller(text), `${file} calls ci-light.yml`);
+    assert.strictEqual(stepScript(text), null, `${file}: a second copy of the step is a second source of truth`);
+  }
 });
 
 test('the step fails exactly the values colab ship and the audit refuse', () => {

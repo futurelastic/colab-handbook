@@ -94,7 +94,9 @@ function gateNeverSkips({ trunkRuns, greenRuns, trunk, n = RECENT_TRUNK_RUNS }) 
 function copiedGateText(wf) {
   return `drift: .github/workflows/${wf} carries its own copy of the CI dedupe gate instead of calling the handbook's ` +
     `reusable workflow (${REUSABLE_PATH}) — a copy changes only by a manual sync, so a gate fix never reaches it ` +
-    '(#717 did not). Switch to templates/ci-call.yml (`colab template ci-call --dest .github/workflows/<this file>`) (#721)';
+    '(#717 did not). Switch to the caller: a pristine copy of ci-node, ci-python or ci-laravel moves with `colab update --apply`; ' +
+    'an edited one, `colab template ci-<stack> --dest .github/workflows/<this file> --force` (or templates/ci-call.yml), ' +
+    'then carry your edits into its `with:` block (#721, #724)';
 }
 function inertGateText(wf, r) {
   const ex = r.matched[0];

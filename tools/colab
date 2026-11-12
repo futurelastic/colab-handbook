@@ -9919,6 +9919,22 @@ function cmdVersion() {
   return print(versionLine(selfProvenance()));
 }
 
+/** #724: the body a copy stamped `version` gets — tools/lib/template-trunk.js templateBodyAt, with this handbook's git. */
+function templateBodyAt(root, rel, raw, version) {
+  return require('./lib/template-trunk').templateBodyAt({
+    raw, rel, version,
+    hasGit: stamp.handbookInfo(root).hasGit,
+    carries: (v, p) => {
+      const r = spawnSync('git', ['-C', root, 'cat-file', '-e', `${v}:${p}`], { stdio: 'ignore' });
+      return !!r.error || r.status === 0; // an unreadable answer never forces the fallback
+    },
+    show: (v, p) => {
+      const r = spawnSync('git', ['-C', root, 'show', `${v}:${p}`], { encoding: 'utf8' });
+      return !r.error && r.status === 0 ? r.stdout : null;
+    },
+  });
+}
+
 /** Current handbook version = nearest RELEASE tag (pre-releases skipped, #334); 'v0' before the first one. */
 function handbookVersion(root) {
   // Through handbookInfo, not a bare git call: a registry install (#431) has no git of its own and
@@ -10090,6 +10106,9 @@ function cmdTemplate(argv) {
   }
 
   let body = fs.readFileSync(srcFile, 'utf8');
+  // #724: a caller whose pin cannot run yet is written as the pinned release's own template.
+  const at = templateBodyAt(root, path.basename(srcFile), body, version);
+  body = at.body;
   // #526: a CI template names its protected refs `main`/`dev` — defaults, not this repo's facts.
   // Write the repo's declared trunk (and release branch) instead, and say what changed.
   const trunkNotes = [];
@@ -10124,6 +10143,7 @@ function cmdTemplate(argv) {
     }
     if (pin.unpinned) trunkNotes.push('  ⚠ pin: the handbook has no tag, so `@HANDBOOK_TAG` is left in place — set it to a release tag that carries .github/workflows/ci-light.yml.');
   }
+  if (at.fallback) trunkNotes.push(`  pin: ${at.fallback} (the release this copy is stamped with) does not carry .github/workflows/ci-light.yml yet, so this is ${at.fallback}'s own ${path.basename(srcFile)} — a full copy that runs today. Once a release carries the reusable workflow, \`colab update --apply\` moves a pristine copy onto the caller.`);
   // #625: the round-trip job written live, at copy — the commit that creates the workflows.
   const roundtripNotes = [];
   if (opts.roundtrip && roundtrip.ALWAYS_ON.has(stem)) {
@@ -10274,6 +10294,15 @@ function inspectRepo(entry, ctx) {
         templateName: st.name, stampVersion: st.version, localText: text, comparable: true,
         render: (body) => require('./lib/template-trunk').renderForRepo(st.name, body, descDoc, st.version),
       });
+      // #724: stamped at the current release, whose own template is still a full copy because the caller
+      // waits for a release carrying ci-light.yml — what --apply would write is what is there already.
+      if (c.state === 'behind' && c.from === ctx.hb.version) {
+        const src = path.join(ctx.templatesDir, `${st.name}.yml`);
+        const raw = fs.existsSync(src) ? fs.readFileSync(src, 'utf8') : null;
+        if (raw && templateBodyAt(ctx.handbookRoot, `${st.name}.yml`, raw, ctx.hb.version).fallback) {
+          Object.assign(c, { state: 'current', reason: `stamped at the current handbook version; the caller form waits for a release carrying ${require('./lib/gate-drift').REUSABLE_PATH} (#724)` });
+        }
+      }
       artifacts.push({ file: rel, template: st.name, applicable: c.state === 'behind', ...c });
     } else {
       // No stamp: ask what the CONTENT says, not what the filename says. `unstamped` claims a
@@ -10366,7 +10395,10 @@ function refreshArtifact(repo, art, ctx) {
   const src = path.join(ctx.templatesDir, `${art.template}.yml`);
   if (!fs.existsSync(src)) return { ok: false, err: `template ${art.template}.yml is not in the handbook` };
   // Rendered exactly as `colab template <name> --force` would write it here (#526).
-  const body = require('./lib/template-trunk').renderForRepo(art.template, fs.readFileSync(src, 'utf8'), repoDescriptorDoc(repo.path), ctx.hb.version);
+  // #724: never a caller pinned at a release without the reusable workflow — that copy's CI could not run.
+  const at = templateBodyAt(ctx.handbookRoot, `${art.template}.yml`, fs.readFileSync(src, 'utf8'), ctx.hb.version);
+  if (at.unrunnable) return { ok: false, err: `${art.template}.yml calls .github/workflows/ci-light.yml, which ${at.unrunnable} does not carry — refresh after a release that does` };
+  const body = require('./lib/template-trunk').renderForRepo(art.template, at.body, repoDescriptorDoc(repo.path), ctx.hb.version);
   const dest = path.join(repo.path, art.file);
   try {
     fs.mkdirSync(path.dirname(dest), { recursive: true });

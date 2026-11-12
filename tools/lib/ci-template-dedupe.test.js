@@ -30,7 +30,10 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const FILES = ['templates/ci-node.yml', 'templates/ci-laravel.yml', 'templates/ci-python.yml', '.github/workflows/ci.yml', '.github/workflows/ci-light.yml'];  // ci-light: the reusable workflow (#721)
+// ci-light: the reusable workflow (#721). The light templates call it since #724 — their own jobs are
+// checked against the CALL's gate below, not as copies of the guard.
+const FILES = ['.github/workflows/ci.yml', '.github/workflows/ci-light.yml'];
+const CALLERS = ['templates/ci-node.yml', 'templates/ci-laravel.yml', 'templates/ci-python.yml'];
 const read = (f) => fs.readFileSync(path.join(REPO_ROOT, f), 'utf8');
 
 // Top-level jobs as { name: [lines of its body] } (2-space job keys under `jobs:`).
@@ -146,4 +149,33 @@ for (const file of FILES) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+}
+
+// #724: a light template is a caller. Its own jobs (a migration round-trip, and the opt-in blocks
+// once adopted) sit beside the call and must sit behind the call's gate: off a red call, and off a run
+// whose tree the gate already found green — directly, or through a job that is.
+const { enableRoundtrip } = require('./template-roundtrip.js');
+for (const file of CALLERS) {
+  for (const [form, text] of [['as shipped', read(file)], ['round-trip adopted', enableRoundtrip(read(file), {}).text]]) {
+    test(`${file} (${form}): one call, and every job beside it is behind the call's gate (#724)`, () => {
+      const jobs = jobsOf(text);
+      assert.match(jobs.ci.join('\n'), /^    uses: [^\n]*\/\.github\/workflows\/ci-light\.yml@HANDBOOK_TAG$/m);
+      assert.ok(!jobs.dedupe, 'no copied guard');
+      // The call's trunk refs and the caller's concurrency name the same branches (colab template writes both).
+      const list = JSON.parse((jobs.ci.join('\n').match(/^      trunk-branches: '(\[[^']*\])'$/m) || [])[1] || 'null');
+      const group = (text.match(/^  group: (.*)$/m) || [])[1] || '';
+      const inGroup = [...group.matchAll(/github\.ref == 'refs\/heads\/([^']+)'/g)].map((m) => m[1]);
+      assert.deepStrictEqual(list, inGroup, 'trunk-branches input == concurrency trunk refs');
+      const gated = new Set();
+      const own = Object.keys(jobs).filter((j) => j !== 'ci');
+      for (const j of own) {
+        const cond = key(jobs[j], 'if') || '';
+        assert.match(cond, /!cancelled\(\)/, `${j}: if: must carry !cancelled()`);
+        if (/needs\.ci\.result == 'success'/.test(cond) && /needs\.ci\.outputs\.tested != 'true'/.test(cond)) { gated.add(j); continue; }
+        const via = own.find((g) => gated.has(g) && new RegExp(`needs\\.${g}\\.`).test(cond));
+        assert.ok(via, `${j}: neither behind the call's gate nor behind a job that is (${cond})`);
+        gated.add(j);
+      }
+    });
+  }
 }

@@ -125,7 +125,7 @@ test('the three templates carry one identical trigger + concurrency block', () =
   const block = (t) => {
     const lines = t.split(/\r?\n/);
     const from = lines.findIndex((l) => /^on\s*:/.test(l));
-    const to = lines.findIndex((l, i) => i > from && /^env\s*:/.test(l));
+    const to = lines.findIndex((l, i) => i > from && /^(env|permissions|jobs)\s*:/.test(l));
     return lines.slice(from, to).join('\n');
   };
   const [first, ...rest] = TEMPLATES.map((f) => block(read(f)));
@@ -135,13 +135,16 @@ test('the three templates carry one identical trigger + concurrency block', () =
 // #514: the fork-PR opt-in. Every suite job carries the term, so uncommenting `pull_request:`
 // skips a same-repo PR's run (its push run tests that head) and tests a fork PR's run.
 const FORK_TERM = "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)";
+// #724: the light templates are callers, so the suite jobs carrying the term are the reusable light lane's.
+const LIGHT = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci-light.yml'), 'utf8');
 for (const file of TEMPLATES) {
-  test(`${file}: fork-PR opt-in — trigger commented, every job needing dedupe carries the fork term (#514)`, () => {
+  test(`${file}: fork-PR opt-in — trigger commented, every job the call runs behind its gate carries the fork term (#514)`, () => {
     const text = read(file);
     const on = parseWorkflowOn(text);
     assert.ok(!on.events.has('pull_request'), 'pull_request stays opt-in (commented) in the template');
     assert.match(text, /^  # pull_request:\n  #   branches: \['\*\*'\]$/m);
-    const ifs = [...text.matchAll(/^    needs: dedupe\n    if: (.*)$/gm)].map((m) => m[1]);
+    assert.match(text, /^    uses: [^\n]*\/\.github\/workflows\/ci-light\.yml@/m, 'the suite jobs are the call\'s');
+    const ifs = [...LIGHT.matchAll(/^    needs: dedupe\n    if: (.*)$/gm)].map((m) => m[1]);
     assert.ok(ifs.length >= 2, `expected the suite jobs, got ${ifs.length}`);
     for (const cond of ifs) assert.ok(cond.includes(`&& ${FORK_TERM} }}`), cond);
     // The term, evaluated: true on push and on a fork PR, false on a same-repo PR.

@@ -5,12 +5,13 @@
  * `migration-grant: reviewer` grants only where a job named "Migration round-trip…" passed at the
  * shipped head (condition R, CONVENTIONS.md §5). ci-node and ci-python carry that job as an opt-in
  * block between `##>>> migration round-trip` / `##<<< migration round-trip` fences — several pairs
- * per file, since the job also needs a workflow env value and a build-job output. Adopting it on a
+ * per file, since the job also needs a small `roundtrip-config` job beside the call (#724: a job-level
+ * `if:` cannot read env, and a caller has no build job to hand the value on). Adopting it on a
  * LATER branch edits .github/workflows/, and such a branch fails R by construction, so the one
  * branch that adopts the job ships on a human grant. Writing it at copy — the commit that creates
  * the workflows — removes that branch.
  *
- * Fail closed: with ROUNDTRIP_APPLY empty, the build job's `roundtrip` output is `off` and the job
+ * Fail closed: with ROUNDTRIP_APPLY empty, the config job's `roundtrip` output is `off` and the job
  * is skipped. A skipped leg never passes R, and CI stays green — a repo with no migrations yet is
  * not held red. A no-op job that ended green would pass R; this module never produces one.
  *
@@ -70,9 +71,11 @@ function enableRoundtrip(text, opts) {
 
   const apply = o.apply == null ? '' : String(o.apply).trim();
   if (apply) {
-    const re = /^  ROUNDTRIP_APPLY: ""$/m;
+    // In the roundtrip-config job's env since #724 (a caller has no build job to hand it on); the
+    // indent is whatever that block sits at, never a fixed one.
+    const re = /^( +)ROUNDTRIP_APPLY: ""$/m;
     if (re.test(out)) {
-      out = out.replace(re, `  ROUNDTRIP_APPLY: ${yamlSingleQuoted(apply)}`);
+      out = out.replace(re, (_, ind) => `${ind}ROUNDTRIP_APPLY: ${yamlSingleQuoted(apply)}`);
       changes.push('ROUNDTRIP_APPLY');
     } else missed.push('ROUNDTRIP_APPLY');
   }

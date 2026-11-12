@@ -36,7 +36,8 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const read = (f) => fs.readFileSync(path.join(REPO_ROOT, f), 'utf8');
 const yamlsIn = (dir) => fs.readdirSync(path.join(REPO_ROOT, dir))
   .filter((f) => f.endsWith('.yml')).map((f) => path.posix.join(dir, f));
-const CI_TEMPLATES = ['templates/ci-node.yml', 'templates/ci-python.yml', 'templates/ci-laravel.yml'];
+// #724: the light templates call the reusable light lane, so the install step they run is its gitleaks job's.
+const CI_TEMPLATES = ['.github/workflows/ci-light.yml'];
 
 // Every curl command writing a response to a file, continuation lines joined. Comment lines are
 // prose, and `-o /dev/null` keeps no bytes: a status probe, not a download.

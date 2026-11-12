@@ -93,76 +93,93 @@ function evalExpr(src, { env, files }) {
 const truthy = (v) => v !== '' && v !== false && v !== 'false' && v != null;
 const ENVS = ['github-hosted', 'self-hosted'];
 
+// #724: the light templates call the reusable light lane, so their build-time caches are its `quick`
+// and `full` jobs'. Its paths are under `inputs.working-directory`; read with the default `.`, a
+// `format('{0}/<file>', inputs.working-directory)` is just `<file>` at the repo root.
+const LIGHT = '.github/workflows/ci-light.yml';
+const readLight = () => read(LIGHT).replace(/format\('\{0\}\/([^']+)', inputs\.working-directory\)/g, "'$1'");
+const lightOrTemplate = (file) => (file === LIGHT ? readLight() : read(file));
+
 // [file, job, uncomment, find step, lockfile(s) that turn it on, other files that must not,
 //  the `cache:` value when on]
 const SETUP_CASES = [
-  ['templates/ci-node.yml', 'build', false, (s) => s.name === 'Setup Node', ['package-lock.json'], ['package.json', 'pnpm-lock.yaml'], 'npm'],
+  [LIGHT, 'quick', false, (s) => s.name === 'Setup Node', ['package-lock.json'], ['package.json', 'pnpm-lock.yaml'], 'npm'],
+  [LIGHT, 'full', false, (s) => s.name === 'Setup Node', ['package-lock.json'], ['package.json', 'pnpm-lock.yaml'], 'npm'],
+  [LIGHT, 'quick', false, (s) => s.name === 'Setup Python', ['requirements.txt', 'requirements-dev.txt', 'pyproject.toml'], ['setup.py', 'setup.cfg'], 'pip'],
+  [LIGHT, 'full', false, (s) => s.name === 'Setup Python', ['requirements.txt', 'requirements-dev.txt', 'pyproject.toml'], ['setup.py', 'setup.cfg'], 'pip'],
   ['templates/ci-node.yml', 'migrations', true, (s) => s.name === 'Setup Node', ['package-lock.json'], ['package.json', 'pnpm-lock.yaml'], 'npm'],
-  ['templates/ci-laravel.yml', 'build', false, (s) => /actions\/setup-node@/.test(s.uses || ''), ['package-lock.json'], ['package.json', 'composer.lock'], 'npm'],
-  ['templates/ci-python.yml', 'build', false, (s) => /actions\/setup-python@/.test(s.uses || ''), ['requirements.txt', 'requirements-dev.txt', 'pyproject.toml'], ['setup.py', 'setup.cfg'], 'pip'],
   ['templates/ci-python.yml', 'migrations', true, (s) => /actions\/setup-python@/.test(s.uses || ''), ['requirements.txt', 'requirements-dev.txt', 'pyproject.toml'], ['setup.py', 'setup.cfg'], 'pip'],
 ];
 
 for (const [file, job, uncomment, find, onFiles, offFiles, value] of SETUP_CASES) {
   const label = `${file} ${job}${uncomment ? ' (opt-in block)' : ''}`;
-  test(`${label}: package cache on iff GitHub-hosted AND a lockfile exists`, () => {
-    const jobs = jobsOf(read(file), { uncomment });
+  test(`${label}: package cache (${value}) on iff GitHub-hosted AND a lockfile exists`, () => {
+    const jobs = jobsOf(lightOrTemplate(file), { uncomment });
     assert.ok(jobs[job], `${file} has no ${job} job`);
     const step = stepsOf(jobs[job]).find(find);
     assert.ok(step, `${label} has no setup step`);
     assert.ok(step.with.cache, `${label} setup step has no cache: input`);
     const isNode = /setup-node/.test(step.uses || '');
-    if (isNode) assert.ok(step.with['package-manager-cache'], `${label} leaves setup-node's automatic packageManager cache ungated`);
+    // The reusable lane turns setup-node's automatic packageManager cache off outright (#721) — stricter
+    // than gating it; a copy gates it on the same condition as `cache:`.
+    const pmcOff = file === LIGHT;
+    if (isNode && pmcOff) assert.strictEqual(step.with['package-manager-cache'], 'false', `${label}: automatic packageManager cache must be off`);
+    else if (isNode) assert.ok(step.with['package-manager-cache'], `${label} leaves setup-node's automatic packageManager cache ungated`);
     const fileSets = [[], offFiles, ...onFiles.map((f) => [f]), ...onFiles.map((f) => [f, ...offFiles])];
     for (const env of ENVS) {
       for (const files of fileSets) {
         const want = env === 'github-hosted' && files.some((f) => onFiles.includes(f));
         const got = evalExpr(step.with.cache, { env, files });
         assert.strictEqual(got, want ? value : '', `${label} cache: on ${env} with [${files}] → ${JSON.stringify(got)}`);
-        if (isNode) {
+        if (isNode && !pmcOff) {
           const pmc = evalExpr(step.with['package-manager-cache'], { env, files });
           assert.strictEqual(truthy(pmc), want, `${label} package-manager-cache on ${env} with [${files}] → ${pmc}`);
         }
       }
     }
-    assert.ok(step.comments.some((l) => /EDIT:/.test(l)) || uncomment, `${label} cache has no EDIT: note`);
+    // An edit point lives in a copy; the reusable lane's are its inputs.
+    if (file !== LIGHT) assert.ok(step.comments.some((l) => /EDIT:/.test(l)) || uncomment, `${label} cache has no EDIT: note`);
   });
 }
 
-test('templates/ci-python.yml: cache-dependency-path names the same manifests the gate checks', () => {
-  const body = jobsOf(read('templates/ci-python.yml')).build;
-  const at = body.findIndex((l) => /cache-dependency-path:\s*\|/.test(l));
-  assert.notStrictEqual(at, -1, 'no multi-line cache-dependency-path');
-  const listed = [];
-  for (let i = at + 1; i < body.length && /^ {12}\S/.test(body[i]); i++) listed.push(body[i].trim());
-  assert.deepStrictEqual(listed.sort(), ['pyproject.toml', 'requirements*.txt']);
-});
+for (const job of ['quick', 'full']) {
+  test(`${LIGHT} ${job}: pip's cache-dependency-path names the same manifests the gate checks`, () => {
+    const body = jobsOf(read(LIGHT))[job];
+    const at = body.findIndex((l) => /cache-dependency-path:\s*\|/.test(l));
+    assert.notStrictEqual(at, -1, 'no multi-line cache-dependency-path');
+    const listed = [];
+    for (let i = at + 1; i < body.length && /^ {12}\S/.test(body[i]); i++) listed.push(body[i].trim().replace('${{ inputs.working-directory }}/', ''));
+    assert.deepStrictEqual(listed.sort(), ['pyproject.toml', 'requirements*.txt']);
+  });
 
-test('templates/ci-laravel.yml: Composer cache steps run iff GitHub-hosted AND composer.lock exists', () => {
-  const steps = stepsOf(jobsOf(read('templates/ci-laravel.yml')).build);
-  const names = steps.map((s) => s.name);
-  const locate = steps.find((s) => s.name === 'Locate Composer cache');
-  const restore = steps.find((s) => s.name === 'Restore Composer cache');
-  assert.ok(locate && restore, 'Composer cache steps missing');
-  assert.ok(/^actions\/cache@[0-9a-f]{40}$/.test(restore.uses), `actions/cache is not pinned by sha: ${restore.uses}`);
-  assert.ok(names.indexOf('Restore Composer cache') < names.indexOf('Composer install'), 'cache restore must precede Composer install');
-  for (const s of [locate, restore]) {
-    for (const env of ENVS) {
-      for (const files of [[], ['composer.json'], ['composer.lock'], ['composer.json', 'composer.lock']]) {
-        const want = env === 'github-hosted' && files.includes('composer.lock');
-        assert.strictEqual(evalExpr(s.if, { env, files }), want, `${s.name} if: on ${env} with [${files}]`);
+  test(`${LIGHT} ${job}: Composer cache steps run iff PHP is set up, GitHub-hosted AND composer.lock exists (#571, #724)`, () => {
+    const steps = stepsOf(jobsOf(readLight())[job]);
+    const names = steps.map((s) => s.name);
+    const locate = steps.find((s) => s.name === 'Locate Composer cache');
+    const restore = steps.find((s) => s.name === 'Restore Composer cache');
+    assert.ok(locate && restore, 'Composer cache steps missing');
+    assert.ok(/^actions\/cache@[0-9a-f]{40}$/.test(restore.uses), `actions/cache is not pinned by sha: ${restore.uses}`);
+    assert.ok(names.indexOf('Setup PHP') < names.indexOf('Locate Composer cache'), 'composer must exist before it is asked for its cache dir');
+    assert.ok(names.indexOf('Restore Composer cache') < names.indexOf('Install dependencies'), 'cache restore must precede the install');
+    for (const php of [true, false]) {
+      const cond = locate.if.replace("steps.toolchain.outputs.php-version != ''", String(php));
+      for (const env of ENVS) {
+        for (const files of [[], ['composer.json'], ['composer.lock'], ['composer.json', 'composer.lock']]) {
+          const want = php && env === 'github-hosted' && files.includes('composer.lock');
+          assert.strictEqual(evalExpr(cond, { env, files }), want, `Locate if: php=${php} on ${env} with [${files}]`);
+        }
       }
     }
-  }
-  assert.ok(/hashFiles\('composer\.lock'\)/.test(restore.with.key), 'cache key does not hash composer.lock');
-  assert.ok(locate.comments.some((l) => /EDIT:/.test(l) && /self-hosted/i.test(l)) ||
-    locate.comments.join('\n').match(/EDIT:[\s\S]*self-hosted/), 'Composer cache has no self-hosted EDIT: note');
-});
+    // Restore follows Locate: no directory, no restore.
+    assert.strictEqual(restore.if, "steps.composer-cache.outputs.dir != ''");
+    assert.ok(/hashFiles\('composer\.lock'\)/.test(restore.with.key), 'cache key does not hash composer.lock');
+  });
+}
 
 // The gitleaks binary cache (#696): the same hosted-only rule as the package caches. A self-hosted
 // runner keeps the binary in its own tool cache instead — the install step's half, pinned by running
 // the step itself in ci-template-downloads.test.js.
-for (const file of ['templates/ci-node.yml', 'templates/ci-python.yml', 'templates/ci-laravel.yml']) {
+for (const file of [LIGHT]) {
   test(`${file}: the gitleaks cache restores iff GitHub-hosted, keyed on the pin and the platform`, () => {
     const steps = stepsOf(jobsOf(read(file)).gitleaks);
     const names = steps.map((s) => s.name);
@@ -183,22 +200,21 @@ for (const file of ['templates/ci-node.yml', 'templates/ci-python.yml', 'templat
 }
 
 // The names `colab ship`'s cure rule matches by exact name (#475/#476: executed-step superset).
-// Renaming one of these is an instrument change, so this list moves only on purpose.
+// Renaming one of these is an instrument change, so this list moves only on purpose. #724 moved it on
+// purpose: the light templates call the reusable lane, so the steps a run executes are its jobs'.
 const KEPT_NAMES = {
-  'templates/ci-node.yml': ['Resolve Node version', 'Setup Node', 'Install dependencies', 'Detect optional scripts', 'Typecheck', 'Lint', 'Test', 'Build'],
-  'templates/ci-python.yml': ['Resolve Python version', 'Install dependencies', 'Byte-compile', 'Detect optional tooling', 'Lint (ruff)', 'Typecheck (mypy)', 'Test (pytest)'],
-  'templates/ci-laravel.yml': ['Resolve toolchain versions', 'Setup PHP', 'Composer install', 'Build frontend assets (Vite)', 'Run migrations against sqlite', 'Test (Pest)'],
+  quick: ['Descriptor check (.github/project.yml)', 'Resolve toolchain versions', 'Setup Node', 'Setup Python', 'Setup PHP', 'Install dependencies', 'Quick'],
+  full: ['Resolve toolchain versions', 'Setup Node', 'Setup Python', 'Setup PHP', 'Install dependencies', 'Full'],
 };
 const NEW_CACHE_STEPS = new Set(['Locate Composer cache', 'Restore Composer cache']);
 
-for (const [file, kept] of Object.entries(KEPT_NAMES)) {
-  test(`${file}: build step names the cure rule reads are unchanged; only gated cache steps are new`, () => {
-    const steps = stepsOf(jobsOf(read(file)).build);
+for (const [job, kept] of Object.entries(KEPT_NAMES)) {
+  test(`${LIGHT} ${job}: step names the cure rule reads are pinned; the only cache steps are the gated Composer ones`, () => {
+    const steps = stepsOf(jobsOf(read(LIGHT))[job]);
     const names = steps.map((s) => s.name).filter(Boolean);
-    for (const n of kept) assert.ok(names.includes(n), `${file} build lost step "${n}"`);
+    for (const n of kept) assert.ok(names.includes(n), `${LIGHT} ${job} lost step "${n}"`);
     for (const s of steps.filter((x) => /cache/i.test(x.name || ''))) {
-      assert.ok(NEW_CACHE_STEPS.has(s.name), `${file} has an unexpected cache step "${s.name}"`);
-      assert.ok(/runner\.environment == 'github-hosted'/.test(s.if || ''), `${file} "${s.name}" runs on self-hosted`);
+      assert.ok(NEW_CACHE_STEPS.has(s.name), `${LIGHT} has an unexpected cache step "${s.name}"`);
     }
   });
 }

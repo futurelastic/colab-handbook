@@ -1,6 +1,6 @@
 'use strict';
 /**
- * The Laravel template's "Decide the test tier" step (#512).
+ * The Laravel template's test tier (#512) — a block of the caller's `full` script since #724.
  *
  * The template dropped its `pull_request` trigger, and on a Tier B repo that run used to be the
  * only one where the Pest suite ran (`RUN_TESTS` was true on `base_ref == 'main'` or a push to
@@ -9,7 +9,7 @@
  *
  * Run: `node --test tools/lib/ci-laravel-run-tests.test.js`
  *
- * The step's own shell is extracted from the template and run with each env combination, the same
+ * The block's own shell is extracted from the template and run with each env combination, the same
  * approach ci-template-dedupe.test.js uses for its guard.
  */
 
@@ -23,22 +23,21 @@ const { spawnSync } = require('child_process');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const TEXT = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'ci-laravel.yml'), 'utf8');
 
-// The `run: |` body of the step named "Decide the test tier".
+// The test tier inside the caller's `full: |` script (#724: the step became part of the script the
+// reusable light lane runs) — the lines from `# ── the test tier` to `# ── end of the test tier`.
 function stepScript() {
   const lines = TEXT.split(/\r?\n/);
-  const at = lines.findIndex((l) => /^\s+- name: Decide the test tier\s*$/.test(l));
-  assert.notStrictEqual(at, -1, 'step "Decide the test tier" present');
-  const runAt = lines.findIndex((l, i) => i > at && /^\s+run: \|\s*$/.test(l));
-  const indent = lines[runAt].match(/^(\s*)/)[1].length + 2;
-  const body = [];
-  for (let i = runAt + 1; i < lines.length; i++) {
-    if (lines[i].trim() !== '' && lines[i].match(/^(\s*)/)[1].length < indent) break;
-    body.push(lines[i].slice(indent));
-  }
-  return body.join('\n');
+  const at = lines.findIndex((l) => /^\s+# ── the test tier \(#512\)/.test(l));
+  assert.notStrictEqual(at, -1, 'the test tier block is in the full script');
+  const endAt = lines.findIndex((l, i) => i > at && /^\s+# ── end of the test tier\s*$/.test(l));
+  assert.notStrictEqual(endAt, -1, 'the test tier block is closed');
+  const indent = lines[at].match(/^(\s*)/)[1].length;
+  return lines.slice(at, endAt).map((l) => l.slice(indent)).join('\n') + '\necho "run_tests=$run" >> "$GITHUB_OUTPUT"\n';
 }
 
-// Run the step in a checkout whose project.yml carries `descriptor` (null = no descriptor file).
+// Run the tier in a checkout whose project.yml carries `descriptor` (null = no descriptor file). The
+// called workflow's shell sees the CALLER's github context through the runner's env (GITHUB_*), and
+// the default branch only through the event payload.
 function decide({ declared = 'auto', event = 'push', ref = 'refs/heads/feat/x-1', baseRef = '', defaultBranch = 'main', descriptor = null }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-tier-'));
   try {
@@ -48,10 +47,13 @@ function decide({ declared = 'auto', event = 'push', ref = 'refs/heads/feat/x-1'
     }
     const out = path.join(dir, 'out');
     fs.writeFileSync(out, '');
-    const r = spawnSync('sh', ['-c', stepScript()], {
+    const ev = path.join(dir, 'event.json');
+    fs.writeFileSync(ev, JSON.stringify({ ref, repository: { name: 'r', default_branch: defaultBranch } }, null, 2));
+    const r = spawnSync('bash', ['-eo', 'pipefail', '-c', stepScript()], {
       cwd: dir,
       encoding: 'utf8',
-      env: { PATH: process.env.PATH, DECLARED: declared, EVENT: event, REF: ref, BASE_REF: baseRef, DEFAULT_BRANCH: defaultBranch, GITHUB_OUTPUT: out },
+      env: { PATH: process.env.PATH, RUN_TESTS: declared, GITHUB_EVENT_NAME: event, GITHUB_REF: ref, GITHUB_BASE_REF: baseRef,
+        GITHUB_WORKSPACE: dir, GITHUB_EVENT_PATH: ev, GITHUB_OUTPUT: out },
     });
     assert.strictEqual(r.status, 0, r.stderr);
     return fs.readFileSync(out, 'utf8').trim();
@@ -63,14 +65,16 @@ function decide({ declared = 'auto', event = 'push', ref = 'refs/heads/feat/x-1'
 const TIER_B = 'tier: B\ntrunk: main\n';
 const TIER_C = 'tier: C\ntrunk: dev\n';
 
-test('workflow env declares RUN_TESTS as auto, not as an expression', () => {
-  assert.match(TEXT, /^  RUN_TESTS: auto$/m);
-  assert.ok(!/^  RUN_TESTS: \$\{\{/m.test(TEXT), 'no expression left at workflow level');
+test('the full script declares RUN_TESTS as auto, an edit point (#724)', () => {
+  assert.match(TEXT, /^ {8}# EDIT: whether the Pest suite runs\./m);
+  assert.match(TEXT, /^ {8}RUN_TESTS=auto$/m);
+  assert.ok(!/^  RUN_TESTS:/m.test(TEXT), 'no workflow-level env left — a called workflow would not see it');
 });
 
-test('every test step reads the step output, not the env', () => {
-  assert.ok(!/if: env\.RUN_TESTS/.test(TEXT));
-  assert.match(TEXT, /if: steps\.tier\.outputs\.run_tests == 'true'/);
+test('the dev dependencies, migrate and the suite all follow the tier', () => {
+  assert.match(TEXT, /if \[ "\$run" = true \]; then\n\s+composer install --no-interaction/);
+  assert.match(TEXT, /composer install --no-dev /);
+  assert.match(TEXT, /if \[ "\$run" = true \]; then\n(\s+#.*\n)*\s+php artisan migrate --force/);
 });
 
 test('main-trunk repo: a push to any branch runs the suite (the PR run used to carry it)', () => {

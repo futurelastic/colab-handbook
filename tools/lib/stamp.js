@@ -472,9 +472,15 @@ function parseClaudeStamp(text) {
  */
 const WORKFLOW_FINGERPRINTS = [
   // Header lines — verbatim template prose, and self-attributing.
-  { marker: 'CI (Node) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-node' },
-  { marker: 'CI (Laravel) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-laravel' },
-  { marker: 'CI (Python) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-python' },
+  { marker: 'CI (Node) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-node', legacy: '#724' },
+  { marker: 'CI (Laravel) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-laravel', legacy: '#724' },
+  { marker: 'CI (Python) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-python', legacy: '#724' },
+  // #724: the light templates are callers of ci-light.yml now. The full-copy markers marked `legacy`
+  // (these headers, and the step names below) no longer occur in their template, and stay on purpose:
+  // the unstamped copies already out there still carry them, and are still that template's lineage.
+  { marker: "CI (Node) — CALLER of the handbook's reusable workflow. Copy me into your repo", kind: 'text', template: 'ci-node' },
+  { marker: "CI (Laravel) — CALLER of the handbook's reusable workflow. Copy me into your repo", kind: 'text', template: 'ci-laravel' },
+  { marker: "CI (Python) — CALLER of the handbook's reusable workflow. Copy me into your repo", kind: 'text', template: 'ci-python' },
   { marker: 'CI heavy lane (Node) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-node-heavy' },
   { marker: 'CI heavy lane (Laravel) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-laravel-heavy' },
   { marker: 'CI heavy lane (Python) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-python-heavy' },
@@ -488,12 +494,12 @@ const WORKFLOW_FINGERPRINTS = [
   // header. A template that omits it is invisible here, which is worth knowing when writing one.
   { marker: '— TEMPLATE. Copy me into your repo', kind: 'text', template: null },
   // Step names we coined, one per template.
-  { marker: 'Resolve Node version', kind: 'step', template: 'ci-node' },
-  { marker: 'Detect optional scripts', kind: 'step', template: 'ci-node' },
-  { marker: 'Resolve toolchain versions', kind: 'step', template: 'ci-laravel' },
-  { marker: 'Prepare throwaway env for build-time codegen (wayfinder)', kind: 'step', template: 'ci-laravel' },
-  { marker: 'Resolve Python version', kind: 'step', template: 'ci-python' },
-  { marker: 'Detect optional tooling', kind: 'step', template: 'ci-python' },
+  { marker: 'Resolve Node version', kind: 'step', template: 'ci-node', legacy: '#724' },
+  { marker: 'Detect optional scripts', kind: 'step', template: 'ci-node', legacy: '#724' },
+  { marker: 'Resolve toolchain versions', kind: 'step', template: 'ci-laravel', legacy: '#724' },
+  { marker: 'Prepare throwaway env for build-time codegen (wayfinder)', kind: 'step', template: 'ci-laravel', legacy: '#724' },
+  { marker: 'Resolve Python version', kind: 'step', template: 'ci-python', legacy: '#724' },
+  { marker: 'Detect optional tooling', kind: 'step', template: 'ci-python', legacy: '#724' },
   { marker: 'Build grouped release summary', kind: 'step', template: 'release-tag' },
   { marker: 'Resolve tag and previous tag', kind: 'step', template: 'release-tag' },
   // release-auto (#425): its two decision steps. The publish step's name is deliberately not a

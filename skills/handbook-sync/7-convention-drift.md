@@ -175,15 +175,19 @@ it is **drift, not customisation**: a copy changes only through this sync, so a 
 it (#717 did not — measured 2026-11-09 → 11-11, the gate was missing in six adopters and present but
 never skipping in three). The audit reports two shapes, both starting `drift:`, both `warn` — except that a
 copied gate is a *suggestion* until the handbook's latest release tag carries `ci-light.yml` (a caller pins
-a tag, so before that there is nothing to switch to; `colab template ci-call` warns the same way):
+a tag, so before that there is nothing to switch to; `colab template ci-<stack>` then writes that release's
+own full copy, and `colab template ci-call` warns — #724):
 
 - **A copied gate** — a workflow carrying the guard's step (`Look for a green run of this workflow at
-  this sha or tree`) or its `GUARD_NAME` env, with no call to `ci-light.yml`. Offer the caller:
-  `colab template ci-call --dest .github/workflows/ci.yml` writes it with this repo's trunk refs and the
-  handbook release it is stamped with, then move the copy's own commands into its `with:` block
-  (`install`, `quick`, `full`) and its own jobs (deploy, a migration round-trip) beside the call —
-  behind the gate with `needs: ci` + `if: needs.ci.outputs.tested != 'true'`, or ungated and named in
-  `trunk-only-jobs`. A proposal per repo, never a blind overwrite: the copy's edits are the repo's.
+  this sha or tree`) or its `GUARD_NAME` env, with no call to `ci-light.yml`. Offer the caller. A
+  **pristine** stamped copy of `ci-node`, `ci-python` or `ci-laravel` needs nothing by hand — since #724
+  those templates *are* callers, and `colab update --apply` moves the copy onto one. An **edited** copy:
+  `colab template ci-<stack> --dest .github/workflows/ci.yml --force` (or `ci-call` for a hybrid) writes
+  the caller with this repo's trunk refs and the handbook release it is stamped with, then move the copy's
+  own commands into its `with:` block (`install`, `quick`, `full`) and its own jobs (deploy, a migration
+  round-trip) beside the call — behind the gate with `needs: ci` +
+  `if: !cancelled() && needs.ci.result == 'success' && needs.ci.outputs.tested != 'true'`, or ungated and
+  named in `trunk-only-jobs`. A proposal per repo, never a blind overwrite: the copy's edits are the repo's.
 - **A gate that never skips** — of the guarded workflow's last 10 trunk push runs none skipped,
   though at least one landed a tree a push run on another ref had already passed green. Read from run
   history, so it needs GitHub (silent under `--offline`); it catches the gate that *looks* right — a

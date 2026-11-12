@@ -11,12 +11,13 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const GUARD = g.GUARD_NAME;
 
-test('every copied light template carries a gate copy; the caller template and the self-test are callers', () => {
-  for (const f of ['templates/ci-node.yml', 'templates/ci-python.yml', 'templates/ci-laravel.yml', '.github/workflows/ci.yml']) {
+test('every light template and the self-test are callers; this repo\'s own ci.yml carries a gate copy', () => {
+  for (const f of ['.github/workflows/ci.yml']) {
     assert.ok(g.hasCopiedGate(read(f)), `${f} should read as a copied gate`);
     assert.ok(!g.isCiLightCaller(read(f)), `${f} is not a caller`);
   }
-  for (const f of ['templates/ci-call.yml', '.github/workflows/ci-light-selftest.yml']) {
+  // #724: the light templates call the reusable workflow — a fresh copy of one is never drift.
+  for (const f of ['templates/ci-node.yml', 'templates/ci-python.yml', 'templates/ci-laravel.yml', 'templates/ci-call.yml', '.github/workflows/ci-light-selftest.yml']) {
     assert.ok(g.isCiLightCaller(read(f)), `${f} should read as a caller`);
     assert.ok(!g.hasCopiedGate(read(f)), `${f} carries no copy`);
   }
