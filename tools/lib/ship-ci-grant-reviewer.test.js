@@ -159,3 +159,127 @@ test('the human form is unchanged under the opt-in: no role still needs COLAB_HU
   assert.notStrictEqual(r.code, 0);
   assert.match(r.err, /requires a human/);
 });
+
+// ---- #730: the mint path end to end, through a scripted gh ----
+//
+// The fixture's gh above refuses everything, so the tests above stop at the first tracker read. These
+// script the reads `colab ci-grant --role ci-reviewer` makes past it: the issue, the label list, the
+// runs at a sha (`gh run list --branch`, the fallback after the REST read — which this stub refuses —
+// in the same row shape tools/lib/git.js ghRunsForCommit asks for), and each run's jobs
+// (`gh run view <id> --json jobs`). Every other call fails and is logged, so a write shows in the log.
+
+function scriptGh(fx, script) {
+  const dataPath = path.join(fx.root, 'gh-script.json');
+  const logPath = path.join(fx.root, 'gh-log.txt');
+  fs.writeFileSync(dataPath, JSON.stringify(script));
+  const js = path.join(fx.root, 'gh-script.js');
+  fs.writeFileSync(js, `
+const fs = require('fs');
+const d = JSON.parse(fs.readFileSync(${JSON.stringify(dataPath)}, 'utf8'));
+const a = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, a.join(' ') + '\\n');
+const out = (v) => { process.stdout.write(typeof v === 'string' ? v : JSON.stringify(v)); process.exit(0); };
+if (a[0] === '--version') out('gh version 0.0.0 (fixture)\\n');
+if (a[0] === 'auth') { process.stderr.write('Logged in to github.com (fixture)\\n'); process.exit(0); }
+if (a[0] === 'issue' && a[1] === 'view') out(d.issue);
+if (a[0] === 'issue' && (a[1] === 'edit' || a[1] === 'comment')) out('https://tracker.invalid/issues/7\\n');
+if (a[0] === 'label' && a[1] === 'list') out(d.labels.join('\\n') + '\\n');
+// Like gh, a list answers only the --json fields it was asked for (a row field nobody requested
+// must not reach the caller — #730's attempt is exactly such a field).
+const fields = a.includes('--json') ? a[a.indexOf('--json') + 1].split(',') : null;
+const only = (rows) => (fields ? rows.map((r) => Object.fromEntries(fields.filter((f) => f in r).map((f) => [f, r[f]]))) : rows);
+if (a[0] === 'run' && a[1] === 'list' && a[2] === '--branch') out(only(d.runs[a[3]] || []));
+if (a[0] === 'run' && a[1] === 'view' && a.includes('jobs')) {
+  const j = d.jobs[a[2]];
+  if (j) out({ jobs: j });
+}
+process.stderr.write('fixture gh: refusing ' + a.join(' ') + '\\n');
+process.exit(1);
+`);
+  fs.writeFileSync(path.join(fx.bin, 'gh'), `#!/bin/sh\nexec node ${JSON.stringify(js)} "$@"\n`, { mode: 0o755 });
+  return () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '');
+}
+
+const CANCELLED_W = 'instruction-files';
+const T0 = '2026-11-12T08:00:00Z';
+const T1 = '2026-11-12T08:10:00Z';
+function ghRun(sha, branchName, over) {
+  return { headSha: sha, status: 'completed', conclusion: 'success', createdAt: T0, updatedAt: T1, databaseId: 1,
+    workflowName: 'CI', workflowDatabaseId: 11, event: 'push', headBranch: branchName, attempt: 1, ...over };
+}
+const ghJob = (over) => ({ name: 'check', status: 'completed', conclusion: 'success', startedAt: T0, completedAt: T1,
+  steps: [{ name: 'Set up job', status: 'completed', conclusion: 'success' }], ...over });
+
+/** Trunk red ONLY by a cancelled run of CANCELLED_W at `attempt`; the branch's run of it as `branchW`. */
+function cancelledTrunk(fx, { attempt = 2, branchW = {} } = {}) {
+  const head = branch(fx, 'fix/trunk-red-7');
+  const red = fx.g(fx.work, 'rev-parse', 'main').trim();
+  const bW = { conclusion: 'success', job: 'success', ...branchW };
+  const log = scriptGh(fx, {
+    issue: { state: 'OPEN', title: 'TRUNK RED: instruction-files cancelled on main', labels: [] },
+    labels: ['ci-granted', 'in-progress'],
+    runs: {
+      main: [
+        ghRun(red, 'main', { databaseId: 101, workflowName: CANCELLED_W, workflowDatabaseId: 12, conclusion: 'cancelled', attempt }),
+        ghRun(red, 'main', { databaseId: 102 }),
+      ],
+      'fix/trunk-red-7': [
+        ghRun(head, 'fix/trunk-red-7', { databaseId: 201, workflowName: CANCELLED_W, workflowDatabaseId: 12, conclusion: bW.conclusion }),
+        ghRun(head, 'fix/trunk-red-7', { databaseId: 202 }),
+      ],
+    },
+    jobs: {
+      101: [ghJob({ conclusion: 'cancelled', steps: [{ name: 'Set up job', status: 'completed', conclusion: 'success' },
+        { name: 'Run actions/checkout@v4', status: 'completed', conclusion: 'cancelled' }] })],
+      102: [ghJob({ name: 'test' })],
+      201: [ghJob({ conclusion: bW.job })],
+      202: [ghJob({ name: 'test' })],
+    },
+  });
+  return { head, red, log };
+}
+const CANCELLED_REVIEW = ['--role', 'ci-reviewer', '--reviewer', 'lucy', '--verdict', 'pass', '--cures', `${CANCELLED_W} / check`];
+
+test('#730: a spent cancelled trunk run is reviewer-grantable when the branch\'s own run of it succeeded at its head', () => {
+  const fx = fixture(OPT_IN_YML);
+  const { head, red, log } = cancelledTrunk(fx);
+  const r = colab(fx, ['ci-grant', '7', '--branch', 'fix/trunk-red-7', ...CANCELLED_REVIEW, '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /Recorded a ci-reviewer CI grant on #7/);
+  assert.match(r.out, new RegExp(`Cures: ${CANCELLED_W} / check`));
+  const calls = log();
+  assert.match(calls, /^issue comment 7 /m, 'the grant was posted');
+  assert.match(calls, /^run view 101 --json jobs$/m, 'the spent cancelled run\'s jobs were read');
+  assert.match(calls, /^run view 201 --json jobs$/m, 'the branch\'s own run of the workflow was read');
+  assert.ok(head && red);
+});
+
+test('#730: refused — nothing posted — when the branch\'s run of that workflow is itself skipped', () => {
+  const fx = fixture(OPT_IN_YML);
+  const { log } = cancelledTrunk(fx, { branchW: { conclusion: 'skipped', job: 'skipped' } });
+  const r = colab(fx, ['ci-grant', '7', '--branch', 'fix/trunk-red-7', ...CANCELLED_REVIEW, '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out);
+  assert.match(r.err, /instruction-files \/ check` \(run skipped \/ job skipped\)/);
+  assert.match(r.err, /nothing was posted/);
+  assert.doesNotMatch(log(), /^issue (comment|edit)/m);
+});
+
+test('#730: refused — nothing posted — when the branch\'s run of that workflow is itself cancelled', () => {
+  const fx = fixture(OPT_IN_YML);
+  const { log } = cancelledTrunk(fx, { branchW: { conclusion: 'cancelled', job: 'cancelled' } });
+  const r = colab(fx, ['ci-grant', '7', '--branch', 'fix/trunk-red-7', ...CANCELLED_REVIEW, '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out);
+  // Either door may say it first: the branch is not green at its head (#628 reads a cancelled-only
+  // workflow as not-green there too), or the per-workflow proof. Neither posts.
+  assert.match(r.err, /no completed, successful CI run|did not succeed at its head/);
+  assert.doesNotMatch(log(), /^issue (comment|edit)/m);
+});
+
+test('#730: a cancelled run on its FIRST attempt stays out of the red set — the re-run is the next step', () => {
+  const fx = fixture(OPT_IN_YML);
+  const { log } = cancelledTrunk(fx, { attempt: 1 });
+  const r = colab(fx, ['ci-grant', '7', '--branch', 'fix/trunk-red-7', ...CANCELLED_REVIEW, '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out);
+  assert.match(r.err, /could not be measured|not red on trunk/);
+  assert.doesNotMatch(log(), /^issue (comment|edit)/m);
+});

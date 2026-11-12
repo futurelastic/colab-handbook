@@ -5283,11 +5283,16 @@ function cmdCiGrantReviewer(num, opts) {
     throw new UserError(`"${opts.branch}" has no completed, successful CI run at ${shortSha(head)} (status=${evRun.status} conclusion=${evRun.conclusion || 'none'}) — a reviewer grant needs the branch green at its exact head`);
   }
 
-  // Every claimed cure is a red check on trunk at the red sha.
-  const redRunJobs = trunkRedRunJobs(repoAbs, trunk, redSha);
-  const redJobs = redRunJobs === null ? null : ciCure.redJobSet(redRunJobs);
+  // Every claimed cure is a red check on trunk at the red sha — the reviewer's red set (#730), which
+  // also names the jobs of a cancelled run whose re-run is spent; each such cure is then proven on the
+  // branch's own run of the same workflow and job at the head.
+  const redJobs = trunkReviewerRedJobs(repoAbs, trunk, redSha);
   const cr = ciGrant.curesAreRed(ciGrant.parseCures(rec.cures), redJobs);
   if (!cr.ok) throw new UserError(`${cr.reason}; nothing was posted`);
+  const proof = ciGrant.spentCancelledCuresProven(cr.matched, () => branchHeadJobs(repoAbs, opts.branch, head));
+  if (!proof.ok) {
+    throw new UserError(`${proof.reason}; nothing was posted. Re-run once that workflow has succeeded on the branch head, or a human grants it: \`COLAB_HUMAN=1 colab ci-grant ${num} --branch ${opts.branch}\``);
+  }
 
   rec.red = redSha.toLowerCase();
   const v = ciGrant.validateReviewRecord(rec);
@@ -12795,10 +12800,10 @@ function shipCiGrants(repoAbs, gh, issues, branch, trunk, redSha) {
     // host's revoke window, and trunk's red checks at redSha, read lazily and at most once.
     policy: ciGrant.parseGrantPolicy(projectDocAt(repoAbs, trunk)).policy,
     now: Date.now(),
-    redJobs: () => {
-      const jobs = trunkRedRunJobs(repoAbs, trunk, redSha);
-      return jobs === null ? null : ciCure.redJobSet(jobs);
-    },
+    // #730: the reviewer's red set (spent cancelled runs included), and the branch head's jobs that
+    // prove a spent cancelled cure — the same two reads `colab ci-grant --role ci-reviewer` mints on.
+    redJobs: () => trunkReviewerRedJobs(repoAbs, trunk, redSha),
+    branchJobs: () => (evRun && evRun.sha ? branchHeadJobs(repoAbs, branch, evRun.sha) : null),
   });
 }
 
@@ -12988,6 +12993,49 @@ function trunkRedRunJobs(repoAbs, trunk, sha, limit) {
     const jobs = git.ghRunJobs(repoAbs, r.databaseId);
     if (jobs === null) return null;
     out.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '', workflowId: r.workflowId ?? null })));
+  }
+  return out;
+}
+
+/**
+ * #730 — the red-job set the REVIEWER grant reads at `sha` (mint and ship; the cure rule keeps
+ * `trunkRedRunJobs` + `redJobSet`). Same run read as `trunkRedRunJobs`, plus the jobs of every
+ * cancelled run whose one re-run is spent (ci-cure.js `spentCancelledRuns`), shaped by the pure
+ * `reviewerRedJobSet`. `null` on any failed read, or when nothing red can be named.
+ */
+function trunkReviewerRedJobs(repoAbs, trunk, sha) {
+  const runsAll = git.ghRunsForCommit(repoAbs, trunk, sha);
+  const runs = runsAll === null ? null : runsAll.filter(git.isRepoOwnedRun);
+  if (runs === null || runs.length === 0) return null;
+  const failedRuns = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success' && r.conclusion !== 'cancelled');
+  const jobsOf = (list) => {
+    const out = [];
+    for (const r of list) {
+      const jobs = git.ghRunJobs(repoAbs, r.databaseId);
+      if (jobs === null) return null;
+      out.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '', workflowId: r.workflowId ?? null })));
+    }
+    return out;
+  };
+  const failedRunJobs = jobsOf(failedRuns);
+  const cancelledRunJobs = jobsOf(ciCure.spentCancelledRuns(runs));
+  if (failedRunJobs === null || cancelledRunJobs === null) return null;
+  return ciCure.reviewerRedJobSet({ failedRunJobs, cancelledRunJobs });
+}
+
+/**
+ * #730 — every job of every run on `branch` at `sha`, tagged with its run's `workflowName`,
+ * `runStatus` and `runConclusion`: what ci-grant.js `spentCancelledCuresProven` reads. `null` on
+ * any failed read — never an empty set standing for "could not tell".
+ */
+function branchHeadJobs(repoAbs, branch, sha) {
+  const runs = git.ghRunsForCommit(repoAbs, branch, sha);
+  if (runs === null) return null;
+  const out = [];
+  for (const r of runs.filter(git.isRepoOwnedRun)) {
+    const jobs = git.ghRunJobs(repoAbs, r.databaseId);
+    if (jobs === null) return null;
+    out.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '', runStatus: r.status || null, runConclusion: r.conclusion || null })));
   }
   return out;
 }

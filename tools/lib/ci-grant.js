@@ -259,10 +259,10 @@ function syncedFrom(opts, headSha, redSha, evidenceSha) {
  * `records` maps issue number → the `ghIssueView` result for that issue, or `null` on a failed
  * read (the caller's job, not this function's).
  *
- * `opts` (#504) additionally carries `{ policy, now, redJobs }` for the reviewer role: per issue a
- * live human grant wins, unchanged; otherwise an issue carrying a live reviewer grant is judged by
- * evaluateReviewerIssue (records must then include `title`). `redJobs` is a thunk, called at most
- * once per set. A granted reviewer entry carries `role: 'ci-reviewer'`, `reviewer`, `head`, `cures`.
+ * `opts` (#504) additionally carries `{ policy, now, redJobs, branchJobs }` for the reviewer role: per
+ * issue a live human grant wins, unchanged; otherwise an issue carrying a live reviewer grant is
+ * judged by evaluateReviewerIssue (records must then include `title`). `redJobs` and `branchJobs`
+ * (#730) are thunks, each called at most once per set. A granted reviewer entry carries `role: 'ci-reviewer'`, `reviewer`, `head`, `cures`.
  */
 function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, labelName, opts) {
   const list = Array.isArray(issues) ? issues : [];
@@ -281,6 +281,14 @@ function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, 
     }
     return redJobsMemo;
   };
+  // #730: the branch head's jobs, read only when a cure names a spent cancelled check.
+  let branchJobsMemo;
+  const branchJobs = () => {
+    if (branchJobsMemo === undefined) {
+      try { branchJobsMemo = opts && typeof opts.branchJobs === 'function' ? opts.branchJobs() : null; } catch (_) { branchJobsMemo = null; }
+    }
+    return branchJobsMemo;
+  };
   for (const n of list) {
     const rec = records ? records[n] : null;
     const v = evaluateIssue(rec, branch, trunk, redTrunkSha, evidence, n, labelName, opts);
@@ -294,7 +302,7 @@ function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, 
     const hasReviewer = !!rec && liveGrantRecords(rec.comments).some((g) => g.role !== 'human');
     if (!hasReviewer) { missing.push({ issue: n, reason: v.reason }); continue; }
     const r = evaluateReviewerIssue(rec, { branch, trunk, redTrunkSha, evidence, issueNum: n, labelName,
-      policy: opts && opts.policy, now: opts && opts.now, redJobs });
+      policy: opts && opts.policy, now: opts && opts.now, redJobs, branchJobs });
     if (r.ok) {
       granted.push({ issue: n, role: REVIEWER_ROLE, reviewer: r.grant.reviewer, head: r.grant.head,
         branch: r.grant.branch, by: r.grant.login, at: r.grant.at, redSha: r.grant.redSha, evidenceSha: r.grant.head,
@@ -535,7 +543,40 @@ function curesAreRed(cures, redJobs) {
     return { ok: false, unmatched,
       reason: `the review claims to cure ${unmatched.map((c) => `\`${c}\``).join(', ')}, which ${unmatched.length === 1 ? 'is' : 'are'} not red on trunk at that sha (red: ${red})` };
   }
-  return { ok: true, unmatched: [], reason: '' };
+  // #730: the red job each cure names, so a caller can prove the spent-cancelled ones on the branch.
+  const matched = list.map((c) => redJobs.find((j) => checkLabel(j) === c) || redJobs.find((j) => j.name === c));
+  return { ok: true, unmatched: [], matched, reason: '' };
+}
+
+/**
+ * #730 — a cure naming a spent cancelled check (ci-cure.js `reviewerRedJobSet`, `spentCancelled`)
+ * is proven only by the branch's OWN run of that workflow: a completed `success` run whose job of the
+ * same name concluded `success` too. "The branch's CI is green" is not enough here — the trunk check
+ * verified nothing, so a branch run of it that was itself cancelled or skipped proves nothing either,
+ * and a green sibling workflow must never stand in for it.
+ *
+ * `matched` is curesAreRed's `matched`; `branchJobs` is every job at the branch head, each tagged with
+ * its run's `workflowName`, `runStatus` and `runConclusion` — or null when it could not be read.
+ * Returns `{ ok, reason }`; ok without reading anything when no cure names a spent cancelled check.
+ */
+function spentCancelledCuresProven(matched, branchJobs) {
+  const wanted = (Array.isArray(matched) ? matched : []).filter((j) => j && j.spentCancelled);
+  if (wanted.length === 0) return { ok: true, reason: '' };
+  const rows = typeof branchJobs === 'function' ? branchJobs() : branchJobs;
+  if (!Array.isArray(rows)) {
+    return { ok: false, reason: `the branch head's jobs could not be read — ${wanted.map((j) => `\`${checkLabel(j)}\``).join(', ')} never finished on trunk, so only the branch's own run of it can prove the cure, and an unread run proves nothing` };
+  }
+  const unproven = wanted.filter((red) => !rows.some((b) => b && (b.workflowName || '') === (red.workflowName || '') && b.name === red.name
+    && b.runStatus === 'completed' && b.runConclusion === 'success' && b.status === 'completed' && b.conclusion === 'success'));
+  if (unproven.length) {
+    const seen = (red) => {
+      const same = rows.filter((b) => b && (b.workflowName || '') === (red.workflowName || '') && b.name === red.name);
+      return same.length ? same.map((b) => `run ${b.runConclusion || b.runStatus || '?'} / job ${b.conclusion || b.status || '?'}`).join(', ') : 'no such job at the head';
+    };
+    return { ok: false,
+      reason: `${unproven.map((j) => `\`${checkLabel(j)}\` (${seen(j)})`).join(', ')} never finished on trunk (its re-run was spent cancelled), and the branch's own run of it did not succeed at its head — a cancelled or skipped run proves nothing, on either side` };
+  }
+  return { ok: true, reason: '' };
 }
 
 function titleIsTrunkRed(title) {
@@ -544,10 +585,12 @@ function titleIsTrunkRed(title) {
 
 /**
  * The reviewer-grant verdict for one issue on a ship. `ctx` = { branch, trunk, redTrunkSha, evidence,
- * issueNum, labelName, policy, now, redJobs } where `evidence` is `{ok, sha}` for the branch's CURRENT
- * remote head (or null on a failed read), `now` is an ISO instant or ms (absent = Date.now()), and
- * `redJobs` is a function returning the red-job set at `redTrunkSha` (or null) — called only once
- * everything cheaper has passed. Checks, cheapest first, each with its own reason. `record` must be a
+ * issueNum, labelName, policy, now, redJobs, branchJobs } where `evidence` is `{ok, sha}` for the
+ * branch's CURRENT remote head (or null on a failed read), `now` is an ISO instant or ms (absent =
+ * Date.now()), `redJobs` is a function returning the red-job set at `redTrunkSha` (or null) — called
+ * only once everything cheaper has passed — and `branchJobs` (#730) a function returning the branch
+ * head's jobs for `spentCancelledCuresProven`, called only when a cure names a spent cancelled
+ * check (absent reads as unmeasured, which refuses such a cure). Checks, cheapest first, each with its own reason. `record` must be a
  * ghIssueView result carrying `title`. Returns { ok, grant, reason }.
  */
 function evaluateReviewerIssue(record, ctx) {
@@ -588,6 +631,13 @@ function evaluateReviewerIssue(record, ctx) {
   try { redJobs = typeof c.redJobs === 'function' ? c.redJobs() : (c.redJobs === undefined ? null : c.redJobs); } catch (_) { redJobs = null; }
   const cr = curesAreRed(parseCures(g.record.cures), redJobs);
   if (!cr.ok) return no(`#${issue}: ${cr.reason}`, g);
+  // #730: a spent cancelled cure must still be proven on the branch's own run, at ship as at mint.
+  let branchJobs = null;
+  const pr = spentCancelledCuresProven(cr.matched, () => {
+    try { branchJobs = typeof c.branchJobs === 'function' ? c.branchJobs() : (c.branchJobs === undefined ? null : c.branchJobs); } catch (_) { branchJobs = null; }
+    return branchJobs;
+  });
+  if (!pr.ok) return no(`#${issue}: ${pr.reason}`, g);
   return { issue, ok: true, grant: g, reason: '' };
 }
 
@@ -599,5 +649,5 @@ module.exports = {
   // #504 — the reviewer role
   REVIEW_GRANT_MARK, REVIEW_GRANT_RE, REVIEWER_ROLE, GRANT_ROLES, REVIEW_RECORD_FIELDS, TRUNK_RED_TITLE_PREFIX,
   GRANT_POLICIES, parseGrantPolicy, parseCures, formatCures, validateReviewRecord, reviewGrantCommentBody,
-  parseReviewGrant, liveGrantRecords, checkLabel, curesAreRed, titleIsTrunkRed, evaluateReviewerIssue,
+  parseReviewGrant, liveGrantRecords, checkLabel, curesAreRed, spentCancelledCuresProven, titleIsTrunkRed, evaluateReviewerIssue,
 };

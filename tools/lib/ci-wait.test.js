@@ -290,6 +290,11 @@ test('#510: restRow carries the workflow FILE id as workflowId (null when absent
   assert.strictEqual(cw.restRow({ id: 1, name: 'CI', head_sha: 'a' }).workflowId, null);
 });
 
+test('#730: restRow carries run_attempt as attempt (null when absent)', () => {
+  assert.strictEqual(cw.restRow({ id: 1, name: 'CI', run_attempt: 2, head_sha: 'a' }).attempt, 2);
+  assert.strictEqual(cw.restRow({ id: 1, name: 'CI', head_sha: 'a' }).attempt, null);
+});
+
 test('#529 CLI: an abbreviated --sha is resolved to the full sha before polling', () => {
   const fx = fixture([]);
   execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'x'], { cwd: fx.work });

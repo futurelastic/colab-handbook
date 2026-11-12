@@ -800,6 +800,52 @@ function redJobSet(redRunJobs) {
   return shaped.redJobs.map((j) => ({ name: j.name, workflowName: j.workflowName }));
 }
 
+/** Run conclusions that executed nothing — a run of a workflow carrying only these never finished. */
+const NEUTRAL_RUN_CONCLUSIONS = new Set(['cancelled', 'skipped']);
+
+/**
+ * #730 — the runs at one trunk sha that make it red by being cancelled with their one keyed re-run
+ * already spent (#628 asks for exactly one re-run): a NAMED, completed, `cancelled` run whose
+ * `attempt` is greater than 1, in a workflow with no other run at the sha that ran (anything but
+ * `cancelled`/`skipped` — such a run supersedes it, #92). An unknown `attempt` is not a spent one:
+ * the re-run is still the next step, so the run stays out. PURE; `runs` are run rows (repo-owned).
+ */
+function spentCancelledRuns(runs) {
+  if (!Array.isArray(runs)) return [];
+  const ran = new Set(runs.filter((r) => r && r.workflowName && !NEUTRAL_RUN_CONCLUSIONS.has(r.conclusion)).map((r) => r.workflowName));
+  return runs.filter((r) => r && r.workflowName && r.status === 'completed' && r.conclusion === 'cancelled'
+    && Number(r.attempt) > 1 && !ran.has(r.workflowName));
+}
+
+/**
+ * #730 — the red-job set the REVIEWER grant reads (mint and ship), never the cure rule's: the cure
+ * path's `redJobSet` over the failed runs, plus every job of a spent cancelled run
+ * (`spentCancelledRuns`) that did not pass or skip. Those carry `spentCancelled: true`, which makes the
+ * grant prove each such cure on the branch's own run of the same workflow and job
+ * (ci-grant.js `spentCancelledCuresProven`) — a cancelled check verified nothing on either side, so
+ * the branch's run must have.
+ *
+ * `failedRunJobs` / `cancelledRunJobs` are the raw job rows (tagged `workflowName`) of each kind of
+ * run. `null` when either is not an array or any job is unfinished (unmeasurable), and when both sets
+ * are empty — the same "nothing red could be named" answer the cure path gives. PURE.
+ */
+function reviewerRedJobSet({ failedRunJobs, cancelledRunJobs } = {}) {
+  if (!Array.isArray(failedRunJobs) || !Array.isArray(cancelledRunJobs)) return null;
+  const failed = failedRunJobs.length ? redJobSet(failedRunJobs) : [];
+  if (failed === null) return null;
+  if (cancelledRunJobs.some((j) => !j || j.status !== 'completed')) return null;
+  const out = [...failed];
+  const seen = new Set(out.map(jobKey));
+  for (const j of cancelledRunJobs) {
+    if (j.conclusion === 'success' || j.conclusion === 'skipped') continue;
+    const red = { name: j.name, workflowName: j.workflowName || '', spentCancelled: true };
+    if (seen.has(jobKey(red))) continue;
+    seen.add(jobKey(red));
+    out.push(red);
+  }
+  return out.length ? out : null;
+}
+
 /**
  * Progress past condition 3 (#477) — PURE. `prior` is the red-job set at the red sha the most recent
  * exemption on this continuous red was measured against; `current` the red-job set at trunk's red
@@ -1051,5 +1097,5 @@ function admittedText(admitted) {
 
 module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, manifestStepProof, shapeJobEvidence, dryRunDispatchPlan,
   cureDispatchPlan, dispatchEvidence,
-  priorRedShaFromMessage, redJobSet, redSetShrank,
+  priorRedShaFromMessage, redJobSet, redSetShrank, spentCancelledRuns, reviewerRedJobSet,
   WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL, PYTHON_MANIFEST_REFUSAL, PUBLISH_STEP_MARKER, DRY_RUN_STEP, DRY_RUN_CONDITIONAL_STEPS };

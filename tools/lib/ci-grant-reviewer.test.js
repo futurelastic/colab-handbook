@@ -176,3 +176,116 @@ test('liveGrantRecords: lists human and reviewer grants together, oldest first',
   assert.strictEqual(all[1].valid, true);
   assert.strictEqual(all[1].passing, true);
 });
+
+// ---- #730: a trunk red that is only a cancelled run whose one re-run is spent ----
+
+const cure = require('./ci-cure.js');
+
+const W = 'instruction-files';
+const runRow = (over = {}) => ({ workflowName: W, status: 'completed', conclusion: 'cancelled', attempt: 2, databaseId: 101, ...over });
+const job = (over = {}) => ({ name: 'check', status: 'completed', conclusion: 'cancelled', ...over });
+/** The branch head's job rows as tools/colab branchHeadJobs tags them. */
+const bjob = (over = {}) => ({ name: 'check', workflowName: W, status: 'completed', conclusion: 'success',
+  runStatus: 'completed', runConclusion: 'success', ...over });
+const CANCELLED_RED = cure.reviewerRedJobSet({ failedRunJobs: [], cancelledRunJobs: [{ ...job(), workflowName: W }] });
+
+test('#730 spentCancelledRuns: only a named, completed, cancelled run past its first attempt, with no run of its workflow that ran', () => {
+  assert.strictEqual(cure.spentCancelledRuns([runRow()]).length, 1);
+  assert.strictEqual(cure.spentCancelledRuns([runRow({ attempt: 1 })]).length, 0, 'attempt 1: the re-run is still the next step');
+  assert.strictEqual(cure.spentCancelledRuns([runRow({ attempt: null })]).length, 0, 'an unknown attempt is not a spent one');
+  assert.strictEqual(cure.spentCancelledRuns([runRow({ attempt: undefined })]).length, 0);
+  assert.strictEqual(cure.spentCancelledRuns([runRow({ workflowName: '' })]).length, 0, 'unnamed rows stay neutral (#92)');
+  assert.strictEqual(cure.spentCancelledRuns([runRow({ conclusion: 'skipped' })]).length, 0);
+  assert.strictEqual(cure.spentCancelledRuns([runRow({ status: 'in_progress', conclusion: null })]).length, 0);
+  assert.strictEqual(cure.spentCancelledRuns([runRow(), runRow({ databaseId: 102, conclusion: 'success', attempt: 1 })]).length, 0,
+    'a run of the same workflow that ran supersedes the cancelled one');
+  assert.strictEqual(cure.spentCancelledRuns([runRow(), runRow({ databaseId: 103, workflowName: 'CI', conclusion: 'success' })]).length, 1,
+    'a green sibling WORKFLOW never stands in for it');
+  assert.deepStrictEqual(cure.spentCancelledRuns(null), []);
+});
+
+test('#730 reviewerRedJobSet: names the spent cancelled jobs, marked; the cure path\'s redJobSet still drops them', () => {
+  assert.deepStrictEqual(CANCELLED_RED, [{ name: 'check', workflowName: W, spentCancelled: true }]);
+  assert.strictEqual(cure.redJobSet([{ ...job(), workflowName: W }]).length, 0, 'the cure rule\'s set is unchanged (#689 rules that door)');
+  // A passed or skipped job of the cancelled run is not red; a failed one is.
+  const mixed = cure.reviewerRedJobSet({ failedRunJobs: [], cancelledRunJobs: [
+    { ...job({ name: 'a', conclusion: 'success' }), workflowName: W },
+    { ...job({ name: 'b', conclusion: 'skipped' }), workflowName: W },
+    { ...job({ name: 'c', conclusion: 'failure' }), workflowName: W },
+  ] });
+  assert.deepStrictEqual(mixed.map((j) => j.name), ['c']);
+  // The failed runs' red jobs come through unmarked, alongside.
+  const both = cure.reviewerRedJobSet({ failedRunJobs: [{ name: 'test', workflowName: 'CI', status: 'completed', conclusion: 'failure' }],
+    cancelledRunJobs: [{ ...job(), workflowName: W }] });
+  assert.deepStrictEqual(both, [{ name: 'test', workflowName: 'CI' }, { name: 'check', workflowName: W, spentCancelled: true }]);
+});
+
+test('#730 reviewerRedJobSet: unmeasurable is null — unfinished job, non-array input, nothing red at all', () => {
+  assert.strictEqual(cure.reviewerRedJobSet({ failedRunJobs: [], cancelledRunJobs: [{ ...job({ status: 'in_progress' }), workflowName: W }] }), null);
+  assert.strictEqual(cure.reviewerRedJobSet({ failedRunJobs: null, cancelledRunJobs: [] }), null);
+  assert.strictEqual(cure.reviewerRedJobSet({ failedRunJobs: [], cancelledRunJobs: null }), null);
+  assert.strictEqual(cure.reviewerRedJobSet({ failedRunJobs: [], cancelledRunJobs: [] }), null);
+  assert.strictEqual(cure.reviewerRedJobSet(), null);
+});
+
+test('#730 curesAreRed: a spent cancelled check is a cure target, by full label or unique bare name, and is returned matched', () => {
+  const full = ci.curesAreRed([`${W} / check`], CANCELLED_RED);
+  assert.strictEqual(full.ok, true, full.reason);
+  assert.strictEqual(full.matched[0].spentCancelled, true);
+  assert.strictEqual(ci.curesAreRed(['check'], CANCELLED_RED).matched[0].workflowName, W);
+});
+
+test('#730 spentCancelledCuresProven: accepted when the branch\'s own run of W and its job succeeded at the head', () => {
+  const m = ci.curesAreRed([`${W} / check`], CANCELLED_RED).matched;
+  assert.deepStrictEqual(ci.spentCancelledCuresProven(m, [bjob()]), { ok: true, reason: '' });
+});
+
+const UNPROVEN = [
+  ['the branch run of W is itself cancelled', [bjob({ runConclusion: 'cancelled', conclusion: 'cancelled' })], /run cancelled \/ job cancelled/],
+  ['the branch run of W is skipped', [bjob({ runConclusion: 'skipped', conclusion: 'skipped' })], /run skipped \/ job skipped/],
+  ['the run passed but the job was skipped', [bjob({ conclusion: 'skipped' })], /run success \/ job skipped/],
+  ['the run is still going', [bjob({ runStatus: 'in_progress', runConclusion: null, status: 'in_progress', conclusion: null })], /did not succeed/],
+  ['only a green sibling workflow has the job', [bjob({ workflowName: 'CI' })], /no such job at the head/],
+  ['the head has no such job', [], /no such job at the head/],
+  ['the branch head could not be read', null, /could not be read/],
+];
+for (const [name, rows, re] of UNPROVEN) {
+  test(`#730 spentCancelledCuresProven refuses: ${name}`, () => {
+    const m = ci.curesAreRed([`${W} / check`], CANCELLED_RED).matched;
+    const r = ci.spentCancelledCuresProven(m, rows);
+    assert.strictEqual(r.ok, false);
+    assert.match(r.reason, re);
+  });
+}
+
+test('#730 spentCancelledCuresProven: an ordinary failed cure reads nothing from the branch', () => {
+  let read = 0;
+  const m = ci.curesAreRed(['CI / self-audit'], RED_JOBS).matched;
+  assert.strictEqual(ci.spentCancelledCuresProven(m, () => { read += 1; return null; }).ok, true);
+  assert.strictEqual(read, 0);
+});
+
+test('#730 evaluateReviewerIssue (ship): a spent cancelled cure passes only with the branch proof', () => {
+  const rec = issue({ comments: [reviewComment({ cures: `${W} / check` })] });
+  const ok = ci.evaluateReviewerIssue(rec, ctx({ redJobs: () => CANCELLED_RED, branchJobs: () => [bjob()] }));
+  assert.strictEqual(ok.ok, true, ok.reason);
+  const cancelled = ci.evaluateReviewerIssue(rec, ctx({ redJobs: () => CANCELLED_RED,
+    branchJobs: () => [bjob({ runConclusion: 'cancelled', conclusion: 'cancelled' })] }));
+  assert.strictEqual(cancelled.ok, false);
+  assert.match(cancelled.reason, /proves nothing/);
+  const skipped = ci.evaluateReviewerIssue(rec, ctx({ redJobs: () => CANCELLED_RED,
+    branchJobs: () => [bjob({ runConclusion: 'skipped', conclusion: 'skipped' })] }));
+  assert.strictEqual(skipped.ok, false);
+  const absent = ci.evaluateReviewerIssue(rec, ctx({ redJobs: () => CANCELLED_RED }));
+  assert.strictEqual(absent.ok, false, 'no branchJobs reader is unmeasured, never a pass');
+  assert.match(absent.reason, /could not be read/);
+});
+
+test('#730 evaluateShipSet: passes branchJobs through, read at most once per set', () => {
+  let calls = 0;
+  const recs = { 7: issue({ comments: [reviewComment({ cures: `${W} / check` })] }), 8: issue({ comments: [reviewComment({ cures: `${W} / check` })] }) };
+  const v = ci.evaluateShipSet([7, 8], recs, BRANCH, TRUNK, RED, { ok: true, sha: HEAD }, LABEL,
+    { policy: 'reviewer', now: '2026-10-05T17:00:00Z', redJobs: () => CANCELLED_RED, branchJobs: () => { calls += 1; return [bjob()]; } });
+  assert.strictEqual(v.ok, true, JSON.stringify(v.missing));
+  assert.strictEqual(calls, 1);
+});
