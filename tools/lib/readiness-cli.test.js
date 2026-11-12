@@ -84,16 +84,26 @@ function colab(fx, args) {
 }
 
 const EDIT_OK = { code: 0, stdout: 'https://example.invalid/issues/7\n' };
-const view = (nodes, totalCount = nodes.length) => ({ code: 0, stdout: JSON.stringify({ blockedBy: { nodes, totalCount } }) + '\n' });
-// The REAL `gh issue view --json blockedBy` node shape (measured live 2026-09-27): id/number/state/
-// title/url — no `repository` field. An earlier draft of this file used an invented shape with
-// `repository.nameWithOwner`, passed, and would have printed "unread" on every real blocked issue.
-const node = (number, state) => ({ id: `I_kw${number}`, number, state, title: `t${number}`, url: `https://github.com/o/r/issues/${number}` });
+// #727: the blockedBy read goes through the REST dependencies endpoint, never `gh issue view --json
+// blockedBy` — that JSON field is absent on gh 2.85.0 ("Unknown JSON field"), which made the add
+// path print "unread" and --mechanical refuse on every issue. The fake keys on the first two argv
+// words, so the API call's key is `api <endpoint>`, query string included.
+const EDGES_KEY = 'api repos/{owner}/{repo}/issues/7/dependencies/blocked_by?per_page=100';
+// The REST shape readBlockedByEdges asks for with -q (measured live 2026-11-12 on an issue with one
+// blocker): id/number/state/repository_url, state lower-case.
+const edge = (number, state) => ({ id: 6000000000 + number, number, state, repository_url: 'https://api.github.com/repos/o/r' });
+const edges = (list) => ({ code: 0, stdout: JSON.stringify(list) + '\n' });
+// What gh 2.85.0 answers to the old route — scripted so a regression to it fails loudly here.
+const VIEW_NO_FIELD = { code: 1, stderr: 'Unknown JSON field: "blockedBy"\n' };
+
+const readCalls = (fx) => fx.calls().filter((a) => a[0] === 'api' && /\/dependencies\/blocked_by/.test(a[1] || ''));
+const viewCalls = (fx) => fx.calls().filter((a) => a[0] === 'issue' && a[1] === 'view');
 
 test('#388: open blockers are REPORTED, the label is still written, exit 0 — and "verified: no open blocker" is gone', () => {
   const fx = fixture({
     'issue edit': EDIT_OK,
-    'issue view': view([node(1, 'OPEN'), node(2, 'OPEN'), node(3, 'OPEN')]),
+    'issue view': VIEW_NO_FIELD,
+    [EDGES_KEY]: edges([edge(1, 'open'), edge(2, 'open'), edge(3, 'open')]),
   });
   const r = colab(fx, ['readiness', '7']);
   assert.equal(r.code, 0, r.err);
@@ -101,12 +111,22 @@ test('#388: open blockers are REPORTED, the label is still written, exit 0 — a
   assert.doesNotMatch(r.out, /verified|no open blocker/);
   const keys = fx.calls().map((a) => a.slice(0, 2).join(' '));
   assert.ok(keys.includes('issue edit'), 'the label write ran');
-  const v = fx.calls().find((a) => a[0] === 'issue' && a[1] === 'view');
-  assert.ok(v && v.includes('blockedBy'), 'blockedBy was read');
+  assert.equal(readCalls(fx).length, 1, 'blockedBy was read once, through the REST endpoint');
+});
+
+test('#727: the read route is pinned — REST dependencies/blocked_by, never `gh issue view --json blockedBy`', () => {
+  const fx = fixture({ 'issue edit': EDIT_OK, 'issue view': VIEW_NO_FIELD, [EDGES_KEY]: edges([]) });
+  const r = colab(fx, ['readiness', '7']);
+  assert.equal(r.code, 0, r.err);
+  assert.doesNotMatch(r.out, /unread/, 'the gh 2.85.0 symptom: "unread" on an issue that reads fine via the API');
+  assert.equal(viewCalls(fx).length, 0, 'no `gh issue view` call at all');
+  const [read] = readCalls(fx);
+  assert.ok(read, 'the REST endpoint was read');
+  assert.equal(read[1], 'repos/{owner}/{repo}/issues/7/dependencies/blocked_by?per_page=100');
 });
 
 test('#388: an empty graph reads "0 open", still never "verified"', () => {
-  const fx = fixture({ 'issue edit': EDIT_OK, 'issue view': view([]) });
+  const fx = fixture({ 'issue edit': EDIT_OK, [EDGES_KEY]: edges([]) });
   const r = colab(fx, ['readiness', '7']);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /dependencies reviewed; blockedBy: 0 open\s*$/m);
@@ -114,14 +134,14 @@ test('#388: an empty graph reads "0 open", still never "verified"', () => {
 });
 
 test('#388: closed-only blockers count as 0 open of N — no block caveat', () => {
-  const fx = fixture({ 'issue edit': EDIT_OK, 'issue view': view([node(1, 'CLOSED'), node(2, 'CLOSED')]) });
+  const fx = fixture({ 'issue edit': EDIT_OK, [EDGES_KEY]: edges([edge(1, 'closed'), edge(2, 'closed')]) });
   const r = colab(fx, ['readiness', '7']);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /blockedBy: 0 open of 2\s*$/m);
 });
 
 test('#388: a FAILED blockedBy read is "unread", never zero — and the label write still stands (exit 0)', () => {
-  const fx = fixture({ 'issue edit': EDIT_OK, 'issue view': { code: 1, stderr: 'boom\n' } });
+  const fx = fixture({ 'issue edit': EDIT_OK, [EDGES_KEY]: { code: 1, stderr: 'HTTP 502\n' } });
   const r = colab(fx, ['readiness', '7']);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /blockedBy: unread/);
@@ -133,7 +153,7 @@ test('#388: --clear does not read blockedBy (nothing to report on a removal)', (
   const r = colab(fx, ['readiness', '7', '--clear']);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /Cleared deps-checked on #7 .* UNCHECKED/);
-  assert.ok(!fx.calls().some((a) => a[0] === 'issue' && a[1] === 'view'), 'no blockedBy read on --clear');
+  assert.equal(readCalls(fx).length + viewCalls(fx).length, 0, 'no blockedBy read on --clear');
 });
 
 test('#388: a failed label write still refuses BEFORE any blockedBy read — no success line', () => {
@@ -141,5 +161,49 @@ test('#388: a failed label write still refuses BEFORE any blockedBy read — no 
   const r = colab(fx, ['readiness', '7']);
   assert.notEqual(r.code, 0);
   assert.doesNotMatch(r.out, /Marked #7/);
-  assert.ok(!fx.calls().some((a) => a[0] === 'issue' && a[1] === 'view'), 'no read after a failed write');
+  assert.equal(readCalls(fx).length + viewCalls(fx).length, 0, 'no read after a failed write');
+});
+
+// --- --mechanical (#69), on the same read (#727) ---------------------------------------------------
+
+const LABELS_WITH_GRAPH_EMPTY = { code: 0, stdout: 'deps-checked\ngraph-empty\n' };
+const COMMENT_OK = { code: 0, stdout: 'https://example.invalid/issues/7#issuecomment-1\n' };
+
+test('#727: --mechanical on an empty graph writes graph-empty and posts its receipt — even where `issue view --json blockedBy` fails', () => {
+  const fx = fixture({
+    'label list': LABELS_WITH_GRAPH_EMPTY,
+    'issue view': VIEW_NO_FIELD,
+    [EDGES_KEY]: edges([]),
+    'issue edit': EDIT_OK,
+    'issue comment': COMMENT_OK,
+  });
+  const r = colab(fx, ['readiness', '7', '--mechanical']);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /Marked #7 in .* graph-empty — blockedBy reads empty \(receipt posted\)/);
+  assert.equal(viewCalls(fx).length, 0, 'no `gh issue view` call');
+  const edit = fx.calls().find((a) => a[0] === 'issue' && a[1] === 'edit');
+  assert.ok(edit && edit.includes('graph-empty'), 'graph-empty was added');
+  assert.ok(!edit.includes('deps-checked'), 'deps-checked is never touched by the mechanical lane');
+  const comment = fx.calls().find((a) => a[0] === 'issue' && a[1] === 'comment');
+  assert.ok(comment, 'the receipt was posted');
+  assert.match(comment[comment.indexOf('--body') + 1], /^Mechanical readiness: `blockedBy` reads 0 edges/);
+});
+
+test('#727: --mechanical with recorded blockers REFUSES and reports the count — no label, no receipt', () => {
+  const fx = fixture({
+    'label list': LABELS_WITH_GRAPH_EMPTY,
+    [EDGES_KEY]: edges([edge(1, 'open'), edge(2, 'closed'), edge(3, 'open')]),
+  });
+  const r = colab(fx, ['readiness', '7', '--mechanical']);
+  assert.notEqual(r.code, 0);
+  assert.match(r.err, /#7 has 3 recorded blocker\(s\), 2 open — graph-empty asserts an EMPTY graph.*`colab readiness 7`/);
+  assert.ok(!fx.calls().some((a) => a[0] === 'issue' && (a[1] === 'edit' || a[1] === 'comment')), 'nothing written');
+});
+
+test('#727: --mechanical on a FAILED read still refuses — an unread graph is never an empty one', () => {
+  const fx = fixture({ 'label list': LABELS_WITH_GRAPH_EMPTY, [EDGES_KEY]: { code: 1, stderr: 'HTTP 404\n' } });
+  const r = colab(fx, ['readiness', '7', '--mechanical']);
+  assert.notEqual(r.code, 0);
+  assert.match(r.err, /could not read #7's blockedBy graph — refusing to write graph-empty on an unmeasured read/);
+  assert.ok(!fx.calls().some((a) => a[0] === 'issue' && (a[1] === 'edit' || a[1] === 'comment')), 'nothing written');
 });

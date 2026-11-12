@@ -3673,7 +3673,8 @@ or an external party has its own carrier — see "Disposition" (CONVENTIONS.md �
 (#69). It never touches deps-checked, and deps-checked never touches graph-empty: the two
 claims must stay distinguishable, because a mechanical read cannot see a blocker described
 only in prose. It re-derives its own evidence rather than trusting the caller — it reads
-\`blockedBy\` via \`gh issue view\` on every run — and REFUSES rather than write the label if
+\`blockedBy\` via the REST \`issues/<N>/dependencies/blocked_by\` endpoint on every run (never
+\`gh issue view --json blockedBy\`, a field some gh versions lack, #727) — and REFUSES rather than write the label if
 that read comes back non-empty or unreadable. On a successful ADD it also posts a receipt
 comment naming exactly what was read and when, so the claim is auditable rather than
 assumed. graph-empty is opt-in per repo (create the label yourself; adoption/sync/the audit
@@ -3718,7 +3719,10 @@ function cmdReadiness(argv) {
     // --mechanical makes — REPORTED, never gated on: under §5 (#279) an open edge carries the
     // block by itself, and deps-checked only records that a reasoning session reviewed the deps.
     // A failed read is reported as "unread", never as zero; the label above has already landed.
-    const summary = blockedBy.openBlockerSummary(git.ghIssueView(repoAbs, num, ['blockedBy']));
+    // #727: through the REST dependencies endpoint (readBlockedByEdges), never `gh issue view
+    // --json blockedBy` — that JSON field is absent from some supported gh versions (2.85.0
+    // measured), which made this line read "unread" on every issue there.
+    const summary = blockedBy.openBlockerSummary(readBlockedByEdges(repoAbs, num));
     print(labels.readinessMarkedMessage({ num, repo: shortRepo(repoAbs), summary }));
   }
 
@@ -3756,12 +3760,17 @@ function cmdReadinessMechanical(repoAbs, num, opts) {
 
   // Re-derive the evidence ourselves — the whole point of #69's resolution is that this marker
   // may never be written on a caller's say-so, only on what the API says right now.
-  const info = git.ghIssueView(repoAbs, num, ['blockedBy']);
-  if (!info || !info.blockedBy || typeof info.blockedBy.totalCount !== 'number') {
+  // #727: the read is the REST dependencies endpoint (readBlockedByEdges, the same read `colab
+  // blocked` makes), not `gh issue view --json blockedBy`: that JSON field does not exist on some
+  // supported gh versions (2.85.0 measured), so the old read was null there and this lane refused
+  // on every issue. A failed read is still a refusal, never an empty graph.
+  const graph = blockedBy.openBlockerSummary(readBlockedByEdges(repoAbs, num));
+  if (!graph.ok) {
     throw new UserError(`could not read #${num}'s blockedBy graph — refusing to write ${labels.MECHANICAL_READINESS_LABEL} on an unmeasured read`);
   }
-  if (info.blockedBy.totalCount > 0) {
-    throw new UserError(`#${num} has ${info.blockedBy.totalCount} recorded blocker(s) — ${labels.MECHANICAL_READINESS_LABEL} asserts an EMPTY graph, so this read does not qualify`);
+  if (graph.total > 0) {
+    throw new UserError(`#${num} has ${graph.total} recorded blocker(s), ${graph.open} open — ${labels.MECHANICAL_READINESS_LABEL} asserts an EMPTY graph, so this read does not qualify. `
+      + `Review those edges and record the review instead: \`colab readiness ${num}\` (deps-checked — an open edge still carries its block)`);
   }
 
   const r = git.ghIssueEdit(repoAbs, num, labels.mechanicalReadinessLabelArgs({ clear: false }));
@@ -3778,7 +3787,7 @@ function cmdReadinessMechanical(repoAbs, num, opts) {
   // command marks (#296: 21/21 identical on one backlog, 40% of it).
   const ts = new Date().toISOString();
   git.ghIssueComment(repoAbs, num,
-    `Mechanical readiness: \`blockedBy\` totalCount = 0, read ${ts}. Applied \`${labels.MECHANICAL_READINESS_LABEL}\` `
+    `Mechanical readiness: \`blockedBy\` reads 0 edges (\`dependencies/blocked_by\`), read ${ts}. Applied \`${labels.MECHANICAL_READINESS_LABEL}\` `
     + `(CONVENTIONS.md §5, Mechanical readiness — not \`${labels.READINESS_LABEL}\`).`);
 
   print(`Marked #${num} in ${shortRepo(repoAbs)} ${labels.MECHANICAL_READINESS_LABEL} — blockedBy reads empty (receipt posted)`);
@@ -3852,7 +3861,9 @@ Options:
  */
 function readBlockedByEdges(repoAbs, num) {
   const r = git.ghApi(repoAbs, [
-    `repos/{owner}/{repo}/issues/${num}/dependencies/blocked_by`,
+    // per_page=100: the endpoint pages at 30 by default, and GitHub allows up to 50 blockers per
+    // issue — a default-size page would undercount (#727's readiness summary reads this too).
+    `repos/{owner}/{repo}/issues/${num}/dependencies/blocked_by?per_page=100`,
     '-q', '[.[] | {id: .id, number: .number, state: .state, repository_url: .repository_url}]',
   ]);
   if (!r.ok) return null;

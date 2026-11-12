@@ -54,8 +54,10 @@ behind them — moved here verbatim (#524).
   issue's `blocking` count and never touches its `blockedBy`.
 - **Digest the connections' `totalCount`, NOT `issueDependenciesSummary` — the summary
   lags behind the graph.** The connections are the authority; the summary is a cache of them.
-  (The same fact protects §0.2's read-before-write rule: `gh issue view <N> --json blockedBy`
-  reads the *connection*, so a POST is not re-issued against a stale zero.)
+  (The same fact protects §0.2's read-before-write rule: the REST `dependencies/blocked_by`
+  list and GraphQL's `blockedBy` both read the *edges*, so a POST is not re-issued against a
+  stale zero. Never `gh issue view --json blockedBy` — that field is absent on some gh
+  versions, #727.)
 - **The `BY` lines are why the blocker detail is fetched here and not again in §5.** §5.1
   needs each open blocker's number, state and home repo; input 3 is already querying that
   subgraph, so one request serves both. Two requests would cost a round trip *and* a

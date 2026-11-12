@@ -14,7 +14,8 @@ with the blocker named:
 - [ ] **Actionable** — the Issue says what "done" looks like. An Issue that is a
       question is blocked on an answer, not ready to code.
 - [ ] **Nothing it depends on is still missing** — read the **relationship**, never
-      the prose: `gh issue view <N> --json blockedBy` (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough),
+      the prose: `gh api 'repos/{owner}/{repo}/issues/<N>/dependencies/blocked_by?per_page=100'`
+      — never `gh issue view --json blockedBy`, a field some gh versions lack (#727) (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough),
       *Readiness*). Prose saying "depends on the other one" is an explanation, not a
       record; it blocks nothing and no tool can act on it.
       **An open blocker is not automatically a blocker** — judge its state, per §5.1.

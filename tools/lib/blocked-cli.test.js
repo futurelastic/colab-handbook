@@ -70,7 +70,7 @@ function classify(argv) {
 
   const { method, endpoint } = apiEndpointAndMethod(argv.slice(1));
   const ep = endpoint || '';
-  if (/\/dependencies\/blocked_by$/.test(ep)) {
+  if (/\/dependencies\/blocked_by(\?[^/]*)?$/.test(ep)) {
     if (method === 'POST') return 'post-edge';
     if (method === 'GET') return 'read-edges';
   }
