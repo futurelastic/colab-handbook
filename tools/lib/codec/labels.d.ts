@@ -39,7 +39,7 @@ export function readinessLabelArgs(opts?: { clear?: boolean }): string[];
 export function readinessMissingLabelHint(present: LabelLike[] | null | undefined): string | null;
 export function readinessMarkedMessage(opts?: {
   num?: number | string; repo?: string;
-  summary?: { ok: boolean; total: number; read: number; open: number; unknownState: number } | null;
+  summary?: { ok: boolean; total: number; read: number; open: number; unknownState: number; error?: string } | null;
 }): string;
 export const TRACKING_LABEL: 'tracking';
 export const MECHANICAL_READINESS_LABEL: 'graph-empty';

@@ -515,12 +515,15 @@ function readinessLabelArgs({ clear } = {}) {
 // --mechanical reads blockedBy), printed verbatim even on issues with open blockers, and the one
 // line operators copy into reports. It now says what was DONE (the review was recorded) and what
 // the graph holds, from one blockedBy read (`summary` = blocked-by.js openBlockerSummary, or
-// null/{ok:false} when the read failed). It never says "verified" and never "no open blocker":
+// null/{ok:false[, error]} when the read failed). It never says "verified" and never "no open blocker":
 // deps-checked is a review record, and an open edge carries the block on its own (§5, #279).
 function readinessMarkedMessage({ num, repo, summary } = {}) {
   const head = `Marked #${num} in ${repo} ${READINESS_LABEL} — dependencies reviewed`;
   if (!summary || !summary.ok) {
-    return `${head}; blockedBy: unread (the label records your review, not a graph read)`;
+    // #728: name why the read failed when the caller knows (`summary.error`, one line), so an
+    // auth/API failure reads differently from a parser bug. The label has landed either way.
+    const why = summary && typeof summary.error === 'string' && summary.error.trim() ? `${summary.error.trim()}; ` : '';
+    return `${head}; blockedBy: unread (${why}the label records your review, not a graph read)`;
   }
   const { total, read, open, unknownState } = summary;
   const truncated = read < total;
