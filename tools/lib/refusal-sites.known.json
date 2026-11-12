@@ -28,7 +28,6 @@
   "tools/colab:write:solo refused in … — …": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:No solo lock held in … — nothing to release.": "pre-#532: refusal with no next command yet",
   "tools/colab:write:solo --done refused in …:": "pre-#532: refusal with no next command yet",
-  "tools/colab:user-error:could not read #…'s blockedBy graph — refusing to write … on an unmeasur": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:could not determine this repo's owner/name from the resolved blocker's r": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:could not read #…'s current blocked_by edges — refusing to write blind (": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:could not write the blocked_by edge (…) — read-back confirms nothing was": "pre-#532: refusal with no next command yet",

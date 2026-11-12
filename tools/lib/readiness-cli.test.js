@@ -148,6 +148,14 @@ test('#388: a FAILED blockedBy read is "unread", never zero — and the label wr
   assert.doesNotMatch(r.out, /0 open|verified|no open blocker/);
 });
 
+test('#728: the add path\'s "unread" line names the underlying error — exit code and stderr', () => {
+  const fx = fixture({ 'issue edit': EDIT_OK, [EDGES_KEY]: { code: 1, stderr: '\nHTTP 502: Bad Gateway (https://api.github.com/...)\nmore detail\n' } });
+  const r = colab(fx, ['readiness', '7']);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /blockedBy: unread \(`gh api …\/dependencies\/blocked_by` exit 1: HTTP 502: Bad Gateway \(https:\/\/api\.github\.com\/\.\.\.\); the label records your review/);
+  assert.doesNotMatch(r.out, /more detail/, 'first non-empty stderr line only');
+});
+
 test('#388: --clear does not read blockedBy (nothing to report on a removal)', () => {
   const fx = fixture({ 'issue edit': EDIT_OK });
   const r = colab(fx, ['readiness', '7', '--clear']);
@@ -200,10 +208,29 @@ test('#727: --mechanical with recorded blockers REFUSES and reports the count �
   assert.ok(!fx.calls().some((a) => a[0] === 'issue' && (a[1] === 'edit' || a[1] === 'comment')), 'nothing written');
 });
 
-test('#727: --mechanical on a FAILED read still refuses — an unread graph is never an empty one', () => {
-  const fx = fixture({ 'label list': LABELS_WITH_GRAPH_EMPTY, [EDGES_KEY]: { code: 1, stderr: 'HTTP 404\n' } });
+test('#727/#728: --mechanical on a FAILED read still refuses — and names the underlying error and the next command', () => {
+  const fx = fixture({ 'label list': LABELS_WITH_GRAPH_EMPTY, [EDGES_KEY]: { code: 4, stderr: 'HTTP 401: Bad credentials (https://api.github.com/graphql)\n' } });
   const r = colab(fx, ['readiness', '7', '--mechanical']);
   assert.notEqual(r.code, 0);
-  assert.match(r.err, /could not read #7's blockedBy graph — refusing to write graph-empty on an unmeasured read/);
+  assert.match(r.err, /could not read #7's blockedBy graph \(`gh api …\/dependencies\/blocked_by` exit 4: HTTP 401: Bad credentials [^)]*\)\) — refusing to write graph-empty on an unmeasured read/);
+  assert.match(r.err, /`gh api repos\/\{owner\}\/\{repo\}\/issues\/7\/dependencies\/blocked_by`/, 'names the read to re-run');
+  assert.match(r.err, /`colab readiness 7 --mechanical`/, 'names the command to resume with');
+  assert.ok(!fx.calls().some((a) => a[0] === 'issue' && (a[1] === 'edit' || a[1] === 'comment')), 'nothing written');
+});
+
+test('#728: --mechanical on an UNPARSEABLE response refuses as a parse failure, not as a gh failure', () => {
+  const fx = fixture({ 'label list': LABELS_WITH_GRAPH_EMPTY, [EDGES_KEY]: { code: 0, stdout: '<html>not json</html>\n' } });
+  const r = colab(fx, ['readiness', '7', '--mechanical']);
+  assert.notEqual(r.code, 0);
+  assert.match(r.err, /could not read #7's blockedBy graph \(unparseable response from `gh api …\/dependencies\/blocked_by` \(/);
+  assert.doesNotMatch(r.err, /exit \d/);
+  assert.ok(!fx.calls().some((a) => a[0] === 'issue' && (a[1] === 'edit' || a[1] === 'comment')), 'nothing written');
+});
+
+test('#728: --mechanical on JSON of the wrong SHAPE refuses and says so', () => {
+  const fx = fixture({ 'label list': LABELS_WITH_GRAPH_EMPTY, [EDGES_KEY]: { code: 0, stdout: '{"message":"Not Found"}\n' } });
+  const r = colab(fx, ['readiness', '7', '--mechanical']);
+  assert.notEqual(r.code, 0);
+  assert.match(r.err, /could not read #7's blockedBy graph \(the response was not a list of issues \(unexpected shape\)\)/);
   assert.ok(!fx.calls().some((a) => a[0] === 'issue' && (a[1] === 'edit' || a[1] === 'comment')), 'nothing written');
 });

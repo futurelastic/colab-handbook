@@ -659,6 +659,14 @@ test('#388: readinessMarkedMessage never claims verification, in any read outcom
   }
 });
 
+test('#728: readinessMarkedMessage names a failed read\'s reason when given one, and only then', () => {
+  const m = readinessMarkedMessage({ num: 7, repo: 'o/r', summary: { ok: false, error: 'exit 1: HTTP 502' } });
+  assert.match(m, /blockedBy: unread \(exit 1: HTTP 502; the label records your review, not a graph read\)$/);
+  for (const summary of [null, { ok: false }, { ok: false, error: '  ' }]) {
+    assert.match(readinessMarkedMessage({ num: 7, repo: 'o/r', summary }), /blockedBy: unread \(the label records your review/);
+  }
+});
+
 test('#388: readinessMarkedMessage reports the open count, and the block caveat only when one is open', () => {
   const msg = (summary) => readinessMarkedMessage({ num: 7, repo: 'o/r', summary });
   assert.match(msg({ ok: true, total: 0, read: 0, open: 0, unknownState: 0 }), /blockedBy: 0 open$/);

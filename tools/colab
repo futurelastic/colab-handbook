@@ -3722,7 +3722,7 @@ function cmdReadiness(argv) {
     // #727: through the REST dependencies endpoint (readBlockedByEdges), never `gh issue view
     // --json blockedBy` — that JSON field is absent from some supported gh versions (2.85.0
     // measured), which made this line read "unread" on every issue there.
-    const summary = blockedBy.openBlockerSummary(readBlockedByEdges(repoAbs, num));
+    const summary = readBlockerSummary(repoAbs, num);
     print(labels.readinessMarkedMessage({ num, repo: shortRepo(repoAbs), summary }));
   }
 
@@ -3764,9 +3764,12 @@ function cmdReadinessMechanical(repoAbs, num, opts) {
   // blocked` makes), not `gh issue view --json blockedBy`: that JSON field does not exist on some
   // supported gh versions (2.85.0 measured), so the old read was null there and this lane refused
   // on every issue. A failed read is still a refusal, never an empty graph.
-  const graph = blockedBy.openBlockerSummary(readBlockedByEdges(repoAbs, num));
+  // #728: the refusal names the underlying error and the command that re-measures it, so a triage
+  // pass can tell an auth or API failure from a parser bug without re-deriving the call by hand.
+  const graph = readBlockerSummary(repoAbs, num);
   if (!graph.ok) {
-    throw new UserError(`could not read #${num}'s blockedBy graph — refusing to write ${labels.MECHANICAL_READINESS_LABEL} on an unmeasured read`);
+    throw new UserError(`could not read #${num}'s blockedBy graph (${graph.error}) — refusing to write ${labels.MECHANICAL_READINESS_LABEL} on an unmeasured read. `
+      + `Re-run the read by hand to see the full error: \`gh api repos/{owner}/{repo}/issues/${num}/dependencies/blocked_by\` (run it in this repo), then \`colab readiness ${num} --mechanical\` once it reads`);
   }
   if (graph.total > 0) {
     throw new UserError(`#${num} has ${graph.total} recorded blocker(s), ${graph.open} open — ${labels.MECHANICAL_READINESS_LABEL} asserts an EMPTY graph, so this read does not qualify. `
@@ -3860,14 +3863,40 @@ Options:
  * read (mirrors ghIssueView's own null-means-unreadable contract).
  */
 function readBlockedByEdges(repoAbs, num) {
+  return readBlockedByEdgesDetailed(repoAbs, num).raw;
+}
+
+/**
+ * The same read, keeping WHY it failed (#728): `{ raw, error }`, where `error` is one short line —
+ * gh's exit code plus the first line of its stderr, or the parse failure — and null on success.
+ * The refusal that reads it can then tell an auth/API failure (`exit 1: HTTP 401 …`) from a
+ * response this module could not parse; a bare "could not read" sent a triage pass guessing.
+ */
+function readBlockedByEdgesDetailed(repoAbs, num) {
   const r = git.ghApi(repoAbs, [
     // per_page=100: the endpoint pages at 30 by default, and GitHub allows up to 50 blockers per
     // issue — a default-size page would undercount (#727's readiness summary reads this too).
     `repos/{owner}/{repo}/issues/${num}/dependencies/blocked_by?per_page=100`,
     '-q', '[.[] | {id: .id, number: .number, state: .state, repository_url: .repository_url}]',
   ]);
-  if (!r.ok) return null;
-  try { return JSON.parse(r.stdout); } catch (_) { return null; }
+  if (!r.ok) {
+    const line = String(r.stderr || '').split('\n').map((l) => l.trim()).find(Boolean);
+    return { raw: null, error: `\`gh api …/dependencies/blocked_by\` exit ${r.code == null ? '?' : r.code}: ${line || 'no stderr'}` };
+  }
+  try { return { raw: JSON.parse(r.stdout), error: null }; } catch (e) {
+    return { raw: null, error: `unparseable response from \`gh api …/dependencies/blocked_by\` (${e.message})` };
+  }
+}
+
+/**
+ * `readBlockedByEdgesDetailed` folded through `openBlockerSummary`, with a reason whenever the
+ * summary is not ok — including a read that parsed but did not have the edge shape (#728).
+ */
+function readBlockerSummary(repoAbs, num) {
+  const read = readBlockedByEdgesDetailed(repoAbs, num);
+  const summary = blockedBy.openBlockerSummary(read.raw);
+  if (summary.ok) return summary;
+  return { ...summary, error: read.error || 'the response was not a list of issues (unexpected shape)' };
 }
 
 /**
