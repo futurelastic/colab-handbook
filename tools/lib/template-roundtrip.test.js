@@ -30,12 +30,12 @@ test('enableRoundtrip: every fence opened, the job live, APPLY and paths filled 
   for (const n of ['ci-node', 'ci-python']) {
     const r = rt.enableRoundtrip(tpl(n), { apply: "knex migrate:latest --env 'ci'", paths: ['db/migrations/', 'more/'] });
     assert.deepStrictEqual(r.missed, [], n);
-    assert.match(r.changes[0], /uncommented 4 fenced blocks/);
+    assert.match(r.changes[0], /uncommented 2 fenced blocks/); // #724: the config job and the job, beside the call
     const doc = yaml.parse(r.text);
     assert.ok(doc.jobs.migrations, `${n}: no migrations job`);
     assert.deepStrictEqual(mg.roundtripJobWorkflows(files(r.text)), ['ci.yml']);
     // YAML single quotes: an inner ' doubles (tools/lib/yaml.js keeps the raw text between the outer quotes).
-    assert.match(r.text, /^  ROUNDTRIP_APPLY: 'knex migrate:latest --env ''ci'''$/m);
+    assert.match(r.text, /^      ROUNDTRIP_APPLY: 'knex migrate:latest --env ''ci'''$/m); // the roundtrip-config job's env
     assert.match(r.text, /^      MIGRATIONS_PATHS: 'db\/migrations\/ more\/'$/m);
   }
 });
@@ -45,8 +45,8 @@ test('enableRoundtrip with no APPLY leaves it empty — the job is skipped, neve
   assert.deepStrictEqual(r.missed, []);
   assert.ok(!r.changes.includes('ROUNDTRIP_APPLY'));
   const doc = yaml.parse(r.text);
-  assert.strictEqual(doc.env.ROUNDTRIP_APPLY, '');
-  assert.match(doc.jobs.migrations.if, /needs\.build\.outputs\.roundtrip == 'on'/);
+  assert.strictEqual(doc.jobs['roundtrip-config'].env.ROUNDTRIP_APPLY, '');
+  assert.match(doc.jobs.migrations.if, /needs\.roundtrip-config\.outputs\.roundtrip == 'on'/);
   assert.match(r.text, /^      MIGRATIONS_PATHS: "migrations\/"$/m, 'no declared paths: the template default stays');
 });
 
@@ -168,4 +168,13 @@ test('a repo whose other workflow already carries the job gets no warning; ci-la
     assert.strictEqual(l.status, 0, l.stderr + l.stdout);
     assert.match(l.stdout, /always on — nothing to enable/);
   } finally { s.done(); }
+});
+
+test('enableRoundtrip still fills a pre-#724 copy, whose ROUNDTRIP_APPLY sits in the workflow env (#724 fallback)', () => {
+  // `colab template` writes the pinned release's own template until a final carries ci-light.yml, and
+  // that template keeps ROUNDTRIP_APPLY at the workflow env's 2-space indent.
+  const old = 'env:\n  ##>>> migration round-trip (opt-in, #494)\n  # ROUNDTRIP_APPLY: ""\n  ##<<< migration round-trip\n';
+  const r = rt.enableRoundtrip(old, { apply: 'npx knex migrate:latest' });
+  assert.deepStrictEqual(r.missed, []);
+  assert.match(r.text, /^  ROUNDTRIP_APPLY: 'npx knex migrate:latest'$/m);
 });

@@ -73,8 +73,8 @@ test('ci-laravel.yml has a migrations job', () => {
 });
 
 test('the job is not gated on RUN_TESTS (runs on every branch push)', () => {
-  // A job-level if: is allowed — #418's `!cancelled() && needs.build.result == 'success'` is
-  // what keeps this job running when the `dedupe` guard is skipped — but never on RUN_TESTS.
+  // A job-level if: is allowed — the gate term (`needs.ci.outputs.tested`, #724) is what keeps this
+  // job off a run whose tree already passed — but never on RUN_TESTS.
   const jobIf = block.find((l) => /^ {4}if:/.test(l));
   assert.ok(!/RUN_TESTS/.test(jobIf || ''), `job-level if: is not gated on RUN_TESTS (${jobIf})`);
   for (const s of steps) {
@@ -186,9 +186,12 @@ test('the service port is published unmapped and read back from job.services', (
   assert.match(text, /job\.services\.db\.ports\['3306'\]/);
 });
 
-test('PHP comes from the build job, which exports it', () => {
-  assert.match(block.join('\n'), /needs: build/);
-  assert.match(block.join('\n'), /needs\.build\.outputs\.php-version/);
-  const build = jobBlock(TEXT, 'build').join('\n');
-  assert.match(build, /outputs:\n {6}php-version: \$\{\{ steps\.toolchain\.outputs\.php-version \}\}/);
+test('PHP comes from the call, which resolved it once (#724)', () => {
+  assert.match(block.join('\n'), /^ {4}needs: ci$/m);
+  assert.match(block.join('\n'), /needs\.ci\.outputs\.php-version/);
+  // Behind the gate: off a red call, and off a run where the gate reused a green run of this tree.
+  assert.match(block.join('\n'), /^ {4}if: \$\{\{ !cancelled\(\) && needs\.ci\.result == 'success' && needs\.ci\.outputs\.tested != 'true' \}\}$/m);
+  const light = fs.readFileSync(path.resolve(__dirname, '..', '..', '.github', 'workflows', 'ci-light.yml'), 'utf8');
+  assert.match(light, /php-version:\n {8}description: [^\n]*\n {8}value: \$\{\{ jobs\.full\.outputs\.php-version \}\}/);
+  assert.match(jobBlock(light, 'full').join('\n'), /outputs:\n(?: {6}.*\n)* {6}php-version: \$\{\{ steps\.toolchain\.outputs\.php-version \}\}/);
 });

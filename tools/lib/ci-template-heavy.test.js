@@ -23,6 +23,7 @@ const yaml = require('./yaml.js');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const STACKS = ['node', 'python', 'laravel'];
 const read = (name) => fs.readFileSync(path.join(REPO_ROOT, 'templates', name), 'utf8');
+const LIGHT = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci-light.yml'), 'utf8');
 const HAS_JQ = spawnSync('jq', ['--version']).status === 0;
 
 const TMP = [];
@@ -126,10 +127,55 @@ for (const s of STACKS) {
     assert.doesNotMatch(jobText(text, 'heavy'), /steps\.(tier|scripts|tools)\./, 'no reference to a light-lane-only step');
   });
 
-  test(`ci-${s}-heavy.yml: its toolchain steps are the light lane's, verbatim`, () => {
-    const light = read(`ci-${s}.yml`);
+  // #724: the light lane's resolver is the reusable workflow's, one script for every toolchain, so a
+  // heavy copy can no longer be byte-identical to it. What the rule is for is the outcome — two
+  // resolvers must never let the lanes test different versions — so both run on the same repos here
+  // and must resolve the same version, or refuse the same repo.
+  test(`ci-${s}-heavy.yml: its resolver picks the version the light lane picks, on every source (#724)`, () => {
     const step = { node: 'Resolve Node version', python: 'Resolve Python version', laravel: 'Resolve toolchain versions' }[s];
-    assert.strictEqual(stepScript(text, step), stepScript(light, step), 'two resolvers would let the lanes test different versions');
+    const heavyScript = stepScript(text, step);
+    const lightScript = stepScript(LIGHT, 'Resolve toolchain versions');
+    const toolchain = { node: 'node', python: 'python', laravel: 'php,node' }[s];
+    const run = (script, files) => {
+      const dir = tmpdir('resolve-');
+      for (const [f, body] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+        fs.writeFileSync(path.join(dir, f), body);
+      }
+      const out = path.join(dir, '.out');
+      fs.writeFileSync(out, '');
+      const r = spawnSync('/bin/bash', ['-eo', 'pipefail', '-c', script], { cwd: dir, encoding: 'utf8',
+        env: { PATH: process.env.PATH, TOOLCHAIN: toolchain, GITHUB_WORKSPACE: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(dir, '.sum') } });
+      const got = Object.fromEntries(fs.readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => l.split('=')));
+      return r.status === 0 ? got : 'refused';
+    };
+    const node = [
+      { '.github/project.yml': 'node: "22"\n', '.nvmrc': '20\n', 'package.json': '{"engines":{"node":">=18"}}' },
+      { '.nvmrc': 'v20.11.1\n', 'package.json': '{"engines":{"node":">=18"}}' },
+      { 'package.json': '{"engines":{"node":">=22"}}' },
+      { 'package.json': '{"name":"x"}' },
+    ];
+    const python = [
+      { '.github/project.yml': 'python: "3.12"\n', '.python-version': '3.11\n' },
+      { '.python-version': '3.11.9\n', 'pyproject.toml': 'requires-python = ">=3.10"\n' },
+      { 'pyproject.toml': '[project]\nrequires-python = ">=3.10"\n' },
+      { 'requirements.txt': 'fastapi\n' },
+    ];
+    const php = [
+      { '.github/project.yml': 'php: "8.3"\nnode: "22"\n', 'composer.json': '{"require":{"php":"^8.2"}}', '.nvmrc': '20\n' },
+      { 'composer.json': '{"require":{"php":"^8.2"}}', '.nvmrc': '20\n' },
+      { 'composer.json': '{"require":{}}', '.nvmrc': '20\n' },
+      { 'composer.json': '{"require":{"php":"^8.2"}}' },
+    ];
+    const cases = { node, python, laravel: php }[s];
+    let resolved = 0;
+    for (const files of cases) {
+      const h = run(heavyScript, files);
+      const l = run(lightScript, files);
+      assert.deepStrictEqual(h, l, `two resolvers would let the lanes test different versions — ${JSON.stringify(files)}`);
+      if (h !== 'refused') resolved += 1;
+    }
+    assert.ok(resolved >= 2 && resolved < cases.length, 'the fixtures exercise both a resolved and a refused repo');
   });
 }
 
@@ -430,7 +476,9 @@ for (const s of STACKS) {
   test(`ci-${s}.yml: no docs-only guard; dedupe's verdict is its own check step`, () => {
     const text = read(`ci-${s}.yml`);
     assert.doesNotMatch(text, /docs_base|docs-only-skip|steps\.docs\./);
-    assert.match(text, /^ {6}tested: \$\{\{ steps\.check\.outputs\.tested \}\}$/m);
+    // #724: the gate is the call's; its verdict is the reusable lane's own check step.
+    assert.doesNotMatch(LIGHT, /docs_base|docs-only-skip|steps\.docs\./);
+    assert.match(LIGHT, /^ {6}tested: \$\{\{ steps\.check\.outputs\.tested \}\}$/m);
     assert.match(text, /^ {4}# paths-ignore: \['\*\*\/\*\.md', 'docs\/\*\*'\]$/m, 'the optional docs paths-ignore example');
     assert.match(text, /LIGHT LANE \(#607\)/);
   });
@@ -446,7 +494,7 @@ test('audit: unstamped light and heavy CI copies are suggestions — no fail, no
   fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.github', 'project.yml'), 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n');
   // Hand-edited, unstamped copies: an adopter's own CI.
-  fs.writeFileSync(path.join(dir, '.github', 'workflows', 'ci.yml'), read('ci-node.yml').replace('BUILD_COMMAND: "build"', 'BUILD_COMMAND: "compile"'));
+  fs.writeFileSync(path.join(dir, '.github', 'workflows', 'ci.yml'), read('ci-node.yml').replace('full-timeout-minutes: 60', 'full-timeout-minutes: 90'));
   fs.writeFileSync(path.join(dir, '.github', 'workflows', 'ci-heavy.yml'), read('ci-node-heavy.yml').replace('timeout-minutes: 120', 'timeout-minutes: 240'));
   g('add', '-A');
   g('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', '-c', `core.hooksPath=${path.join(dir, '.nohooks')}`, 'commit', '-q', '-m', 'chore: fixture');

@@ -21,6 +21,9 @@
 #     command on a small slot; `full` runs its test/build command. Both run on every push the gate
 #     does not skip; the heavy lane (templates/ci-<stack>-heavy.yml) stays where it is.
 #   - The job-class `runs-on` (CONVENTIONS.md §7, "Runner classes", #720).
+#   - The package caches (#571): npm, pip and Composer, each on only on a GitHub-hosted runner AND
+#     with the file it keys on present — a persistent self-hosted runner keeps its own (#512). #724
+#     moved them here with the light templates, which carried them per copy.
 #   - The descriptor check of .github/project.yml (#416), inside `quick`.
 #
 # WHAT ONLY THE CALLER CAN OWN — a called workflow cannot declare them:
@@ -28,7 +31,8 @@
 #     caller and callee deadlocks). templates/ci-call.yml carries both as fixed text; their policy —
 #     which refs are trunk, and that a trunk run is never cancelled — is the `trunk-branches` input.
 #   - Jobs of its own (deploy, publish, a migration round-trip). Gate one on the guard with
-#     `needs: ci` + `if: needs.ci.outputs.tested != 'true'`, or keep it ungated and name it in
+#     `needs: ci` + `if: !cancelled() && needs.ci.result == 'success' && needs.ci.outputs.tested != 'true'`,
+#     or keep it ungated and name it in
 #     `trunk-only-jobs`.
 #
 # REUSABLE-WORKFLOW FACTS the gate absorbs: the `github` context is the caller's, so `github.run_id`
@@ -61,6 +65,13 @@ on:
         type: string
         required: false
         default: "."
+      php-extensions:
+        description: >-
+          PHP extensions for setup-php, comma-separated (e.g. "mbstring, sqlite3, pdo_sqlite, bcmath, intl").
+          Empty = setup-php's defaults.
+        type: string
+        required: false
+        default: ""
       install:
         description: >-
           Shell run before `quick` and before `full`. `auto` = the toolchain's own install (npm ci /
@@ -120,6 +131,15 @@ on:
       cited:
         description: The run the gate relied on, when it skipped by tree.
         value: ${{ jobs.dedupe.outputs.cited }}
+      node-version:
+        description: The Node version the full job resolved (empty when it was skipped or not asked for).
+        value: ${{ jobs.full.outputs.node-version }}
+      python-version:
+        description: The Python version the full job resolved.
+        value: ${{ jobs.full.outputs.python-version }}
+      php-version:
+        description: The PHP version the full job resolved.
+        value: ${{ jobs.full.outputs.php-version }}
 
 permissions:
   actions: read
@@ -630,13 +650,31 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ steps.toolchain.outputs.python-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles(format('{0}/requirements*.txt', inputs.working-directory), format('{0}/pyproject.toml', inputs.working-directory)) != '' && 'pip' || '' }}
+          cache-dependency-path: |
+            ${{ inputs.working-directory }}/requirements*.txt
+            ${{ inputs.working-directory }}/pyproject.toml
 
       - name: Setup PHP
         if: steps.toolchain.outputs.php-version != ''
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ steps.toolchain.outputs.php-version }}
+          extensions: ${{ inputs.php-extensions }}
           coverage: none
+
+      - name: Locate Composer cache
+        id: composer-cache
+        if: steps.toolchain.outputs.php-version != '' && runner.environment == 'github-hosted' && hashFiles(format('{0}/composer.lock', inputs.working-directory)) != ''
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Composer cache
+        if: steps.composer-cache.outputs.dir != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', inputs.working-directory)) }}
+          restore-keys: composer-${{ runner.os }}-
 
       - name: Install dependencies
         env:
@@ -675,6 +713,12 @@ jobs:
     if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     runs-on: ${{ inputs.runs-on == 'classes' && fromJSON(format('["self-hosted",{0}"{1}"]', inputs.runner-lane != '' && format('"{0}",', inputs.runner-lane) || '', contains(fromJSON(inputs.trunk-branches), github.ref_name) && 'trunk' || 'full')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on) }}
     timeout-minutes: ${{ inputs.full-timeout-minutes }}
+    # The versions it resolved, for a caller job beside the call (a migration round-trip, #724) —
+    # resolved once, here, never a second time with a second rule.
+    outputs:
+      node-version: ${{ steps.toolchain.outputs.node-version }}
+      python-version: ${{ steps.toolchain.outputs.python-version }}
+      php-version: ${{ steps.toolchain.outputs.php-version }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -769,13 +813,31 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ steps.toolchain.outputs.python-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles(format('{0}/requirements*.txt', inputs.working-directory), format('{0}/pyproject.toml', inputs.working-directory)) != '' && 'pip' || '' }}
+          cache-dependency-path: |
+            ${{ inputs.working-directory }}/requirements*.txt
+            ${{ inputs.working-directory }}/pyproject.toml
 
       - name: Setup PHP
         if: steps.toolchain.outputs.php-version != ''
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ steps.toolchain.outputs.php-version }}
+          extensions: ${{ inputs.php-extensions }}
           coverage: none
+
+      - name: Locate Composer cache
+        id: composer-cache
+        if: steps.toolchain.outputs.php-version != '' && runner.environment == 'github-hosted' && hashFiles(format('{0}/composer.lock', inputs.working-directory)) != ''
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Composer cache
+        if: steps.composer-cache.outputs.dir != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', inputs.working-directory)) }}
+          restore-keys: composer-${{ runner.os }}-
 
       - name: Install dependencies
         env:

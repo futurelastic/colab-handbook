@@ -186,6 +186,12 @@ test('every fingerprint still occurs in the template it is attributed to', () =>
     if (!fp.template) continue; // unattributed markers are checked below
     const file = path.join(REPO_ROOT, 'templates', `${fp.template}.yml`);
     const text = fs.readFileSync(file, 'utf8');
+    if (fp.legacy) {
+      // Kept for the copies made before the template changed shape (#724) — and only while it is true
+      // that the template no longer carries it; one still present is not legacy.
+      assert.ok(!stamp.fingerprintHits(text, fp), `"${fp.marker}" is marked legacy (${fp.legacy}) but still occurs in templates/${fp.template}.yml`);
+      continue;
+    }
     assert.ok(stamp.fingerprintHits(text, fp),
       `fingerprint "${fp.marker}" no longer appears in templates/${fp.template}.yml — ` +
       'a fingerprint that outlived its template silently stops detecting copies');
@@ -193,8 +199,9 @@ test('every fingerprint still occurs in the template it is attributed to', () =>
 });
 
 test('unattributed fingerprints occur in more than one template (else attribute them)', () => {
-  const templateTexts = [...TEMPLATES].map((n) =>
-    fs.readFileSync(path.join(REPO_ROOT, 'templates', `${n}.yml`), 'utf8'));
+  // Every workflow template, not a fixed few: since #724 the light ones carry a caller header instead.
+  const templateTexts = fs.readdirSync(path.join(REPO_ROOT, 'templates')).filter((f) => f.endsWith('.yml'))
+    .map((f) => fs.readFileSync(path.join(REPO_ROOT, 'templates', f), 'utf8'));
   for (const fp of WORKFLOW_FINGERPRINTS.filter((f) => !f.template)) {
     const hits = templateTexts.filter((t) => stamp.fingerprintHits(t, fp)).length;
     assert.ok(hits > 1,
@@ -829,7 +836,9 @@ test('`colab update`: a CI copy behind its template is a suggestion — reported
   const tags = spawnSync('git', ['tag', '--sort=-version:refname'], { cwd: REPO_ROOT, encoding: 'utf8' }).stdout.split('\n')
     .filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
   // The newest release whose ci-node.yml has changed since: a pristine copy of it reads `behind`.
-  const old = tags.find((t) => stamp.templateAt(REPO_ROOT, t, 'ci-node') !== null
+  // Never the current release itself: a copy stamped there reads `current` while the caller form waits
+  // for a release carrying ci-light.yml (#724).
+  const old = tags.find((t) => t !== hb.version && stamp.templateAt(REPO_ROOT, t, 'ci-node') !== null
     && stamp.templateChangedSince(REPO_ROOT, stamp.templateFiles('ci-node'), t).changed);
   if (hb.untagged || !old) return; // a shallow or tagless checkout cannot answer this question
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-home-'));

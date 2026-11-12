@@ -38,13 +38,14 @@ for (const file of TEMPLATES) {
   test(`${file}: trunk master — every protected ref is master, no main/dev left in the three places (#526)`, () => {
     const r = tt.substituteTrunk(text, tt.protectedRefs({ trunk: 'master', tier: 'B' }));
     assert.deepStrictEqual(r.missed, []);
-    assert.ok(r.changes.includes('concurrency group') && r.changes.includes('cancel-in-progress') && r.changes.includes("dedupe guard's if:"));
+    // #724: a caller names its trunk refs in the call's `trunk-branches` input, not a guard `if:`.
+    assert.ok(r.changes.includes('concurrency group') && r.changes.includes('cancel-in-progress') && r.changes.includes('trunk-branches input'));
     const group = r.text.match(/^  group: (.*)$/m)[1];
     const cancel = r.text.match(/^  cancel-in-progress: (.*)$/m)[1];
-    const guard = r.text.match(/^    if: github\.event_name == 'push' && \(github\.event\.created \|\| (.*)$/m)[1];
-    for (const line of [group, cancel, guard]) {
+    for (const line of [group, cancel]) {
       assert.deepStrictEqual(refsIn(line, /refs\/heads\/([^']+)'/g), ['master'], line);
     }
+    assert.match(r.text, /^      trunk-branches: '\["master"\]'$/m);
     assert.doesNotMatch(r.text, /refs\/heads\/dev'/);
     if (file === 'ci-laravel.yml') {
       assert.ok(r.changes.includes('test tier'));
@@ -85,7 +86,8 @@ test('colab template ci-node: trunk master, no build script, its own CI — subs
     const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'tools', 'colab'), 'template', 'ci-node', '--dest', '.github/workflows/ci.yml'],
       { cwd: dir, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
     assert.strictEqual(r.status, 0, r.stderr + r.stdout);
-    assert.match(r.stdout, /trunk: wrote master \(from \.github\/project\.yml\) into: concurrency group, cancel-in-progress, dedupe guard's if:/);
+    // A caller, or — until a final release carries ci-light.yml — that release's own full copy (#724).
+    assert.match(r.stdout, /trunk: wrote master \(from \.github\/project\.yml\) into: concurrency group, cancel-in-progress, (dedupe guard's if:|trunk-branches input)/);
     assert.match(r.stdout, /also run on push[\s\S]*\.github\/workflows\/test\.yml/);
     assert.doesNotMatch(r.stdout, /nightly\.yml/);
     assert.doesNotMatch(r.stdout, /^    \.github\/workflows\/ci\.yml$/m, "the copy itself is not listed");
@@ -97,32 +99,26 @@ test('colab template ci-node: trunk master, no build script, its own CI — subs
   }
 });
 
-test('ci-node Build is optional: no build script or an empty BUILD_COMMAND skips with a notice (#526)', () => {
+test('ci-node quick and full run only the scripts package.json declares; a declared one that fails still fails (#526, #724)', (t) => {
+  if (spawnSync('npm', ['--version']).status !== 0) return t.skip('no npm on this machine');
   const text = read('ci-node.yml');
-  const lines = text.split('\n');
-  const at = lines.findIndex((l) => /^      - name: Build$/.test(l));
-  assert.notStrictEqual(at, -1);
-  const runAt = lines.findIndex((l, i) => i > at && /^        run: \|$/.test(l));
-  const body = [];
-  for (let i = runAt + 1; i < lines.length && (/^          /.test(lines[i]) || lines[i] === ''); i++) body.push(lines[i].slice(10));
-  const script = body.join('\n');
+  const cmd = (k) => (text.match(new RegExp(`^      ${k}: (.+)$`, 'm')) || [])[1];
+  const quick = cmd('quick');
+  const full = cmd('full');
+  assert.ok(quick && full, 'the call carries one-line quick and full commands');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tpl-build-'));
-  const run = (pkg, cmd) => {
+  const run = (pkg, script) => {
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
-    return spawnSync('/bin/bash', ['-e', '-c', script], { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, BUILD_COMMAND: cmd } });
+    return spawnSync('/bin/bash', ['-eo', 'pipefail', '-c', script], { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, npm_config_update_notifier: 'false' } });
   };
   try {
-    let r = run({ scripts: { test: 'x' } }, 'build');
-    assert.strictEqual(r.status, 0);
-    assert.match(r.stdout, /::notice::No 'build' script in package\.json — skipping the build\./);
-    r = run({ scripts: { build: 'x' } }, '');
-    assert.strictEqual(r.status, 0);
-    assert.match(r.stdout, /BUILD_COMMAND is empty/);
-    r = run({ scripts: { build: 'echo BUILT-OK' } }, 'build');
-    assert.strictEqual(r.status, 0);
+    for (const script of [quick, full]) assert.strictEqual(run({ name: 'x' }, script).status, 0, `${script}: no scripts declared is green`);
+    let r = run({ name: 'x', scripts: { build: 'echo BUILT-OK' } }, full);
+    assert.strictEqual(r.status, 0, r.stderr);
     assert.match(r.stdout, /BUILT-OK/);
-    r = run({ scripts: { build: 'exit 3' } }, 'build');
-    assert.notStrictEqual(r.status, 0, 'a declared build that fails still fails the job');
+    assert.notStrictEqual(run({ name: 'x', scripts: { build: 'exit 3' } }, full).status, 0, 'a declared build that fails still fails the job');
+    assert.notStrictEqual(run({ name: 'x', scripts: { test: 'exit 3' } }, full).status, 0, 'a declared test that fails still fails the job');
+    assert.notStrictEqual(run({ name: 'x', scripts: { lint: 'exit 3' } }, quick).status, 0, 'a declared lint that fails still fails the job');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -179,4 +175,30 @@ test('ci-call: trunk-branches rewritten instead of a guard if:, nothing missed; 
   // renderForRepo applies both, so `colab update` reads a fresh copy as pristine at its stamped version.
   assert.match(tt.renderForRepo('ci-call', body, { trunk: 'master' }, 'v1.9.0'), /ci-light\.yml@v1\.9\.0$/m);
   assert.strictEqual(tt.renderForRepo('ci-call', body, null), body);
+});
+
+// #724: the release window. A copy is stamped with the latest FINAL, which can trail the working tree's
+// caller; until a final carries ci-light.yml the copy is that release's own template, never a dead pin.
+test('templateBodyAt: a caller pinned at a release without ci-light.yml is that release\'s own template (#724)', () => {
+  const caller = read('ci-node.yml');
+  const full = '# CI (Node) — TEMPLATE. Copy me into your repo at .github/workflows/ci.yml.\njobs:\n  dedupe:\n';
+  const shown = [];
+  const git = (carriesIt, old) => ({
+    hasGit: true,
+    carries: (v, p) => { assert.strictEqual(p, '.github/workflows/ci-light.yml'); return carriesIt; },
+    show: (v, p) => { shown.push(`${v}:${p}`); return old; },
+  });
+  // The release carries the reusable workflow: the caller, as is.
+  assert.deepStrictEqual(tt.templateBodyAt({ raw: caller, rel: 'ci-node.yml', version: 'v1.21.0', ...git(true, full) }), { body: caller });
+  // It does not: that release's own full copy — "copied from X" and "runs at X" stay one fact.
+  assert.deepStrictEqual(tt.templateBodyAt({ raw: caller, rel: 'ci-node.yml', version: 'v1.20.3', ...git(false, full) }), { body: full, fallback: 'v1.20.3' });
+  assert.deepStrictEqual(shown, ['v1.20.3:templates/ci-node.yml']);
+  // No such template at that release (ci-call before #721), or it is a caller too: nothing runnable to write.
+  assert.deepStrictEqual(tt.templateBodyAt({ raw: caller, rel: 'ci-call.yml', version: 'v1.20.3', ...git(false, null) }), { body: caller, unrunnable: 'v1.20.3' });
+  assert.deepStrictEqual(tt.templateBodyAt({ raw: caller, rel: 'ci-node.yml', version: 'v1.20.3', ...git(false, caller) }), { body: caller, unrunnable: 'v1.20.3' });
+  // Not a caller, an untagged handbook, or no git (a registry install ships its own release): untouched.
+  const never = { hasGit: true, carries: () => assert.fail('asked git'), show: () => assert.fail('asked git') };
+  assert.deepStrictEqual(tt.templateBodyAt({ raw: full, rel: 'ci-node-heavy.yml', version: 'v1.20.3', ...never }), { body: full });
+  assert.deepStrictEqual(tt.templateBodyAt({ raw: caller, rel: 'ci-node.yml', version: 'v0', ...never }), { body: caller });
+  assert.deepStrictEqual(tt.templateBodyAt({ raw: caller, rel: 'ci-node.yml', version: 'v1.20.3', ...never, hasGit: false }), { body: caller });
 });

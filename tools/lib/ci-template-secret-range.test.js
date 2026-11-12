@@ -80,7 +80,9 @@ function stepText(text, name) {
 }
 
 const DETECT = 'gitleaks detect';
-const SCRIPT = stepScript(read('ci-node.yml'), DETECT);
+// #724: the light templates call the reusable light lane, so the step lives once, in its gitleaks job.
+const LIGHT = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci-light.yml'), 'utf8');
+const SCRIPT = stepScript(LIGHT, DETECT);
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...GIT_ENV } }).trim();
 const GIT_ENV = {
@@ -155,11 +157,18 @@ function run(fx, checkout, env, { real = false } = {}) {
 
 // ---- the step is one step, everywhere --------------------------------------------------------
 
-test('the "gitleaks detect" step is identical in all three light templates, and always names a range', () => {
+test('the light templates carry no scan of their own: they call the lane that runs it (#724)', () => {
   for (const s of STACKS) {
     const text = read(`ci-${s}.yml`);
-    assert.strictEqual(stepScript(text, DETECT), SCRIPT, `ci-${s}.yml drifted from ci-node.yml`);
-    const job = jobText(text, 'gitleaks');
+    assert.match(text, /^    uses: [^\n]*\/\.github\/workflows\/ci-light\.yml@/m, `ci-${s}.yml calls ci-light.yml`);
+    assert.doesNotMatch(text, /gitleaks detect/, `ci-${s}.yml: a second copy of the scan`);
+  }
+});
+
+test('the reusable light lane\'s "gitleaks detect" step always names a range', () => {
+  {
+    const s = 'ci-light';
+    const job = jobText(LIGHT, 'gitleaks');
     for (const k of ['EVENT: ${{ github.event_name }}', 'REF_NAME: ${{ github.ref_name }}', 'BEFORE: ${{ github.event.before }}',
       'DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}']) assert.ok(job.includes(`          ${k}\n`), `${s}: env ${k}`);
     assert.match(job, /gitleaks detect --source \. --no-banner --log-opts="\$range"/);
@@ -254,17 +263,19 @@ const pin = (text) => text.match(/^ {2}GITLEAKS_VERSION: "([^"]+)"/m)[1];
 for (const s of STACKS) {
   test(`ci-${s}-heavy.yml: a full-history scan of trunk's tip, installed exactly as the light lane installs it`, () => {
     const heavy = read(`ci-${s}-heavy.yml`);
-    const light = read(`ci-${s}.yml`);
+    const light = LIGHT; // #724: the light lane's scan is the reusable workflow's
     const job = jobText(heavy, 'secrets');
     for (const l of ['    needs: plan', "    if: ${{ needs.plan.outputs.run == 'true' }}", '    permissions:\n      contents: read',
       '          ref: ${{ needs.plan.outputs.sha }}', '          fetch-depth: 0',
       '        run: gitleaks detect --source . --no-banner --log-opts=HEAD']) assert.ok(job.includes(l), `${s}: ${l}`);
     assert.doesNotMatch(job, /--all/, 'HEAD only, never every branch');
     // The pin and the install are the light lane's: two installers would drift apart.
-    assert.strictEqual(pin(heavy), pin(light));
+    assert.strictEqual(pin(heavy), (light.match(/^ {6}gitleaks-version:\n(?: {8}.*\n)*? {8}default: "([^"]+)"$/m) || [])[1]);
     const install = 'Install gitleaks (pinned release binary)';
-    assert.strictEqual(stepScript(job, install), stepScript(light, install));
-    for (const n of ['Restore gitleaks cache', install]) assert.strictEqual(stepText(job, n), stepText(jobText(light, 'gitleaks'), n), n);
+    // The commands, not the prose: the light lane's comments were rewritten once, for one file (#721).
+    const code = (t) => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    assert.strictEqual(code(stepScript(job, install)), code(stepScript(light, install)));
+    for (const n of ['Restore gitleaks cache', install]) assert.strictEqual(code(stepText(job, n)), code(stepText(jobText(light, 'gitleaks'), n)), n);
     // A red full-history scan on a nightly reports, like a red suite.
     const report = jobText(heavy, 'report');
     assert.ok(report.includes('    needs: [plan, heavy, secrets]\n'));
@@ -287,8 +298,8 @@ const jobPin = (job) => job.match(/^ {6}GITLEAKS_VERSION: "([^"]+)"/m)[1];
 
 test('this repo\'s ci.yml runs the templates\' ranged "gitleaks detect" step, byte for byte', () => {
   const ci = own('ci.yml');
-  // Identical to ci-node.yml's script, so every executed range test above covers it too.
-  assert.strictEqual(stepScript(ci, DETECT), SCRIPT, '.github/workflows/ci.yml drifted from templates/ci-node.yml');
+  // Identical to the reusable light lane's script, so every executed range test above covers it too.
+  assert.strictEqual(stepScript(ci, DETECT), SCRIPT, '.github/workflows/ci.yml drifted from .github/workflows/ci-light.yml');
   const job = jobText(ci, 'gitleaks');
   for (const k of ['EVENT: ${{ github.event_name }}', 'REF_NAME: ${{ github.ref_name }}', 'BEFORE: ${{ github.event.before }}',
     'DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}']) assert.ok(job.includes(`          ${k}\n`), `env ${k}`);

@@ -1,10 +1,13 @@
-# CI (Node) — TEMPLATE. Copy me into your repo at .github/workflows/ci.yml.
+# CI (Node) — CALLER of the handbook's reusable workflow. Copy me into your repo at .github/workflows/ci.yml.
 #
-# This is a starting point, not a dependency. Once you copy it, YOU OWN THIS FILE.
-# Edit it freely: rename jobs, add steps, drop the parts you do not need. Nothing
-# calls this file remotely and nothing will update it for you — divergence between
-# your copy and the handbook is expected and fine. If you find an improvement worth
-# sharing, change the handbook template too, but that is a manual, deliberate act.
+# A CALLER since #724, not a copy of the gate. The dedupe gate, the secret scan, the descriptor check
+# of .github/project.yml, the toolchain resolution (project.yml, then the manifest, else FAIL — never a
+# default), the package caches and the quick/full split live once, in the handbook's reusable
+# .github/workflows/ci-light.yml, and a handbook release moves them. What stays yours, and is yours to
+# edit: the triggers and `concurrency` (a called workflow cannot own either, CONVENTIONS.md §7, "One
+# verdict per tree"), the `with:` block, and any job of your own beside the call. `colab template ci-node`
+# writes this repo's trunk refs and pins the call to the handbook release it stamps the copy with;
+# `colab update` moves a pristine copy's stamp and pin together.
 #
 # EDIT POINTS are marked `# EDIT:` — walk them once after copying.
 #
@@ -12,25 +15,24 @@
 # NOT for: Laravel + Inertia fullstack apps — their Vite build shells out to
 # `php artisan wayfinder:generate` and needs PHP on the runner. Use ci-laravel.yml.
 #
-# What it does:
-#   0. Fail on a .github/project.yml value colab would silently ignore (ship-batch, #416;
-#      ship-batch-wait, #555; ci-wait-factor, #564).
-#   1. Resolve the Node version from declared sources — never a hardcoded default.
-#   2. Secret scan with gitleaks (pinned release binary, see note at the step).
-#   3. Install dependencies with the package manager the lockfile implies.
-#   4. Run typecheck / lint / test only if package.json declares those scripts, so a
+# What the call runs (ci-light.yml):
+#   0. The gate: already tested at this sha or tree? Then the suite is skipped (one verdict per tree).
+#   1. Secret scan with gitleaks (pinned release binary).
+#   2. Quick: the descriptor check (ship-batch, #416; ship-batch-wait, #555; ci-wait-factor, #564),
+#      then typecheck / lint — each only if package.json declares the script (`--if-present`), so a
 #      repo without them is not forced to add placeholders to keep CI green.
-#   5. Build, if package.json declares the BUILD_COMMAND script.
-#   6. Opt-in, commented: a Migration round-trip for `migration-grant: reviewer` (#494) —
-#      `colab template ci-node --roundtrip` writes it live at copy (#625).
+#   3. Full: `npm test`, then the build — again only the scripts package.json declares.
+#   Install is the lockfile's package manager (npm ci / pnpm install --frozen-lockfile).
+# Beside the call, opt-in and commented: a Migration round-trip for `migration-grant: reviewer`
+# (#494) — `colab template ci-node --roundtrip` writes it live at copy (#625).
 #
 # LIGHT LANE (#607): this file runs on every push and is what `colab ship` reads. Keep it
 # fast — secret scan, build, typecheck/lint, the fast tests (target: under 5 minutes).
 # The full suite, integration, e2e and load tests belong in the HEAVY lane,
 # templates/ci-node-heavy.yml copied to .github/workflows/ci-heavy.yml: it runs nightly
-# and on every release candidate/tag, never per merge. Tests are light unless marked heavy:
+# and on every release candidate/tag, never per merge. The heavy lane is still a copy (#724 kept it
+# one: it is not what drifted). Tests are light unless marked heavy:
 #   a `test:heavy` script in package.json (e.g. over `*.heavy.test.*` files) that `test` does not run.
-
 name: CI
 
 on:
@@ -60,10 +62,11 @@ on:
   # the newest run per workflow at a sha, so that second run also decided the verdict.
   # EDIT: a copy that went back to trunk-only push (above) has no run on a branch until it
   # has a PR — restore `pull_request: branches: [<trunk>]` there; that PR run is then its
-  # only branch run (CONVENTIONS.md §4, "Branch CI"), so also delete the fork-PR term
-  # (`github.event_name != 'pull_request' || …`) from every job's `if:` below, or it skips that run.
+  # only branch run (CONVENTIONS.md §4, "Branch CI"). But the called workflow skips a SAME-repo
+  # PR run (its jobs carry the fork-PR term), so with this caller that only helps fork PRs: on
+  # trunk-only push a same-repo branch gets no run at all. Keep '**' with the caller.
   # EDIT: fork PRs (#514). A push to a fork never runs a workflow here, so a repo that takes
-  # PRs from forks needs `pull_request`. Uncomment it there. Every suite job below already
+  # PRs from forks needs `pull_request`. Uncomment it there. Every job of the called workflow
   # carries `github.event.pull_request.head.repo.full_name != github.repository` for a PR
   # event, so a same-repo PR's run skips every job (its push run is the one that tests) and a
   # fork PR's run tests. A skipped run never stands for a workflow that has a run that ran
@@ -81,664 +84,73 @@ on:
 # group even when cancel-in-progress is false, so a third quick merge would otherwise
 # drop the second one's run before it ever started (#512).
 # EDIT: name exactly this repo's trunk (and release branch) here — in the group, in
-# cancel-in-progress, and in the `dedupe` job's `if:`. A Tier C trunk may carry any
+# cancel-in-progress, and in the call's `trunk-branches` input below. A Tier C trunk may carry any
 # name; one left off this list gets its trunk runs cancelled. `colab template` writes these
 # from the `trunk:` in .github/project.yml and prints what it wrote (#526).
 concurrency:
   group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
 
-env:
-  # EDIT: bump deliberately, not automatically.
-  GITLEAKS_VERSION: "8.30.1"
-  # EDIT: npm script to build. Change for monorepos or non-standard scripts. Empty, or a
-  # script package.json does not declare, skips the build with a notice (#526).
-  BUILD_COMMAND: "build"
-  ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
-  # # EDIT: the command that applies every pending migration to $DATABASE_URL — e.g.
-  # # `npx knex migrate:latest`, `npx dbmate --no-dump-schema up`, `node scripts/migrate.mjs`.
-  # # Empty = the round-trip job is SKIPPED, and a skipped job never passes R: migrations ship
-  # # on a human grant until this is set (#625). Here, not in the job, because a job-level
-  # # `if:` cannot read `env` — the build job hands it on as an output.
-  # ROUNDTRIP_APPLY: ""
-  ##<<< migration round-trip
+# The called jobs can only narrow these: the gate lists this workflow's runs and reads git objects.
+permissions:
+  actions: read
+  contents: read
 
-# Self-hosted runner? The job layout below assumes GitHub-hosted capacity — a
-# fresh machine per job. With few self-hosted agents every job is a queue slot,
-# jobs from different runs interleave, and trunk can wait behind branch runs.
-# Read CONVENTIONS.md §7, "Self-hosted runners", before choosing a label.
 jobs:
-  # Already tested? This job is the one that concludes `success` when the suite is skipped: a
-  # run whose jobs ALL skip concludes `skipped`, which `colab ship` reads as not-green.
-  #   - At this SHA (#418): on a ref's first push (a claim push), a green non-PR run of this
-  #     workflow at the same sha means the suite already ran.
-  #   - At this TREE (#493): on a push to trunk, and on the first push of a batch-landing ref
-  #     (`ship-batch/**`, #717), a green push run elsewhere whose commit has the byte-identical tree
-  #     (a squash of a branch that already contained its base) is reused and cited in a
-  #     `tree-already-green` notice. `tree-reuse: off` in .github/project.yml opts out.
-  #     A run that skipped a job (a trunk-only job skips on branches) is never reused (#511) — except
-  #     a job named in TRUNK_ONLY_JOBS below, which sits outside this gate and runs on trunk anyway.
-  #     So a trunk-only job (publish, deploy, release) never sits behind this gate: put it in a
-  #     workflow of its own, or keep it here ungated and list it (#717).
-  # The rule this keeps: one CI verdict per git tree (CONVENTIONS.md §7, "One verdict per tree").
-  # Any doubt — no run, red, an API error — runs the full suite; this job never fails the run.
-  dedupe:
-    name: Already tested at this sha or tree?
-    # EDIT: the trunk refs here mirror `concurrency`'s list above (#493).
-    if: github.event_name == 'push' && (github.event.created || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
-    runs-on: ubuntu-latest # EDIT: self-hosted → the class of the jobs below, never a host (CONVENTIONS.md §7, "Runner classes"); it needs `gh`.
-    timeout-minutes: 5 # one `gh api` listing, a hung call must not hold the slot. EDIT: the default is 360.
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      tested: ${{ steps.check.outputs.tested }}
-      cited: ${{ steps.check.outputs.cited }}
-    steps:
-      - name: Look for a green run of this workflow at this sha or tree
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          SHA: ${{ github.sha }}
-          CREATED: ${{ github.event.created }}
-          REF_NAME: ${{ github.ref_name }}
-          GUARD_NAME: Already tested at this sha or tree? # EDIT: this job's `name:`, if you rename it (#511).
-          # EDIT (#717): the `name:` of every job here that is trunk-only (publish, deploy, release) and
-          # sits OUTSIDE this gate — its `if:` never reads `needs.dedupe.outputs.tested`, so it runs on
-          # trunk whatever this guard decides. Comma-separated, exact names as a run lists them. A cited
-          # branch run may have skipped these and is still reused. Never list a suite job or any job
-          # behind the gate: it would then be skipped on trunk twice. Empty = #511 unchanged. Simpler
-          # still: keep trunk-only jobs in a workflow of their own (CONVENTIONS.md §7, "One verdict per tree").
-          TRUNK_ONLY_JOBS: ""
-        run: |
-          tested=false
-          cited=
-          # #511: a cited run is reusable only if it skipped no job but this guard. A job gated on
-          # the trunk ref is `skipped` on every branch push and a skipped job does not fail the
-          # run, so citing that run would skip the trunk-only job on trunk a second time — unless
-          # the job is named in TRUNK_ONLY_JOBS: it sits outside the gate and runs here anyway (#717).
-          reusable() {
-            if ! SK="$(gh api "repos/$REPO/actions/runs/$1/jobs?per_page=100" \
-                   --jq 'if .total_count > (.jobs | length) then "(more than 100 jobs)" else [.jobs[] | select(.conclusion == "skipped" and .name != env.GUARD_NAME) | .name | select(. as $n | any((env.TRUNK_ONLY_JOBS // "") | split(",")[] | gsub("^\\s+|\\s+$"; ""); . == $n) | not)] | join(", ") end' 2>/dev/null)"; then
-              echo "::notice::Could not list the jobs of run $1 — running the full suite (#511)."
-              return 1
-            elif [ -n "$SK" ]; then
-              echo "::notice::Run $1 skipped $SK, which this push may run — running the full suite (#511)."
-              return 1
-            fi
-          }
-          # The candidate runs, one per line as "<id> <head sha> <url> <branch>", newest first: green
-          # push runs of this workflow on another ref of this repo. #552: those at THIS sha first (a
-          # `ship-batch/*` run trunk fast-forwarded to), an exact query; then those whose commit has
-          # THIS tree (#493). The query's own per_page bounds the walk (#592).
-          same_sha() {
-            gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&event=push&status=success&per_page=20" \
-              --jq ".workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\"" 2>/dev/null
-          }
-          same_tree() {
-            gh api "repos/$REPO/actions/workflows/$WFID/runs?event=push&status=success&per_page=50" \
-              --jq ".workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\"" 2>/dev/null
-          }
-          # #592: cite the newest candidate on stdin that passes every check. One that fails a check
-          # is passed over, not the end of the search: the newest green run can be a skip-chained one
-          # (#511) while an older run at the same sha or tree ran every job. A run already tried (the
-          # sha query's runs reappear in the tree listing) is not tried twice.
-          cite() {
-            local CID CSHA URL BR CTREE
-            while read -r CID CSHA URL BR; do
-              [ -n "$CID" ] || continue
-              case " $TRIED " in *" $CID "*) continue ;; esac
-              TRIED="$TRIED $CID"
-              if ! CTREE="$(gh api "repos/$REPO/git/commits/$CSHA" --jq .tree.sha 2>/dev/null)" || [ "$CTREE" != "$OURS" ]; then
-                echo "::notice::Could not confirm the tree of $CSHA — passing over run $CID (#493)."
-              elif reusable "$CID"; then
-                tested=true
-                cited="$URL"
-                echo "::notice title=tree-already-green::$URL tree=$OURS head=$CSHA branch=$BR"
-                echo "Tree $OURS already passed this workflow at $CSHA on $BR ($URL) — skipping the suite (#493)."
-                echo "Already tested: tree \`$OURS\` passed this workflow on \`$BR\` — [the run relied on]($URL); suite skipped (#493)." >> "$GITHUB_STEP_SUMMARY"
-                return 0
-              fi
-            done
-            return 1
-          }
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "::notice::gh is not installed on this runner — running the full suite (#418)."
-          elif ! WFID="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id 2>/dev/null)" || [ -z "$WFID" ]; then
-            echo "::notice::Could not read this run's workflow id — running the full suite (#418)."
-          elif [ "${CREATED:-}" = "false" ] || [[ "$REF_NAME" == ship-batch/* ]]; then
-            # Tree mode (#493): a non-creating push to trunk, or the creating push of a batch-landing
-            # ref (#717), whose new sha often carries a tree a member branch already passed. Same
-            # checks either way; only the trunk check is the ref's own. Every branch below but one
-            # runs the suite.
-            if ! DESC="$(gh api "repos/$REPO/contents/.github/project.yml?ref=$SHA" -H 'Accept: application/vnd.github.raw' 2>/dev/null)" || [ -z "$DESC" ]; then
-              echo "::notice::Could not read .github/project.yml at $SHA — running the full suite (#493)."
-            elif grep -Eq '^tree-reuse[[:space:]]*:' <<< "$DESC"; then
-              echo "::notice::tree-reuse is declared in .github/project.yml — running the full suite (#493)."
-            elif [ "${CREATED:-}" = "false" ] && [ "$(printf '%s\n' "$DESC" | sed -nE "s/^trunk:[[:space:]]*[\"']?([A-Za-z0-9._/-]+).*/\\1/p" | head -n 1)" != "$REF_NAME" ]; then
-              echo "::notice::$REF_NAME is not this repo's trunk — running the full suite (#493)."
-            elif ! OURS="$(gh api "repos/$REPO/git/commits/$SHA" --jq .tree.sha 2>/dev/null)" || [ -z "$OURS" ]; then
-              echo "::notice::Could not read the tree of $SHA — running the full suite (#493)."
-            else
-              TRIED=
-              SC="$(same_sha)" || SC=    # the sha query failing falls through to the tree listing (#552)
-              if [ -n "$SC" ] && cite <<< "$SC"; then
-                :
-              elif ! TC="$(same_tree)"; then
-                echo "::notice::Could not list this workflow's green runs — running the full suite (#493)."
-              elif [ -z "$SC$TC" ]; then
-                echo "No green run of this workflow on another ref has sha $SHA or tree $OURS — running the full suite."
-              elif ! cite <<< "$TC"; then
-                echo "No green run of this workflow at sha $SHA or tree $OURS can be cited — running the full suite (#592)."
-              fi
-            fi
-          elif ! N="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&status=success&per_page=20" \
-                 --jq "[.workflow_runs[] | select(.id != $RUN_ID and .event != \"pull_request\")] | length" 2>/dev/null)"; then
-            echo "::notice::Could not list this workflow's runs at $SHA — running the full suite (#418)."
-          elif [ "${N:-0}" -ge 1 ] 2>/dev/null; then
-            tested=true
-            echo "This workflow already passed at $SHA ($N green run(s)) — skipping the suite (#418)."
-            echo "Already tested: this workflow has a green run at \`$SHA\` — suite skipped (#418)." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No green run of this workflow at $SHA yet — running the full suite."
-          fi
-          echo "tested=$tested" >> "$GITHUB_OUTPUT"
-          [ -z "$cited" ] || echo "cited=$cited" >> "$GITHUB_OUTPUT"
-
-  gitleaks:
-    name: Secret scan (gitleaks)
-    needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
-    runs-on: ubuntu-latest # EDIT: self-hosted → a class, never a host: quick on a branch, trunk on trunk (CONVENTIONS.md §7, "Runner classes").
-    timeout-minutes: 15 # a scan of the checkout. EDIT: the default is 360.
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          # Full history: the scan's range is computed against trunk (origin/<trunk>..HEAD), and
-          # the two ends of that range have to be in the clone. The range itself is narrow — see
-          # "gitleaks detect" below (#716).
-          fetch-depth: 0
-          persist-credentials: false
-
-      # Kept between jobs (#696) — GitHub-hosted only: a fresh VM has nothing on disk, so the
-      # binary comes back from here and the install step below downloads nothing.
-      #   - Self-hosted → off. A persistent runner keeps its tool cache on disk already, and a
-      #     remote cache on top was measured as a loss, not a saving (#512).
-      #   - Keyed on the pin and the platform: a version bump is a miss. The post step saves
-      #     only when the job passes, so a failed download is never what gets cached.
-      # A NEW step, skipped on self-hosted. "Install gitleaks (pinned release binary)" keeps
-      # its name: handbook-sync recognises a copy of this job by it.
-      # EDIT: self-hosted runners are already off; to turn it off everywhere, delete this step.
-      - name: Restore gitleaks cache
-        if: runner.environment == 'github-hosted'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.tool_cache }}/gitleaks/${{ env.GITLEAKS_VERSION }}
-          key: gitleaks-${{ env.GITLEAKS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install gitleaks (pinned release binary)
-        env:
-          # Authenticated (#698). Under load GitHub sheds ANONYMOUS release downloads first:
-          # measured 2026-11-09, ~90 min of instant 504s from github.com/…/releases/download,
-          # while the API asset path below answered 200 with the same file. The job's own token
-          # is enough — reading a public release needs an identity, not a permission.
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Deliberately NOT gitleaks/gitleaks-action@v2: that action requires a paid
-          # GITLEAKS_LICENSE for repositories owned by an organization (free only for
-          # personal repos). The release binary itself is MIT and has no such gate.
-          # Repos also carry a local pre-commit gitleaks hook; this is the second layer.
-          # The asset is OS/arch-specific, so resolve both from uname instead of
-          # assuming the GitHub-hosted default: a hardcoded linux_x64 binary on a
-          # macOS self-hosted runner is an ELF the kernel cannot exec, and the step
-          # fails with exit 126 rather than anything mentioning the platform.
-          case "$(uname -s)" in
-            Darwin) os=darwin ;;
-            Linux)  os=linux ;;
-            *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
-          esac
-          case "$(uname -m)" in
-            arm64|aarch64) arch=arm64 ;;
-            x86_64|amd64)  arch=x64 ;;
-            *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
-          esac
-          # Kept between jobs (#696): a pinned version is downloaded once per runner, not on
-          # every run. A release download can answer 504 for hours (measured: 20 of 20 tries),
-          # which outlasts any retry, so the binary has to be on the runner already.
-          # Into the runner's tool cache, not /usr/local/bin: no sudo, no global write — the
-          # per-runner directory setup-node and setup-python install into. A persistent
-          # self-hosted runner keeps it on disk; a GitHub-hosted VM gets it back from the
-          # "Restore gitleaks cache" step above. The version is in the path, so a pin bump is a
-          # miss, never a stale binary. EDIT: an ephemeral self-hosted runner keeps neither and
-          # downloads on every run.
-          dir="${RUNNER_TOOL_CACHE:-$RUNNER_TEMP}/gitleaks/${GITLEAKS_VERSION}/${os}-${arch}"
-          if [ -x "$dir/gitleaks" ]; then
-            echo "gitleaks ${GITLEAKS_VERSION} already on this runner: $dir"
-          else
-            mkdir -p "$dir"
-            tmp="$(mktemp -d "$dir.XXXXXX")"
-            trap 'rm -rf "$tmp"' EXIT
-            asset="gitleaks_${GITLEAKS_VERSION}_${os}_${arch}.tar.gz"
-            sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
-            # fetch <accept> <url> <file> — every request of this step, one curl line.
-            # --fail: on an HTTP error curl otherwise saves the error page and exits 0, and tar
-            # then fails with "not in gzip format", naming neither the download nor the host.
-            # --retry: a re-run during the same upstream error spends the one re-run branch CI
-            # allows, so a brief error is retried here first. A longer outage still fails, at
-            # curl, naming the status (#690).
-            # The token reaches api.github.com only: curl drops an -H Authorization header when
-            # the asset's 302 leads to another host, so the download CDN never sees it.
-            fetch() {
-              curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 10 --max-time 120 \
-                -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: $1" -o "$3" "$2"
-            }
-            # The API serves an asset by id, not by name, so look the ids up in the release. No jq:
-            # a self-hosted runner need not have it. Splitting on , { [ leaves one key per line
-            # whether the JSON comes pretty or compact; within an asset, "url" precedes "name". Were
-            # that order ever to change, the wrong file would arrive and the sha256 check below
-            # would refuse it — a loud failure, never a wrong binary.
-            fetch application/vnd.github+json \
-              "https://api.github.com/repos/gitleaks/gitleaks/releases/tags/v${GITLEAKS_VERSION}" "$tmp/release.json"
-            for f in "$asset" "$sums"; do
-              url="$(tr ',{[' '\n\n\n' < "$tmp/release.json" | awk -F'"' -v want="$f" '
-                $2 == "url" && $4 ~ /\/releases\/assets\/[0-9]+$/ { u = $4 }
-                $2 == "name" && $4 == want && !found { print u; found = 1 }')"
-              if [ -z "$url" ]; then
-                echo "::error::gitleaks release v${GITLEAKS_VERSION} has no asset $f"; exit 1
-              fi
-              fetch application/octet-stream "$url" "$tmp/$f"
-            done
-            # Verified before tar (#698): an error page, a truncated file or a wrong archive stops
-            # here, naming the file, instead of reaching tar — or, for a valid archive, the PATH.
-            want="$(awk -v f="$asset" '$2 == f { print $1 }' "$tmp/$sums")"
-            if command -v sha256sum >/dev/null; then got="$(sha256sum "$tmp/$asset" | awk '{ print $1 }')"
-            else got="$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }')"; fi # macOS self-hosted
-            if [ -z "$want" ]; then
-              echo "::error::$sums does not list $asset, so it cannot be verified"; exit 1
-            fi
-            if [ "$got" != "$want" ]; then
-              echo "::error::sha256 mismatch for $asset: got $got, $sums lists $want"; exit 1
-            fi
-            tar -xzf "$tmp/$asset" -C "$tmp" gitleaks
-            chmod +x "$tmp/gitleaks"
-            # One rename on one filesystem: a job sharing this tool cache sees no binary or a
-            # whole one, never half of one.
-            mv -f "$tmp/gitleaks" "$dir/gitleaks"
-          fi
-          echo "$dir" >> "$GITHUB_PATH"
-
-      # The scan range (#716): only the commits this run brings, never `git log --all`. A
-      # fetch-depth-0 checkout holds every branch and tag, and gitleaks' default range is all of
-      # them — so one unshipped branch's finding turned EVERY branch's run red, a trunk cure
-      # included, until that branch rewrote its history.
-      #   - A branch push: the commits not yet on trunk (origin/<trunk>..HEAD).
-      #   - A trunk push: the pushed range (before..HEAD).
-      #   - No range to read (a dispatch, a first or forced trunk push, trunk not fetched): HEAD's
-      #     own history — still never another branch's.
-      # Trunk is `trunk:` in .github/project.yml, else the repository's default branch. Every
-      # commit trunk's tip can reach is scanned by the heavy lane instead (templates/
-      # ci-<stack>-heavy.yml, job `secrets`), which blocks no merge. The step keeps its name.
-      - name: gitleaks detect
-        env:
-          EVENT: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
-          BEFORE: ${{ github.event.before }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          trunk="$(sed -nE "s/^trunk:[[:space:]]*[\"']?([A-Za-z0-9._/-]+).*/\\1/p" .github/project.yml 2>/dev/null | head -n 1 || true)"
-          trunk="${trunk:-$DEFAULT_BRANCH}"
-          commit() { [ -n "$1" ] && git rev-parse --verify -q "$1^{commit}" >/dev/null; }
-          if [ -n "$trunk" ] && [ "$REF_NAME" = "$trunk" ]; then
-            if [ "$EVENT" = push ] && commit "$BEFORE" && git merge-base --is-ancestor "$BEFORE" HEAD; then
-              range="$BEFORE..HEAD"
-            else
-              range=HEAD
-            fi
-          elif [ -n "$trunk" ] && commit "refs/remotes/origin/$trunk"; then
-            range="refs/remotes/origin/$trunk..HEAD"
-          else
-            range=HEAD
-          fi
-          echo "Secret scan range: $range ($(git rev-list --count "$range") commit(s))"
-          gitleaks detect --source . --no-banner --log-opts="$range"
-
-  build:
-    name: Build
-    needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
-    # A repo can adopt this template before it has any application code at all —
-    # a fresh Tier B scaffold with decisions locked and a backlog filed, nothing
-    # else. Unguarded, every step below still runs: "Install dependencies" warns
-    # and falls through to `npm install` with no package.json to install, then
-    # "Build" fails outright trying to read it — turning trunk CI red as the
-    # first consequence of adopting, not of anything about the repo changing.
-    # Skip the package.json-dependent steps instead, the same way the generic
-    # scaffold workflow guards it (`if [ -f package.json ]; then node=true; else
-    # node=false; fi`). gitleaks above stays unconditional — a repo with no code
-    # can still commit a secret.
-    #
-    # NOTE (#245): this guard used to sit here, at job level — `if:
-    # hashFiles('package.json') != ''`. `hashFiles()` is NOT among the functions
-    # GitHub allows in `jobs.<job_id>.if` (only `github` / `needs` / `vars` /
-    # `inputs` plus always()/cancelled()/success()/failure()); a job-level `if:`
-    # using it is rejected at workflow-VALIDATION time, before any job runs — the
-    # whole workflow file fails with "0 jobs created" and a message that names
-    # neither the key nor the expression. It is valid in a step-level `if:`,
-    # which is why it looked right when written (a042cea, fixing #73). Moved the
-    # guard onto every step below that assumes package.json exists instead — the
-    # workspace isn't even checked out yet at job level, so a job-level
-    # hashFiles() would have been testing an empty directory even if it were
-    # allowed.
-    runs-on: ubuntu-latest # EDIT: self-hosted → a class, never a host: full (quick if it keeps quick's promise) on a branch, trunk on trunk (CONVENTIONS.md §7, "Runner classes").
-    timeout-minutes: 60 # a hung build must not hold the runner for the 360-minute default (#572).
-    # EDIT: measured (#572): the slowest Node adopter's build ran p99 37 / max 43 min. Keep this
-    # well above YOUR p99 — below it a slow but healthy suite goes red (`gh run view <id>` per job).
-    # Re-exported so the opt-in round-trip job below resolves Node exactly once, here.
-    outputs:
-      node-version: ${{ steps.toolchain.outputs.node-version }}
-  ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
-  #     # `on` once ROUNDTRIP_APPLY is set; the round-trip job runs only then (#625).
-  #     roundtrip: ${{ env.ROUNDTRIP_APPLY != '' && 'on' || 'off' }}
-  ##<<< migration round-trip
-    defaults:
-      run:
-        # EDIT: set to the directory holding package.json if the app is not at the root.
-        working-directory: .
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          persist-credentials: false
-
-      # ---------------------------------------------------------------------------
-      # Descriptor check (#416). A value `colab ship` cannot use does not fail there —
-      # it fails closed to the safe default, silently. `ship-batch: 5` (the cap was 3)
-      # once turned every landing in a busy repo back to serial while this CI stayed
-      # green; only a ship dry run noticed. So the value fails HERE, where the person
-      # who changed project.yml is looking. Same rule as `colab ship` and the audit
-      # (tools/lib/ship-batch.js parseShipBatch): absent/empty/null, or 1–8. Why the
-      # cap is 8: project.schema.md, `ship-batch`. `ship-batch-wait` (#555) the same way
-      # (parseShipBatchWait): absent/empty/null, or a whole number with a unit (s, m, h).
-      # `ship-batch-steps` (#557, parseShipBatchSteps): absent/empty/null, or ascending
-      # whole numbers within ship-batch — 2,4,8 or [2, 4, 8].
-      # `ci-wait-factor` (#564) too (tools/lib/ci-profile.js parseFactor): absent, or a number >= 1.
-      # ---------------------------------------------------------------------------
-      - name: Descriptor check (.github/project.yml)
-        working-directory: ${{ github.workspace }}
-        run: |
-          [ -f .github/project.yml ] || exit 0
-          # The scalar after `<key>:` — comment, trailing blanks and one level of quotes stripped.
-          field() {
-            grep -E "^$1[[:space:]]*:" .github/project.yml | head -1 \
-              | sed -E -e "s/^$1[[:space:]]*:[[:space:]]*//" \
-                -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]+$//' \
-                -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/" || true
-          }
-          v="$(field ship-batch)"
-          case "$v" in
-            ''|'~'|null|1|2|3|4|5|6|7|8) echo "ship-batch: ${v:-absent} — ok" ;;
-            *)
-              echo "::error file=.github/project.yml::ship-batch is '$v', expected an integer 1-8 (omit for serial). colab ship ignores any other value and lands serially. Why the cap is 8: project.schema.md, ship-batch."
-              exit 1 ;;
-          esac
-          # ship-batch-steps (#557): ascending whole numbers, each within ship-batch (the ceiling read above).
-          s="$(field ship-batch-steps)"
-          case "$s" in
-            ''|'~'|null) echo "ship-batch-steps: absent — ok (fixed size)" ;;
-            *)
-              case "$v" in ''|'~'|null) ceil=1 ;; *) ceil="$v" ;; esac
-              list="$(printf '%s' "$s" | sed -E -e 's/^\[(.*)\]$/\1/' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' -e 's/[[:space:]]*,[[:space:]]*/,/g')"
-              if printf '%s\n' "$list" | grep -Eq '^[1-9][0-9]*(,[1-9][0-9]*)*$' \
-                && printf '%s\n' "$list" | tr ',' '\n' | awk -v n="$ceil" '{ if ($1 + 0 <= p || $1 + 0 > n + 0) bad = 1; p = $1 + 0 } END { exit bad }'; then
-                echo "ship-batch-steps: $list — ok"
-              else
-                echo "::error file=.github/project.yml::ship-batch-steps is '$s', expected strictly ascending whole numbers within ship-batch ($ceil), like 2,4,8 (omit for a fixed size). colab ship ignores any other value and uses the fixed size. See project.schema.md, ship-batch-steps."
-                exit 1
-              fi ;;
-          esac
-          # ship-batch-wait (#555): a whole number with a unit — 90s, 6m, 1h. No ceiling: the repo chooses.
-          w="$(field ship-batch-wait)"
-          case "$w" in
-            ''|'~'|null) echo "ship-batch-wait: absent — ok" ;;
-            *)
-              if printf '%s\n' "$w" | grep -Eq '^[0-9]+[smh]$'; then
-                echo "ship-batch-wait: $w — ok"
-              else
-                echo "::error file=.github/project.yml::ship-batch-wait is '$w', expected a whole number with a unit: 90s, 6m, 1h (omit for no wait). colab ship ignores any other value and does not wait."
-                exit 1
-              fi ;;
-          esac
-          # ci-wait-factor (#559): a number >= 1 — a multiple of the repo's measured CI duration. No ceiling.
-          # Same reading as tools/lib/ci-profile.js parseFactor on the raw scalar the audit hands it.
-          f="$(field ci-wait-factor)"
-          case "$f" in
-            ''|'~'|null) echo "ci-wait-factor: absent — ok (default 2)" ;;
-            *)
-              if printf '%s\n' "$f" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v n="$f" 'BEGIN { exit !(n + 0 >= 1) }'; then
-                echo "ci-wait-factor: $f — ok"
-              else
-                echo "::error file=.github/project.yml::ci-wait-factor is '$f', expected a number >= 1 (a multiple of the measured CI duration; omit for 2). colab ship and colab ci-wait ignore any other value and use 2. See project.schema.md, ci-wait-factor."
-                exit 1
-              fi ;;
-          esac
-          # thresholds (#560): one level of `name: whole number`, each name known and at or above its
-          # floor (and, for a percent, at most 100) — the table in tools/lib/thresholds.js (SPEC),
-          # which a test holds this list to.
-          # A bad entry falls back to the default everywhere, silently, so it fails here.
-          bad=0
-          while IFS= read -r t; do
-            case "$t" in =*)
-              echo "::error file=.github/project.yml::thresholds is '${t#=}', expected a map of 'name: whole number' pairs. See project.schema.md, thresholds."
-              bad=1; continue ;;
-            esac
-            k="${t%%:*}"
-            n="$(printf '%s' "${t#*:}" | sed -E -e 's/^[[:space:]]+//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/")"
-            max=999999999
-            case "$k" in
-              hot-file-count|claude-md-line-multiple) min=2 ;;
-              dependents-count|hold-stale-days|smoke-minutes|claude-md-kb|transitional-days|batch-min-samples) min=1 ;;
-              claude-md-line-floor-bytes|doc-budget-slack) min=0 ;;
-              batch-first-green-pct-min|batch-eviction-pct-max|batch-overlap-pct) min=0 max=100 ;;
-              *) echo "::error file=.github/project.yml::thresholds.$k is not a known threshold (colab thresholds lists them). See project.schema.md, thresholds."
-                 bad=1; continue ;;
-            esac
-            case "$n" in ''|'~'|null) continue ;; esac
-            if printf '%s\n' "$n" | grep -Eq '^[0-9]{1,9}$' && [ "$n" -ge "$min" ] && [ "$n" -le "$max" ]; then
-              echo "thresholds.$k: $n — ok"
-            else
-              echo "::error file=.github/project.yml::thresholds.$k is '$n', expected a whole number from $min to $max. Every reader ignores it (a batch-* key is then not judged; any other uses its default). See project.schema.md, thresholds."
-              bad=1
-            fi
-          done < <(awk '
-            /^thresholds[[:space:]]*:/ { b = 1; v = $0
-              sub(/^thresholds[[:space:]]*:[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v); sub(/[[:space:]]+$/, "", v)
-              if (v != "" && v != "~" && v != "null") print "=" v
-              next }
-            b && /^[[:space:]]*(#|$)/ { next }
-            b && /^[[:space:]]/ { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+#.*$/, "", l); sub(/[[:space:]]+$/, "", l); print l; next }
-            { b = 0 }' .github/project.yml)
-          [ "$bad" = 0 ] || exit 1
-
-      # ---------------------------------------------------------------------------
-      # Toolchain resolution. Precedence, highest first:
-      #   1. .github/project.yml  ->  node: <version>
-      #   2. .nvmrc, else package.json -> engines.node
-      #   3. FAIL.
+  ci:
+    # Pinned to a handbook release, never a branch: a caller tracking `main` would take every gate
+    # change the moment it merges there, untested against this repo. Move the tag deliberately
+    # (`colab update` refreshes a pristine copy to the current release).
+    uses: futurelastic/colab-handbook/.github/workflows/ci-light.yml@HANDBOOK_TAG
+    with:
+      trunk-branches: '["main","dev"]'
+      toolchain: node
+      # EDIT: a subdirectory holding package.json (a monorepo app), else leave it out.
+      # working-directory: .
+      install: auto # npm ci / pnpm install --frozen-lockfile, from the lockfile
+      # EDIT: the commands. A script package.json does not declare is skipped (`--if-present`).
+      quick: npm run --if-present typecheck && npm run --if-present lint
+      full: npm test --if-present && npm run --if-present build
+      # EDIT: measured (#572): the slowest Node adopter's build ran p99 37 / max 43 min. Keep this
+      # well above YOUR p99 — below it a slow but healthy suite goes red (`gh run view <id>` per job).
+      full-timeout-minutes: 60
       #
-      # There is deliberately NO fallback default. A silent default is exactly how a
-      # repo here ended up building on Node 20 in CI while deploying on Node 22 —
-      # CI was green and proved nothing about what actually shipped. If the version
-      # is not declared anywhere, that is a bug in the repo, and the build says so.
-      # ---------------------------------------------------------------------------
-      - name: Resolve Node version
-        id: toolchain
-        if: hashFiles('package.json') != ''
-        run: |
-          set -euo pipefail
+      # EDIT: self-hosted runners — `classes` runs each job on ["self-hosted", <class>]: `trunk` on a
+      # trunk ref, else `quick` or `full` (CONVENTIONS.md §7, "Runner classes"). A public repo keeps
+      # the default, ubuntu-latest. A bare label or a JSON label list also works.
+      # runs-on: classes
+      # runner-lane: my-repo-lane # only for a capped lane (rule 3)
+      #
+      # EDIT: name your trunk-only jobs below (deploy, publish) when they sit outside the gate (#717).
+      # trunk-only-jobs: Deploy
+      #
+      # EDIT: bump deliberately, not automatically.
+      # gitleaks-version: "8.30.1"
 
-          # Normalise "^22", ">=22.1", "v22", "22.x" -> "22.1" / "22". setup-node
-          # accepts a partial version and picks the newest matching release.
-          normalise() {
-            printf '%s' "$1" \
-              | tr -d '"' \
-              | sed -E 's/^[^0-9]*//' \
-              | sed -E 's/[[:space:]].*$//' \
-              | sed -E 's/\.x$//' \
-              | sed -E 's/[^0-9.].*$//' \
-              | sed -E 's/\.$//'
-          }
+  # Your own jobs go here, beside the call. Behind the gate (they skip when the tree already passed):
+  #   needs: ci
+  #   if: ${{ !cancelled() && needs.ci.result == 'success' && needs.ci.outputs.tested != 'true' }}
+  # Trunk-only and ungated: no `if:` on the guard, and list the job's name in `trunk-only-jobs` above.
 
-          NODE_VERSION=""
-          SOURCE=""
-
-          # 1. project.yml wins. Flat `node: 22` mapping; good enough, this file is
-          #    a handful of keys by design.
-          if [ -f .github/project.yml ]; then
-            V="$(sed -nE 's/^[[:space:]]*node:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' .github/project.yml | head -1 || true)"
-            if [ -n "$V" ] && [ "$V" != "null" ]; then
-              NODE_VERSION="$(normalise "$V")"; SOURCE=".github/project.yml (node:)"
-            fi
-          fi
-
-          # 2a. .nvmrc
-          if [ -z "$NODE_VERSION" ] && [ -f .nvmrc ]; then
-            V="$(grep -vE '^[[:space:]]*(#|$)' .nvmrc | head -1 | tr -d '[:space:]' || true)"
-            if [ -n "$V" ]; then
-              NODE_VERSION="$(normalise "$V")"; SOURCE=".nvmrc"
-            fi
-          fi
-
-          # 2b. package.json -> engines.node
-          if [ -z "$NODE_VERSION" ] && [ -f package.json ]; then
-            V=""
-            if command -v node >/dev/null 2>&1; then
-              V="$(node -e "try{const e=require('./package.json').engines||{};process.stdout.write(String(e.node||''))}catch(_){}" || true)"
-            elif command -v python3 >/dev/null 2>&1; then
-              V="$(python3 -c "import json;print((json.load(open('package.json')).get('engines') or {}).get('node') or '')" || true)"
-            fi
-            if [ -n "$V" ]; then
-              NODE_VERSION="$(normalise "$V")"; SOURCE="package.json (engines.node)"
-            fi
-          fi
-
-          # 3. No declared source -> stop. Do not guess.
-          if [ -z "$NODE_VERSION" ]; then
-            echo "::error::No Node version is declared in this repository, and this workflow refuses to guess one."
-            {
-              echo ""
-              echo "Declare it in ONE of these places (checked in this order):"
-              echo "  1. .github/project.yml  ->  node: \"22\"   (preferred: one descriptor for the whole repo)"
-              echo "  2. .nvmrc               ->  22            (also drives local dev via nvm/fnm)"
-              echo "     or package.json      ->  \"engines\": { \"node\": \">=22\" }"
-              echo ""
-              echo "Pick the version your DEPLOY target runs. CI on a different major than"
-              echo "production proves nothing."
-            } >&2
-            exit 1
-          fi
-
-          echo "node-version=$NODE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Node $NODE_VERSION (resolved from: $SOURCE)"
-          echo "Node **$NODE_VERSION** — resolved from \`$SOURCE\`" >> "$GITHUB_STEP_SUMMARY"
-
-      # Package cache (#571): on only on a GitHub-hosted runner AND with package-lock.json
-      # present. Both halves are load-bearing:
-      #   - No lockfile → setup-node's `cache:` fails the step outright ("Dependencies lock
-      #     file is not found"), and this template allows a repo without one.
-      #   - Self-hosted → off. A persistent runner already keeps ~/.npm between jobs; a
-      #     remote cache on top was measured as a loss, not a saving (#512).
-      # npm only: `cache: pnpm` needs pnpm on PATH before this step, and the install step
-      # below enables it through corepack afterwards. `package-manager-cache` is pinned to
-      # the same condition so setup-node's automatic `packageManager` caching cannot switch
-      # it back on where the condition says off.
-      # EDIT: self-hosted runners are already off; to turn caching off everywhere, replace
-      # both expressions with '' and false. If the app is not at the root, point the
-      # hashFiles() and a `cache-dependency-path:` at its package-lock.json.
-      - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        if: hashFiles('package.json') != ''
-        with:
-          node-version: ${{ steps.toolchain.outputs.node-version }}
-          cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' && 'npm' || '' }}
-          package-manager-cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' }}
-
-      - name: Install dependencies
-        if: hashFiles('package.json') != ''
-        run: |
-          # Lockfile decides the package manager. `npm ci` / `--frozen-lockfile` are
-          # intentional: CI must fail on a stale lockfile rather than silently resolve
-          # a different dependency tree than the developer had.
-          if [ -f pnpm-lock.yaml ]; then
-            corepack enable
-            pnpm install --frozen-lockfile
-          elif [ -f package-lock.json ]; then
-            npm ci
-          else
-            echo "::warning::No lockfile found — falling back to 'npm install'. Commit a lockfile so CI is reproducible."
-            npm install
-          fi
-
-      - name: Detect optional scripts
-        id: scripts
-        if: hashFiles('package.json') != ''
-        run: |
-          # package.json's `scripts` decides what this job MEASURES: a missing script
-          # skips its step and the job still concludes success. So `colab ship`'s cure
-          # rule treats a scripts change as an instrument change and never lets such a
-          # branch cure a red trunk by itself (CONVENTIONS.md, Cure rule, condition 5).
-          #
-          # node -e over grep: package.json is JSON, and a "typecheck" substring can
-          # appear inside a dependency name or another script's body.
-          has() {
-            node -e "const s=(require('./package.json').scripts)||{};process.exit(s['$1']?0:1)" 2>/dev/null
-          }
-          for s in typecheck lint test; do
-            if has "$s"; then
-              echo "$s=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "$s=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::No '$s' script in package.json — skipping."
-            fi
-          done
-
-      - name: Typecheck
-        if: steps.scripts.outputs.typecheck == 'true'
-        run: npm run typecheck
-
-      - name: Lint
-        if: steps.scripts.outputs.lint == 'true'
-        run: npm run lint
-
-      # EDIT: cap your test runner's workers in CI, in its own config (#478). vitest,
-      # jest, node:test and playwright start one worker per CPU the job can SEE. On a
-      # self-hosted pool slot that is often the whole host's count, while the slot
-      # caps only memory. A host upgrade then adds workers until the slot is
-      # throttled. There is no OOM, the tests time out, and trunk goes red with no
-      # code change. Use a fixed number sized to the slot's memory, e.g. vitest
-      # `maxWorkers: process.env.CI ? 4 : undefined`, jest `--maxWorkers=4`,
-      # node:test `--test-concurrency=4`. GitHub Actions sets CI=true. Why and how
-      # to size it: CONVENTIONS.md §7, "Self-hosted runners".
-      # Light lane: `npm test` only. Heavy tests live in a `test:heavy` script, run by ci-heavy.yml.
-      - name: Test
-        if: steps.scripts.outputs.test == 'true'
-        run: npm test
-
-      # Optional, like the scripts above (#526): a library or a test-only repo has no `build`
-      # script, and a template that fails on that turns a new adopter's first trunk run red.
-      - name: Build
-        if: hashFiles('package.json') != ''
-        run: |
-          if [ -z "$BUILD_COMMAND" ]; then
-            echo "::notice::BUILD_COMMAND is empty — no build."
-          elif ! node -e "const s=(require('./package.json').scripts)||{};process.exit(s[process.env.BUILD_COMMAND]?0:1)" 2>/dev/null; then
-            echo "::notice::No '$BUILD_COMMAND' script in package.json — skipping the build."
-          else
-            npm run "$BUILD_COMMAND"
-          fi
   ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
-  #
-  #     # A skipped job prints nothing, so the reason it is skipped is said here (#625).
+  # # A job-level `if:` cannot read `env`, so this job hands ROUNDTRIP_APPLY on as an output; and a
+  # # skipped job prints nothing, so the reason the round-trip is skipped is said here (#625).
+  # roundtrip-config:
+  #   name: Round-trip configured?
+  #   needs: ci
+  #   if: ${{ !cancelled() && needs.ci.result == 'success' && needs.ci.outputs.tested != 'true' }}
+  #   runs-on: ubuntu-latest # EDIT: self-hosted → the quick class (CONVENTIONS.md §7, "Runner classes").
+  #   timeout-minutes: 5
+  #   env:
+  #     # EDIT: the command that applies every pending migration to $DATABASE_URL — e.g.
+  #     # `npx knex migrate:latest`, `npx dbmate --no-dump-schema up`, `node scripts/migrate.mjs`.
+  #     # Empty = the round-trip job is SKIPPED, and a skipped job never passes R: migrations ship
+  #     # on a human grant until this is set (#625).
+  #     ROUNDTRIP_APPLY: ""
+  #   outputs:
+  #     roundtrip: ${{ env.ROUNDTRIP_APPLY != '' && 'on' || 'off' }}
+  #     apply: ${{ env.ROUNDTRIP_APPLY }}
+  #   steps:
   #     - name: Migration round-trip configured?
   #       run: |
   #         if [ -z "${ROUNDTRIP_APPLY:-}" ]; then
@@ -768,8 +180,8 @@ jobs:
   # To adopt AT COPY (#625) — the same commit that creates the workflows, so no later branch has
   # to edit .github/workflows/ (such a branch fails R and ships on a human grant):
   #   colab template ci-node --dest .github/workflows/ci.yml --roundtrip [--roundtrip-apply '<cmd>']
-  # By hand: remove the leading `# ` from every line between EACH pair of fences (four pairs:
-  # the workflow env, the build job's outputs and its last step, this job), e.g.
+  # By hand: remove the leading `# ` from every line between EACH pair of fences (two pairs:
+  # the roundtrip-config job and this job), e.g.
   #   sed -i '/^  ##>>>/,/^  ##<<</ s/^  # \{0,1\}/  /' .github/workflows/ci.yml
   # then walk its EDIT points. Kept commented, not merely gated: an adopted job that is skipped
   # costs the repo trunk tree reuse (#511), so a repo that never runs migrations should not pay it.
@@ -780,11 +192,10 @@ jobs:
   ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
   # migrations:
   #   name: Migration round-trip (${{ matrix.engine }})
-  #   needs: build
-  #   # Explicit result check, not the implicit success(): success() reads EVERY ancestor,
-  #   # including `dedupe`, which is skipped on every ordinary push (#418). `roundtrip` is `on`
-  #   # only once ROUNDTRIP_APPLY (the workflow env, above) is set — skipped until then (#625).
-  #   if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.roundtrip == 'on' }}
+  #   needs: [ci, roundtrip-config]
+  #   # `roundtrip-config` ran only where the call tested this tree (not skipped by the gate), and
+  #   # says `on` only once ROUNDTRIP_APPLY (its env, above) is set — skipped until then (#625).
+  #   if: ${{ !cancelled() && needs.roundtrip-config.outputs.roundtrip == 'on' }}
   #   runs-on: ubuntu-latest # EDIT: self-hosted → a class, never a host: e2e (service containers) (CONVENTIONS.md §7, "Runner classes").
   #   timeout-minutes: 15 # a hung round-trip must not hold the runner for the 360-minute default (#572).
   #   # EDIT: measured (#572): p99 under 4 min on every adopter. Keep it well above your own p99.
@@ -809,7 +220,8 @@ jobs:
   #         --health-timeout 5s
   #         --health-retries 30
   #   env:
-  #     # ROUNDTRIP_APPLY is in the workflow env at the top of this file (#625).
+  #     # ROUNDTRIP_APPLY is set in the roundtrip-config job above (#625).
+  #     ROUNDTRIP_APPLY: ${{ needs.roundtrip-config.outputs.apply }}
   #     # EDIT: the prefixes under `migrations:` in .github/project.yml, space-separated.
   #     MIGRATIONS_PATHS: "migrations/"
   #     # EDIT: rows that look like OLD data (NULLs, rows a new foreign key would orphan),
@@ -832,7 +244,7 @@ jobs:
   #     - name: Setup Node
   #       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
   #       with:
-  #         node-version: ${{ needs.build.outputs.node-version }}
+  #         node-version: ${{ needs.ci.outputs.node-version }}
   #         # Same cache gate as the build job's Setup Node (#571): hosted + lockfile only.
   #         cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' && 'npm' || '' }}
   #         package-manager-cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' }}

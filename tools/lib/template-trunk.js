@@ -96,4 +96,26 @@ function pinHandbookTag(text, version) {
   return { text: text.split(token).join(`@${version}`), pinned: version };
 }
 
-module.exports = { TEMPLATE_REFS, HANDBOOK_TAG, protectedRefs, substituteTrunk, renderForRepo, pinHandbookTag };
+/**
+ * #724: the template body a copy stamped `version` gets. A ci-light caller pinned at a release that does
+ * not carry .github/workflows/ci-light.yml cannot run — and `version` is the latest FINAL (#334), which can
+ * trail the working tree that holds the caller (a candidate carries ci-light.yml, the final not yet). Then
+ * the copy is that release's OWN template, so "copied from X" and "runs at X" stay one fact; once a release
+ * carries the reusable workflow, the same command writes the caller and `colab update` moves a pristine
+ * copy onto it.
+ *
+ * opts: { raw: the working tree's template, rel: its path under templates/, version, hasGit,
+ *         carries(version, path) -> bool, show(version, path) -> text | null }.
+ * Returns { body, fallback?: <version>, unrunnable?: <version> } — unrunnable when that release has no
+ * such template (templates/ci-call.yml before #721) or its own is also a caller.
+ */
+function templateBodyAt({ raw, rel, version, hasGit, carries, show }) {
+  const { isCiLightCaller, REUSABLE_PATH } = require('./gate-drift');
+  if (!isCiLightCaller(raw) || !version || version === 'v0' || !hasGit) return { body: raw };
+  if (carries(version, REUSABLE_PATH)) return { body: raw };
+  const old = show(version, `templates/${rel}`);
+  if (old && !isCiLightCaller(old)) return { body: old, fallback: version };
+  return { body: raw, unrunnable: version };
+}
+
+module.exports = { TEMPLATE_REFS, HANDBOOK_TAG, protectedRefs, substituteTrunk, renderForRepo, pinHandbookTag, templateBodyAt };

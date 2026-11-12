@@ -58,33 +58,39 @@ for (const [label, text, toolchain, scheme] of [['ci-node', TEXT, 'node-version'
       if (open !== -1) assert.match(l, /^  #/, `line ${i + 1}: ${l}`);
     });
     assert.strictEqual(open, -1, 'an unclosed fence');
-    assert.strictEqual(pairs, 4, 'workflow env, build outputs, build step, the job');
+    assert.strictEqual(pairs, 2, 'the roundtrip-config job, the round-trip job (#724: beside the call)');
     const doc = yaml.parse(text);
-    assert.deepStrictEqual(Object.keys(doc.jobs), ['dedupe', 'gitleaks', 'build']);
-    assert.ok(!('ROUNDTRIP_APPLY' in doc.env), 'no live ROUNDTRIP_APPLY as shipped');
-    assert.ok(!('roundtrip' in (doc.jobs.build.outputs || {})), 'no live roundtrip output as shipped');
+    assert.deepStrictEqual(Object.keys(doc.jobs), ['ci'], 'as shipped: the call alone');
+    assert.ok(!/^\s+ROUNDTRIP_APPLY:/m.test(text), 'no live ROUNDTRIP_APPLY as shipped');
     assert.deepStrictEqual(mg.roundtripJobWorkflows(files(text)), []);
   });
 
-  test(`${label} adopted: the job R reads, wired after build, SKIPPED until ROUNDTRIP_APPLY is set (#494, #625)`, () => {
+  test(`${label} adopted: the job R reads, wired after the call, SKIPPED until ROUNDTRIP_APPLY is set (#494, #625, #724)`, () => {
     const adopted = uncomment(text);
     const doc = yaml.parse(adopted);
     const m = doc.jobs.migrations;
     assert.ok(m, 'uncommenting yields a migrations job');
     assert.ok(m.name.startsWith(mg.ROUNDTRIP_JOB_PREFIX), m.name);
-    assert.strictEqual(m.needs, 'build');
-    // Fail closed (#625): the job runs only when build says `on`, and build says `on` only for a
-    // non-empty ROUNDTRIP_APPLY. A skipped leg never passes R; a green no-op leg would.
-    assert.strictEqual(m.if, "${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.roundtrip == 'on' }}");
-    assert.strictEqual(doc.jobs.build.outputs.roundtrip, "${{ env.ROUNDTRIP_APPLY != '' && 'on' || 'off' }}");
-    assert.strictEqual(doc.jobs.build.outputs[toolchain], `\${{ steps.toolchain.outputs.${toolchain} }}`);
-    assert.strictEqual(doc.env.ROUNDTRIP_APPLY, '', 'APPLY ships empty: the adopter names the runner');
-    assert.ok(!('ROUNDTRIP_APPLY' in m.env), 'one source: the workflow env, which the gate reads');
+    assert.deepStrictEqual(m.needs, ['ci', 'roundtrip-config']);
+    // Fail closed (#625): the job runs only when roundtrip-config says `on`, and it says `on` only for
+    // a non-empty ROUNDTRIP_APPLY. A skipped leg never passes R; a green no-op leg would.
+    assert.strictEqual(m.if, "${{ !cancelled() && needs.roundtrip-config.outputs.roundtrip == 'on' }}");
+    const c = doc.jobs['roundtrip-config'];
+    assert.ok(c, 'a config job hands ROUNDTRIP_APPLY on — a job-level if: cannot read env (#724)');
+    assert.ok(!c.name.startsWith(mg.ROUNDTRIP_JOB_PREFIX), `the config job is not a leg R reads: ${c.name}`);
+    assert.strictEqual(c.needs, 'ci');
+    // Behind the gate: it runs only where the call tested this tree, so neither job runs on a reused one.
+    assert.strictEqual(c.if, "${{ !cancelled() && needs.ci.result == 'success' && needs.ci.outputs.tested != 'true' }}");
+    assert.strictEqual(c.outputs.roundtrip, "${{ env.ROUNDTRIP_APPLY != '' && 'on' || 'off' }}");
+    assert.strictEqual(c.outputs.apply, '${{ env.ROUNDTRIP_APPLY }}');
+    assert.strictEqual(c.env.ROUNDTRIP_APPLY, '', 'APPLY ships empty: the adopter names the runner');
+    assert.strictEqual(m.env.ROUNDTRIP_APPLY, '${{ needs.roundtrip-config.outputs.apply }}', 'one source: the config job, which the gate reads');
+    assert.match(adopted, new RegExp(`\\$\\{\\{ needs\\.ci\\.outputs\\.${toolchain} \\}\\}`), 'the version the call resolved');
     for (const k of ['MIGRATIONS_PATHS', 'ROUNDTRIP_RESET', 'ROUNDTRIP_DUMP', 'ROUNDTRIP_SEED']) assert.ok(k in m.env, k);
-    // tools/lib/yaml.js reads no sequence of maps — the step is found by line, inside the build job.
-    const buildAt = adopted.indexOf('\n  build:\n');
+    // tools/lib/yaml.js reads no sequence of maps — the step is found by line, inside the config job.
+    const cfgAt = adopted.indexOf('\n  roundtrip-config:\n');
     const stepAt = adopted.indexOf('\n      - name: Migration round-trip configured?\n');
-    assert.ok(buildAt > 0 && stepAt > buildAt && stepAt < adopted.indexOf('\n  migrations:\n'), 'a skipped job says nothing, so build says why');
+    assert.ok(cfgAt > 0 && stepAt > cfgAt && stepAt < adopted.indexOf('\n  migrations:\n'), 'a skipped job says nothing, so the config job says why');
     assert.match(adopted, /::warning::Migration round-trip is skipped: ROUNDTRIP_APPLY is empty/);
     assert.deepStrictEqual(mg.roundtripJobWorkflows(files(adopted)), ['ci.yml']);
     assert.match(adopted, new RegExp(`^          DATABASE_URL: ${scheme}://postgres:postgres@127\\.0\\.0\\.1:\\$\\{\\{ job\\.services\\.db\\.ports\\['5432'\\] \\}\\}/roundtrip$`, 'm'));

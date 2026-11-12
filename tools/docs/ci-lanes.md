@@ -23,7 +23,9 @@ dispatched runs are set aside (`tools/lib/verify-runs.js`). Why: [ADR 607](../..
 The rule: [CONVENTIONS.md, *Two lanes — light on every merge, heavy on official builds and nightly (#607)*](../../CONVENTIONS.md#two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607).
 
 - **Light** (`ci-<stack>.yml` → `ci.yml`), on every push: secret scan, build, typecheck/lint, the
-  fast tests — about 5 minutes at p50. It is the lane ship reads. Its secret scan reads only the
+  fast tests — about 5 minutes at p50. It is the lane ship reads. Since #724 the copy is a thin caller:
+  the gate, the scan and the quick/full jobs run in the handbook's reusable `.github/workflows/ci-light.yml`,
+  pinned to a release tag (templates/README.md, *The reusable light lane*). Its secret scan reads only the
   commits the run brings — a branch's commits not yet on trunk, or a trunk push's pushed range —
   never every fetched branch, so one branch's finding cannot red another branch's run (#716).
 - **Heavy** (`ci-<stack>-heavy.yml` → `ci-heavy.yml`), never on a push: the whole suite,
