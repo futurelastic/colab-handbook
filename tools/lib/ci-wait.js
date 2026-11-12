@@ -108,6 +108,8 @@ function restRow(x) {
     // #705: the ref the run is on — a zero-jobs run is told apart from one queued behind its own
     // concurrency group by an older in-progress run of the same workflow on the SAME ref.
     headBranch: x.head_branch || null,
+    // #730: which attempt the row is — a re-run keeps the run id and bumps this.
+    attempt: x.run_attempt ?? null,
   };
 }
 

@@ -90,7 +90,7 @@
     ],
     "ci-verdict-unreadable": [
       {"argv":["api","-i","repos/{owner}/{repo}/actions/runs?head_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&branch=main&per_page=100"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
-      {"argv":["run","list","--branch","main","-L","10","--json","headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event,headBranch"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"}
+      {"argv":["run","list","--branch","main","-L","10","--json","headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event,headBranch,attempt"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"}
     ]
   }
 }

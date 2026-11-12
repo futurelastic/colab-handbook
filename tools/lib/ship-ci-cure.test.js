@@ -220,7 +220,10 @@ test('#589: shipCiCure resolves containment and the diff through the ref ship la
 
 test('#297: shipCureJobEvidence reads EVERY run at the branch head and tags each job with its workflow', () => {
   const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
-  const fn = src.slice(src.indexOf('function shipCureJobEvidence('), src.indexOf('function ciCurePayload('));
+  // "Both sides" = the cure path's pair: shipCureJobEvidence (branch) + trunkRedRunJobs (trunk). The
+  // slice ends where the reviewer-grant readers (#730) begin — they tag their jobs the same way, and
+  // counting them here would make this a count of the file's readers, not of the cure path's two.
+  const fn = src.slice(src.indexOf('function shipCureJobEvidence('), src.indexOf('function trunkReviewerRedJobs('));
   assert.match(fn, /git\.ghRunsForCommit\(repoAbs, branch, evRun\.sha\)/);
   assert.equal((fn.match(/jobs\.map\(\(j\) => \(\{ \.\.\.j, workflowName: r\.workflowName/g) || []).length, 2, 'both sides tag their jobs');
 });
@@ -334,7 +337,7 @@ test('#510: shipCureJobEvidence tags workflowId/event/headSha, passes branchSha,
   assert.match(fn, /shapeJobEvidence\(\{ redRunJobs, branchRunJobs, branchSha: evRun\.sha \}\)/);
   assert.match(fn, /branchRuns: branchRuns\.map/);
   // The trunk side carries the workflow id too — W1 compares the two.
-  const red = src.slice(src.indexOf('function trunkRedRunJobs('), src.indexOf('function priorExemptionRedJobs('));
+  const red = src.slice(src.indexOf('function trunkRedRunJobs('), src.indexOf('function trunkReviewerRedJobs('));
   assert.match(red, /workflowId: r\.workflowId \?\? null/);
 });
 

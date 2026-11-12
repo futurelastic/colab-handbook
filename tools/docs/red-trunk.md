@@ -59,10 +59,20 @@ Why, with the measurements: [ADR 105](../../docs/adr/105-red-trunk-exemption-rat
   flags: the branch's trailing number group carries `#N`; `#N` is open and titled
   `TRUNK RED:`; trunk is red in the sense `ship` checks; never stacks (the same guard as the
   human grant); the branch's own CI is green at its **exact** pushed head; and every check
-  the record claims to cure is red on trunk at the red sha. The review record (a fenced
+  the record claims to cure is red on trunk at the red sha. **A cancelled run whose re-run is
+  spent counts as red here (#730), and only here.** When a workflow's only run at the red sha
+  concluded `cancelled` on an attempt past the first (#628 asks for exactly one re-run), its
+  jobs that neither passed nor skipped join the red set the reviewer grant reads, so
+  `--cures "<workflow> / <job>"` can name them. Such a cure needs one more proof: the
+  branch's **own** run of that workflow, and its job of that name, concluded `success` at the
+  head. A green sibling workflow does not count, and neither does a branch run that was itself
+  cancelled or skipped. A first-attempt cancel stays out, because the re-run is still the next
+  step. The cure rule's red set is unchanged and still drops `cancelled`, so the cure path
+  keeps refusing this red (#689 rules on that door). The review record (a fenced
   `ci-review` block) carries `verdict: pass`, the reviewed `head`, the `red` sha and the
   `cures`. `ship` re-measures all of it — issue, title, opt-in at the merge target, red sha,
-  branch green at exactly that head, cures still red — and honours an optional
+  branch green at exactly that head, cures still red, a spent-cancelled cure still proven on
+  the branch's own run — and honours an optional
   `not-before` (a revoke window the host imposes) by reading the grant as *not yet usable*
   until it passes. **Revoking stays human** (`COLAB_HUMAN=1 colab ci-grant <N> --revoke`
   cancels every role). The reviewer identity is declared, not attested — the same caveat as

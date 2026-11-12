@@ -1015,7 +1015,9 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
     // id, never its display name; mapped to `workflowId`, the name the REST row (ci-wait restRow) uses.
     // updatedAt is additive (#555): a finished run's completion time, the lone-member wait's anchor.
     // headBranch is additive (#705): the ref the concurrency-queue read (ghActiveRunsOfWorkflow) keys on.
-    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event,headBranch'], { cwd: repo });
+    // attempt is additive (#730): a cancelled run whose one re-run is spent (attempt > 1) is red to the
+    // reviewer grant (ci-cure.js spentCancelledRuns); the REST row carries it as run_attempt.
+    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event,headBranch,attempt'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
