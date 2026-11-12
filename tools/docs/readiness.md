@@ -14,8 +14,16 @@ were retargeted; each section keeps its heading there. Frozen with the rest of �
 The rule: [CONVENTIONS.md, *Readiness — open and unclaimed is not enough*](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), items 3–4 of the contract.
 
 ```sh
-# read (repo-relative — no owner/name to get wrong)
-gh issue view <N> --json blockedBy,blocking,parent,subIssues,subIssuesSummary
+# read (repo-relative — gh fills {owner}/{repo}, so there is no owner/name to get wrong).
+# NOT `gh issue view --json blockedBy,…`: those JSON fields are absent on some supported gh
+# versions (2.85.0 answers `Unknown JSON field: "blockedBy"`, #727). The API routes below
+# work on every gh that has `gh api`.
+gh api 'repos/{owner}/{repo}/issues/<N>/dependencies/blocked_by?per_page=100' -q 'length'   # REST: a plain array
+gh api graphql -F owner='{owner}' -F name='{repo}' -F n=<N> -f query='
+  query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){issue(number:$n){
+    blockedBy(first:50){totalCount nodes{number state repository{nameWithOwner}}}
+    blocking(first:50){totalCount nodes{number state}}
+    parent{number} subIssues(first:50){totalCount} subIssuesSummary{total completed}}}}'
 
 # write a sequence — colab owns this write (#251); it takes NUMBERS ONLY, resolves the
 # database id itself, reads before writing, writes, and reads back to confirm the edge

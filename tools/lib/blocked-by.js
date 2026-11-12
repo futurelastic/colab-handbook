@@ -116,7 +116,7 @@ function foreignEdges(edges, thisRepo) {
 }
 
 /**
- * #388: what a `gh issue view --json blockedBy` read says about OPEN blockers — a report, never a
+ * #388: what a blockedBy read says about OPEN blockers — a report, never a
  * gate. `colab readiness <N>` (the deps-checked path) reads this once so its success line can say
  * what the graph holds instead of asserting "no open blocker" it never checked; it does NOT refuse
  * on a non-empty count (that is `--mechanical`'s job): under §5 (#279) an open edge carries the
@@ -125,6 +125,8 @@ function foreignEdges(edges, thisRepo) {
  * Returns `{ ok:false }` for an unreadable/malformed read (null means "could not read", never
  * "empty" — the same contract as normaliseEdges), else
  *   { ok:true, total, read, open, unknownState }
+ * The readiness callers pass the REST list (#727: `gh issue view --json blockedBy` is absent on
+ * some gh versions); the connection shape is still accepted for a caller that has one.
  * `total` is the connection's totalCount when present (falls back to the nodes read); `read` is
  * how many nodes came back — fewer than `total` means the page was truncated, so `open` is a floor.
  * `unknownState` counts nodes with no `state` field: they are neither open nor closed as far as

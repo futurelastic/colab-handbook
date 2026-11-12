@@ -29,7 +29,8 @@ the build issues its `blocked_by` edges hold back are waiting on it.
 `deps-checked` the same way the code lane does, so a design issue left unstamped stays held
 with nothing wrong, and every build issue `blocked_by` it waits too. So run §5's
 first gate on every unclaimed `delivery:design` issue that carries no hold, by the same bar
-as a code issue. Read the edges (`gh issue view <N> --json blockedBy`), judge any open
+as a code issue. Read the edges (`gh api 'repos/{owner}/{repo}/issues/<N>/dependencies/blocked_by?per_page=100'`
+— not `gh issue view --json blockedBy`, #727), judge any open
 blocker's state (§5.1), then write or clear the marker exactly as §6's *persist* step does
 for a code group. Only that gate applies. The others ask whether a *code* branch can start,
 and a design issue never gets one from triage. A design issue with no edge is free once you

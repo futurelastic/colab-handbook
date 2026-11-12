@@ -35,7 +35,7 @@ fallback and does the exact same three steps by hand:
 ```sh
 DB=$(gh api repos/{owner}/{repo}/issues/<blocker> -q .id)   # database id, not the number
 gh api -X POST repos/{owner}/{repo}/issues/<blocked>/dependencies/blocked_by -F issue_id=$DB
-gh issue view <blocked> --json blockedBy      # ← and confirm it names the blocker you meant
+gh api 'repos/{owner}/{repo}/issues/<blocked>/dependencies/blocked_by?per_page=100' -q '.[].number'   # ← confirm it names the blocker you meant
 ```
 
 The report still explains the reasoning — that is what prose is good for. The
