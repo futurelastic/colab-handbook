@@ -18,13 +18,13 @@ it matters.
 | kind | what the key says | keys |
 |---|---|---|
 | **fact** | something true of the repo, which a reader can check against the repo | `tier`, `trunk`, `production`, `deploy`, `runbook`, `stack`, `integration`, `releaseBranch`, `owner`, `migrations`, `room`, `exposure`, `channels`, `distribution`, `ceremony`, `writes`, `contention`, `release`, `downloads`, `live-env`, `tree-reuse`, `ci-docs-skip`, `docs-only-paths`, `instruction-files`, `integration-profile`, `gate`, `node`, `php`, `python` |
-| **owner's grant** | who may take a consequential action here without a person's word each time | `autonomy`, `promotion`, `migration-grant`, `ci-grant`, and `release`'s `final-grant` |
+| **owner's grant** | who may take a consequential action here without a person's word each time | `autonomy`, `promotion`, `migration-grant`, `ci-grant`, `release-only-checks`, and `release`'s `final-grant` |
 | **tool tuning** | how a tool behaves here; every valid value is safe to choose | `ports`, `worktreePorts`, `ship-batch`, `ship-batch-wait`, `ship-batch-steps`, `ci-wait-factor`, `thresholds`, `holds`, `generated`, `branchPrefix`, `ship-gate-workflows`, `ship-ignore-workflows`, `heavy-workflow` |
 
 `trust-humans` is identity, not a grant: it says who counts as a person, which every grant
 relies on, so the grant rule covers it too.
 
-**The grant rule, one rule for all four grant keys:** only a person changes a grant key or
+**The grant rule, one rule for every grant key:** only a person changes a grant key or
 `trust-humans`. An agent may propose the change on a branch; it lands on a person's word,
 never on the agent's own. A fact changes when the repo does. Tuning may change without an
 issue only where the tool that reads it allows; that list is the tool's, and is never wider
@@ -1560,6 +1560,29 @@ does not make a workflow a code verifier, and a sha whose tree cannot be read re
   ship gate reads, never what CI is or how thorough it must be.
 - The one reading in tooling is `tools/lib/verify-runs.js` `parsePolicy`; the audit reports the
   value (`--json`: `shipCiWorkflows`).
+
+### `release-only-checks` — optional
+
+```yaml
+release-only-checks:                                 # absent = every trunk red holds every branch
+  Install smoke: [packaging/, scripts/install.sh]    # a whole workflow, by its `name:`
+  "CI / install (*)": [installer/**]                 # one job of a workflow; `*` in the job part
+```
+
+Checks that matter only to a **release**, each next to the paths it covers (#736). When trunk's
+red at its head comes **only** from these checks, and something else ran green there, `colab ship`
+lets a branch land if it touches none of the paths of the checks that are red; the trunk-CI row,
+`--dry --json`'s `releaseOnly` and a `CI-Release-Only:` trailer name the red it ignored. A branch
+that touches them falls through to the cure rule and the ci-grant, as before. Nothing else reads the
+key: `colab trunk-ci` still reads the red, and `colab release cut` still refuses that commit.
+
+- A key is a workflow's `name:`, or `<workflow> / <job>` (split at the first ` / `), quoted or
+  not; a name containing `:` cannot be declared. Each value is an **inline** list of
+  CODEOWNERS-style paths, and must not be empty.
+- An owner's grant: ship reads it at **trunk**, never from the branch it judges.
+- Any malformed entry is a finding, and the reader ignores the whole key, so it exempts nothing.
+- The one reading in tooling is `tools/lib/release-only.js`; the audit reports it
+  (`--json`: `releaseOnlyChecks`). Mechanics: [`tools/docs/red-trunk.md`](tools/docs/red-trunk.md#release-only-checks--a-red-only-a-release-reads-736).
 
 ### `integration-profile`, `heavy-workflow` — optional
 

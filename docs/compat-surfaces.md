@@ -104,6 +104,7 @@ migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98
 a-red-trunk-with-no-patch--never-parked-in-silence-390
 red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105
 cure-rule--the-machine-checkable-door-through-trunk-ci-green-281
+release-only-checks--a-red-only-a-release-reads-736
 scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person
 grouping--issues-that-change-the-same-logic-share-one-branch
 scope--diagnosing-across-repos-is-not-license-to-act-in-them
@@ -246,6 +247,7 @@ docs-only-paths
 instruction-files
 ship-gate-workflows
 ship-ignore-workflows
+release-only-checks
 integration-profile
 heavy-workflow
 gate

@@ -149,6 +149,8 @@ const treeGreenLib = require("../tools/lib/tree-green.js");
 const docsOnlyLib = require("../tools/lib/docs-only.js");
 // #503: `ship-gate-workflows:` / `ship-ignore-workflows:` — read through the same module ship's CI gate uses.
 const verifyRunsLib = require("../tools/lib/verify-runs.js");
+// #736: `release-only-checks:` — read through the same module ship's release-only door uses.
+const releaseOnlyLib = require("../tools/lib/release-only.js");
 // #410: the optional `gate:` block — read through the same module the skills name.
 const gateLib = require("../tools/lib/gate.js");
 // #417: CLAUDE.md as a thin shell over AGENTS.md — the @-import resolver and the tool-block table,
@@ -268,7 +270,11 @@ function parseScalarValue(raw) {
   return val;
 }
 
-const NESTED_MAP_KEYS = new Set(["release", "owner", "gate", "thresholds", "contention"]); // owner: #394 · gate: #410 · thresholds: #560 · contention: #630
+const NESTED_MAP_KEYS = new Set(["release", "owner", "gate", "thresholds", "contention", "release-only-checks"]); // owner: #394 · gate: #410 · thresholds: #560 · contention: #630 · release-only-checks: #736
+// #736: the one map whose KEYS are free text — a check's display name ("Install smoke", "CI / install (*)"),
+// optionally quoted, never containing ":" — and whose every value is an INLINE list of paths. Still one
+// level, still no block list: any other line under it is a finding.
+const FREE_KEY_MAP_KEYS = new Set(["release-only-checks"]);
 // The one map whose pairs may hold an INLINE list (`coupled: [a, b]`) — still one level, still no block list (#630).
 const LIST_IN_MAP_KEYS = new Set(["contention"]);
 // A key whose empty value may open EITHER a block list or a one-level map: `migrations:` is a list of
@@ -293,6 +299,19 @@ function parseFlatYaml(text) {
       if (listKey !== null && item) {
         if (!Array.isArray(out[listKey])) out[listKey] = [];
         out[listKey].push(parseScalarValue(item[1]));
+        return;
+      }
+      if (mapKey !== null && FREE_KEY_MAP_KEYS.has(mapKey) && !item) {
+        const fp = line.match(/^(\s+)("[^"]+"|'[^']+'|[^\s#"'][^:#]*?)\s*:\s*(.*)$/);
+        const fpVal = fp ? fp[3].replace(/\s+#.*$/, "").trim() : "";
+        if (fp && (mapIndent === null || fp[1].length === mapIndent) && /^\[.*\]$/.test(fpVal)) {
+          if (mapIndent === null) mapIndent = fp[1].length;
+          if (out[mapKey] === null || typeof out[mapKey] !== "object") out[mapKey] = {};
+          const inner = fpVal.slice(1, -1).trim();
+          out[mapKey][fp[2]] = inner === "" ? [] : inner.split(",").map((x) => parseScalarValue(x));
+          return;
+        }
+        problems.push(`line ${idx + 1}: "${mapKey}:" takes one level of "<check name>: [paths]" pairs, each list inline — nothing deeper, no block list`);
         return;
       }
       const pair = line.match(/^(\s+)([A-Za-z0-9_.-]+)\s*:\s*(.*)$/);
@@ -1598,6 +1617,18 @@ function auditRepoInner(target, ctx) {
       const vp = verifyRunsLib.parsePolicy(cfg);
       info.shipCiWorkflows = vp.gate || vp.ignore.length ? { gate: vp.gate, ignore: vp.ignore } : null;
       for (const why of vp.problems) fail(why);
+    }
+
+    // ---- release-only-checks (#736) ---------------------------------------------
+    // Checks that matter only to a release, each next to the paths it covers: ship's per-branch
+    // release-only door lets a branch past a trunk red only on them when it touches none of those
+    // paths. An invalid declaration fails: the reader ignores the whole key, so it exempts nothing.
+    {
+      const ro = releaseOnlyLib.parseReleaseOnly(cfg);
+      info.releaseOnlyChecks = ro.declared && ro.valid
+        ? ro.checks.map((c) => ({ check: c.key, workflow: c.workflow, job: c.job, paths: c.paths }))
+        : null;
+      for (const why of ro.problems) fail(why);
     }
 
     // ---- gate (#410) ----------------------------------------------------------

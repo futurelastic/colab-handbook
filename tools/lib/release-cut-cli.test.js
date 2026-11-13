@@ -427,6 +427,17 @@ test('#624: ship-gate-workflows naming the nightly makes it a veto again — the
   assert.match(h.out, /✗ ci-green\s+\S/);
 });
 
+test('#736: a red on a declared release-only check still refuses the cut — the declaration is read by ship\'s per-branch door only', () => {
+  const fx = fixture({ projectYml: `${RELEASED_YML}release-only-checks:\n  Install smoke: [packaging/]\n` });
+  setRuns(fx, [{ workflowName: 'ci' }, { workflowName: 'Install smoke', conclusion: 'failure' }]);
+  const r = cut(fx, ['--dry']);
+  assertRefused(fx, r, 'ci-green', /conclusion=failure/);
+  // The same runs, the key absent: the cut reads them identically.
+  const plain = fixture();
+  setRuns(plain, [{ workflowName: 'ci' }, { workflowName: 'Install smoke', conclusion: 'failure' }]);
+  assertRefused(plain, cut(plain, ['--dry']), 'ci-green', /conclusion=failure/);
+});
+
 test('refuses: the full suite — a workflow whose only run was cancelled', () => {
   const fx = fixture();
   setRuns(fx, [{ workflowName: 'lint' }, { workflowName: 'test-suite', conclusion: 'cancelled' }]);
