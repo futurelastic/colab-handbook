@@ -121,12 +121,14 @@ test('the old 4/4 denominator → refused locally, before CI or the tracker is r
   assert.equal(r.writes, '');
 });
 
-test('a round-trip job that passed at the head, cited by URL → recorded (label, then comment)', () => {
+// #732: the comment goes first and the label only once its author is verified (postGrantVerified),
+// so a grant the ship gate would reject never shows the label.
+test('a round-trip job that passed at the head, cited by URL → recorded (comment, then label)', () => {
   const fx = fixture([{ id: 501, jobs: [job('Gitleaks'), job('Migration round-trip (mysql)'), job('Migration round-trip (sqlite)')] }]);
   const r = grant(fx, ['--checklist-items', '10/10', '--ci-run', 'https://github.com/o/r/actions/runs/501']);
   assert.equal(r.code, 0, r.out + r.err);
   assert.match(r.out, /Recorded a migration-reviewer grant on #1/);
   const ops = r.writes.split('\n').filter((l) => /^issue (edit|comment) 1 /.test(l)).map((l) => l.split(' ')[1]);
-  assert.deepEqual(ops, ['edit', 'comment'], r.writes);
+  assert.deepEqual(ops, ['comment', 'edit'], r.writes);
   assert.match(r.writes, /ci-roundtrip: pass/);
 });

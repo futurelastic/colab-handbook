@@ -104,6 +104,14 @@ in that position lists its humans:
   refusal names the login.
 - **Absent** → the association class decides, exactly as before. Nothing changes for a
   repo that does not declare it.
+- **The writer applies the reader's rule before it writes (#732).** `colab ci-grant` and
+  `colab migration-grant` (both roles) refuse to post a grant the gate would reject for its
+  author. The repo-permission API cannot predict this: it reported `write` for an account
+  whose comments read `NONE`, for example a pending invitee. So the writer reads the
+  association from a comment the account already has (on the issue, else among the repo's
+  newest 100). When none exists, it posts the comment first, reads it back, and deletes it
+  again if it would be rejected. The label goes on only after the comment passes, so it
+  never flashes for a dead grant.
 - **Read from the target, never the branch.** Ship reads the list from `project.yml` at
   the tip of the branch being merged into, and rulings read trunk's — a branch cannot
   add its own author. **Editing the list is a human act**, like lowering exposure. As

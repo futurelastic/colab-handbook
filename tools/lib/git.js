@@ -775,6 +775,30 @@ function ghIssueComment(repo, issueNum, body) {
 }
 
 /**
+ * #732: the newest page of this repo's issue comments (REST, newest-first, up to 100) — the second
+ * place a grant writer looks for an existing comment by the posting account, whose
+ * `author_association` predicts the grant comment's (tools/lib/trust-humans.js posterTrust). Null on
+ * any failure: "could not read", never "no comments".
+ */
+function ghRecentRepoComments(repo) {
+  const r = ghApi(repo, ['repos/{owner}/{repo}/issues/comments?sort=created&direction=desc&per_page=100']);
+  if (!r.ok) return null;
+  try { const v = JSON.parse(r.stdout); return Array.isArray(v) ? v : null; }
+  catch (_) { return null; }
+}
+
+/**
+ * #732: delete one issue comment, named by its url (`…#issuecomment-<id>`, the shape
+ * `gh issue view --json comments` reports) — returns {ok, stderr}. Used only to take back a grant
+ * comment the reader would reject; a url carrying no id is a refusal, never a guess.
+ */
+function ghDeleteIssueComment(repo, url) {
+  const m = /#issuecomment-(\d+)$/.exec(String(url || ''));
+  if (!m) return { ok: false, code: 'no-id', stderr: `no comment id in ${JSON.stringify(url || '')}` };
+  return ghApi(repo, ['-X', 'DELETE', `repos/{owner}/{repo}/issues/comments/${m[1]}`]);
+}
+
+/**
  * #357: the created-at timestamps of every `labeled` event for `label` on one issue (issue
  * events API, paginated), oldest-first — or null when the read failed. Null is "could not read",
  * never "no events": tools/lib/decision-record.js pairVerdict keeps an unread timeline
@@ -1669,7 +1693,7 @@ module.exports = {
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghRunsAtShaUnfiltered, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
-  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghWorkflowStates, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
+  ghCurrentLogin, ghIssueView, ghIssueComment, ghRecentRepoComments, ghDeleteIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghWorkflowStates, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
   ghRunJobCount, ghRunJobs, ghActiveRunsOfWorkflow, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,

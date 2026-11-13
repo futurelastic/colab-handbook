@@ -4371,6 +4371,80 @@ function migrationGrantRoundtripCheck(repoAbs, branch, rec) {
   if (!c.ok) throw new UserError(`${c.reason}; nothing was posted`);
 }
 
+// ---- #732: the grant writers judge their own poster, the way the readers judge it ----------------
+// The readers (ci-grant.js, migration-grant.js) reject a grant whose author's association is not
+// OWNER/MEMBER/COLLABORATOR (and, for a human grant under trust-humans, whose login is unlisted).
+// The writers never asked, so an account whose comments read `NONE` — while the permission API said
+// `write` — posted a grant and its label that the ship gate then refused: the hold lifted, the owner
+// thought the ship unblocked, the red row surfaced a pass later. Two layers, used by all four writers
+// (ci-grant human + reviewer, migration-grant human + reviewer) so they cannot drift:
+//   1. grantPosterPrecheck — BEFORE anything is written: predicts from a comment this account
+//      already has (the association is computed per author at read time, so an old comment reads
+//      exactly as the new one will). Refuses on a known-untrusted poster; nothing is posted.
+//   2. postGrantVerified — the comment FIRST, read back through the reader's own path, judged by the
+//      reader's rule; the label only after it passes. A rejected comment is deleted again and the
+//      label never applied — the label is what a tracker watcher reads as "unblocked", so it must
+//      never flash for a grant the gate will refuse. Comment-without-label reads "not granted" to
+//      every reader, so the gap between the two writes is inert.
+
+/** The refusal for a poster the gate would reject — names the cause, the fix and the re-run. */
+function grantPosterRefusal(kind, p, remedy) {
+  const byAssociation = !!p.association && !trustHumans.TRUSTED_ASSOCIATIONS.has(p.association);
+  const fix = byAssociation || !/trust-humans/.test(p.reason)
+    ? 'Post it from an account this repo lists as owner, member or collaborator — or, if this account was invited, accept the invitation first (`gh api user/repository_invitations` lists it; GitHub reports a pending invitee as NONE)'
+    : 'Post it from a login listed in trunk\'s project.yml `trust-humans:`, or add this login there through a trunk change';
+  return `${kind} grant not posted — the ship gate would reject it: ${p.reason}. ${fix}, then re-run: ${remedy}`;
+}
+
+/**
+ * Layer 1. `comments` = the issue's comments from the writer's own `ghIssueView` read (the reader's
+ * path). Falls back to one page of the repo's newest comments when the account has none on this
+ * issue. Throws on a known-untrusted poster; returns the context postGrantVerified needs.
+ * `trust` = trunk's trust-humans for a human grant (null for a reviewer grant). A migration grant is
+ * read against its merge TARGET's list (shipMigrationCtx); the writer cannot know an integration-line
+ * target here, so it reads trunk's — identical for every branch cut from trunk.
+ */
+function grantPosterPrecheck(repoAbs, { kind, role, comments, trust, remedy }) {
+  const login = git.ghCurrentLogin();
+  let p = trustHumans.posterTrust({ login, comments, trust, role });
+  if (p.verdict === 'unknown' && login) {
+    const recent = git.ghRecentRepoComments(repoAbs);
+    if (recent) p = trustHumans.posterTrust({ login, comments: recent, trust, role });
+  }
+  const ctx = { kind, role, trust, login, remedy };
+  if (p.verdict === 'untrusted') throw new UserError(grantPosterRefusal(kind, p, ctx.remedy));
+  return ctx;
+}
+
+/** Layer 2. Posts `body`, verifies its author by the reader's rule, then applies the label. */
+function postGrantVerified(repoAbs, num, body, labelArgs, poster) {
+  const commentR = git.ghIssueComment(repoAbs, num, body);
+  if (!commentR.ok) {
+    throw new UserError(`the grant comment failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — nothing was written (the label is applied only after the comment). Re-run: ${poster.remedy}`);
+  }
+  const back = git.ghIssueView(repoAbs, num, ['comments']);
+  const posted = back ? (back.comments || []).filter((c) => String((c && c.body) || '').trim() === body.trim()).pop() : null;
+  if (!posted) {
+    warn(`could not read the grant comment back from #${num} to confirm the ship gate will trust its author — check it before relying on it: colab ${poster.kind === 'CI' ? 'ci-grant' : 'migration-grant'} --list`);
+  } else {
+    const login = (posted.author && posted.author.login) || poster.login;
+    const p = trustHumans.posterTrust({ login, comments: [posted], trust: poster.trust, role: poster.role });
+    if (p.verdict !== 'trusted') {
+      const why = p.verdict === 'untrusted' ? p : { ...p, reason: `${login || '(unknown)'} (no association reported) — not a repo owner/member/collaborator` };
+      const del = git.ghDeleteIssueComment(repoAbs, posted.url);
+      if (!del.ok) {
+        throw new UserError(`${grantPosterRefusal(poster.kind, why, poster.remedy)}. The comment was posted and could NOT be deleted (${String(del.stderr || '').split('\n')[0] || del.code}); the label was not applied, so it grants nothing — delete it by hand (${posted.url || `the newest grant comment on #${num}`}): \`gh api -X DELETE repos/{owner}/{repo}/issues/comments/<id>\``);
+      }
+      throw new UserError(`${grantPosterRefusal(poster.kind, why, poster.remedy)}. (Its association was only readable after posting; the comment was deleted again and the label never applied.)`);
+    }
+  }
+  const editR = git.ghIssueEdit(repoAbs, num, labelArgs);
+  if (!editR.ok) {
+    const del = posted ? git.ghDeleteIssueComment(repoAbs, posted.url) : { ok: false };
+    throw new UserError(`the grant comment posted but the label failed (${editR.stderr.split('\n')[0] || editR.code}) — ${del.ok ? 'deleted the comment again' : `the comment stays, inert without the label${posted && posted.url ? ` (${posted.url})` : ''}`}, so this does not read as granted. Re-run: ${poster.remedy}`);
+  }
+}
+
 function cmdMigrationGrantCreate(repoAbs, num, opts) {
   // --branch and branch existence are already validated by cmdMigrationGrant, ahead of the
   // isGhUsable gate — see the comment there. Kept as a defensive re-check in case this function is
@@ -4382,7 +4456,8 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
     throw new UserError(`branch "${opts.branch}" does not resolve to a ref (locally or on origin) — refusing to bind a grant to a name nothing exists at`);
   }
 
-  const info = git.ghIssueView(repoAbs, num, opts.versionBinding ? ['state', 'labels', 'body'] : ['state', 'labels']);
+  // `comments` (#732): the poster check reads this account's existing association from them.
+  const info = git.ghIssueView(repoAbs, num, opts.versionBinding ? ['state', 'labels', 'body', 'comments'] : ['state', 'labels', 'comments']);
   if (!info) throw new UserError(`could not read #${num} from the tracker — refusing to write a grant blind`);
   if (info.state !== 'OPEN') {
     throw new UserError(`#${num} is ${info.state} — a grant expires the instant its issue closes, so granting a closed one would do nothing (CONVENTIONS.md §5, Migration exemption)`);
@@ -4402,25 +4477,26 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
       || `this repo has no \`${labels.MIGRATION_GRANT_LABEL}\` label`);
   }
 
+  // #732: would the ship gate trust this account's grant? Refuse before writing when it is already
+  // known not to — a human grant by the human readers' rule (trust-humans from trunk), a reviewer
+  // grant by the bare association class its reader applies.
+  const poster = grantPosterPrecheck(repoAbs, {
+    kind: 'Migration', role: opts.reviewRecord ? 'reviewer' : 'human', comments: info.comments,
+    trust: opts.reviewRecord ? null : trustAt(repoAbs, resolveTrunk(repoAbs, projectDoc(repoAbs))),
+    remedy: opts.reviewRecord ? `the same \`colab migration-grant ${num} --branch ${opts.branch} --role ${migrationGrant.REVIEWER_ROLE} …\`` : `COLAB_HUMAN=1 colab migration-grant ${num} --branch ${opts.branch}`,
+  });
+
   // #457: a record claiming a CI round-trip pass is checked against CI BEFORE anything is written.
   if (opts.reviewRecord) migrationGrantRoundtripCheck(repoAbs, opts.branch, opts.reviewRecord);
 
-  const editR = git.ghIssueEdit(repoAbs, num, labels.migrationGrantLabelArgs({}));
-  if (!editR.ok) throw new UserError(`gh edit #${num} failed (${editR.stderr.split('\n')[0] || editR.code})`);
-
   // The comment is the AUTHORITY (it carries the branch binding) — not best-effort, unlike a
-  // claim comment. A label with no live comment reads "granted" to a human and correctly REFUSES
-  // in ship, which is the worst of both: looks done, does nothing. Roll the label back rather than
-  // leave that state.
+  // claim comment. #732: it is posted FIRST and its author verified before the label goes on, so a
+  // grant the gate would refuse never shows the label (postGrantVerified).
   const iso = nowISO();
   const body = opts.reviewRecord
     ? migrationGrant.reviewGrantCommentBody(opts.branch, commentHost(repoAbs), iso, opts.reviewRecord)
     : migrationGrant.grantCommentBody(opts.branch, commentHost(repoAbs), iso);
-  const commentR = git.ghIssueComment(repoAbs, num, body);
-  if (!commentR.ok) {
-    git.ghIssueEdit(repoAbs, num, labels.migrationGrantLabelArgs({ clear: true }));
-    throw new UserError(`label applied but the grant comment failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — rolled the label back so this does not read as granted. Re-run.`);
-  }
+  postGrantVerified(repoAbs, num, body, labels.migrationGrantLabelArgs({}), poster);
 
   if (opts.reviewRecord) {
     print(`Recorded a ${migrationGrant.REVIEWER_ROLE} grant on #${num} in ${shortRepo(repoAbs)} — reviewer "${opts.reviewRecord.reviewer}", branch "${opts.branch}" @ ${opts.reviewRecord.head.slice(0, 12)}.`);
@@ -4460,9 +4536,10 @@ function cmdMigrationGrantRevoke(repoAbs, num) {
     return 0;
   }
 
-  // Remove the label FIRST — the mirror image of grant's order. Grant does the weak half first
-  // (label) and rolls back on comment failure; revoke does the GATE-RESTORING half first, because
-  // the safe state to fail toward here is "already revoked," not "still granted."
+  // Remove the label FIRST — the mirror image of grant's order. Grant posts the comment first and
+  // applies the label only once its author is verified (#732, postGrantVerified); revoke does the
+  // GATE-RESTORING half first, because the safe state to fail toward here is "already revoked,"
+  // not "still granted."
   if (hasLabel) {
     const r = git.ghIssueEdit(repoAbs, num, labels.migrationGrantLabelArgs({ clear: true }));
     if (!r.ok) {
@@ -5250,7 +5327,8 @@ function cmdCiGrantReviewer(num, opts) {
     throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — a CI grant lives on the tracker, visible from any machine to the gate that reads it, and there is deliberately no local-only fallback`);
   }
 
-  const info = git.ghIssueView(repoAbs, num, ['state', 'labels', 'title']);
+  // `comments` (#732): the poster check reads this account's existing association from them.
+  const info = git.ghIssueView(repoAbs, num, ['state', 'labels', 'title', 'comments']);
   if (!info) throw new UserError(`could not read #${num} from the tracker — refusing to write a grant blind`);
   if (info.state !== 'OPEN') throw new UserError(`#${num} is ${info.state} — a grant expires the instant its issue closes`);
   if (!ciGrant.titleIsTrunkRed(info.title)) {
@@ -5260,6 +5338,13 @@ function cmdCiGrantReviewer(num, opts) {
   if (present && !present.includes(labels.CI_GRANT_LABEL)) {
     throw new UserError(labels.ciGrantMissingLabelHint(present) || `this repo has no \`${labels.CI_GRANT_LABEL}\` label`);
   }
+
+  // #732: the reviewer reader trusts the bare association class (ci-grant.js evaluateReviewerIssue),
+  // so the writer refuses an account it would reject — before any CI read, nothing written.
+  const poster = grantPosterPrecheck(repoAbs, {
+    kind: 'CI', role: 'reviewer', comments: info.comments, trust: null,
+    remedy: `the same \`colab ci-grant ${num} --branch ${opts.branch} --role ${ciGrant.REVIEWER_ROLE} …\``,
+  });
 
   // Trunk red, in ship's sense — the identical classification cmdCiGrantCreate uses (#155).
   git.git(['fetch', git.remoteFor(repoAbs), trunk], repoAbs);
@@ -5298,14 +5383,10 @@ function cmdCiGrantReviewer(num, opts) {
   const v = ciGrant.validateReviewRecord(rec);
   if (!v.passing) throw new UserError(`the review record is invalid: ${v.problems.join('; ')}`);
 
-  const editR = git.ghIssueEdit(repoAbs, num, labels.ciGrantLabelArgs({}));
-  if (!editR.ok) throw new UserError(`gh edit #${num} failed (${editR.stderr.split('\n')[0] || editR.code})`);
-  const commentR = git.ghIssueComment(repoAbs, num,
-    ciGrant.reviewGrantCommentBody(opts.branch, trunk, commentHost(repoAbs), nowISO(), rec));
-  if (!commentR.ok) {
-    git.ghIssueEdit(repoAbs, num, labels.ciGrantLabelArgs({ clear: true }));
-    throw new UserError(`label applied but the grant comment failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — rolled the label back so this does not read as granted. Re-run.`);
-  }
+  // #732: comment first, its author verified, the label last (postGrantVerified).
+  postGrantVerified(repoAbs, num,
+    ciGrant.reviewGrantCommentBody(opts.branch, trunk, commentHost(repoAbs), nowISO(), rec),
+    labels.ciGrantLabelArgs({}), poster);
 
   print(`Recorded a ${ciGrant.REVIEWER_ROLE} CI grant on #${num} in ${shortRepo(repoAbs)} — reviewer "${rec.reviewer}", branch "${opts.branch}" @ ${head.slice(0, 12)}.`);
   print(`  Bound to that HEAD and to red ${trunk}@${shortSha(redSha)}: a new commit on either voids it. Cures: ${rec.cures}.`);
@@ -5322,7 +5403,8 @@ function cmdCiGrantCreate(repoAbs, num, opts) {
     throw new UserError(`branch "${opts.branch}" does not resolve to a ref (locally or on origin) — refusing to bind a grant to a name nothing exists at`);
   }
 
-  const info = git.ghIssueView(repoAbs, num, ['state', 'labels']);
+  // `comments` (#732): the poster check reads this account's existing association from them.
+  const info = git.ghIssueView(repoAbs, num, ['state', 'labels', 'comments']);
   if (!info) throw new UserError(`could not read #${num} from the tracker — refusing to write a grant blind`);
   if (info.state !== 'OPEN') {
     throw new UserError(`#${num} is ${info.state} — a grant expires the instant its issue closes, so granting a closed one would do nothing (CONVENTIONS.md §5, Red-trunk exemption)`);
@@ -5336,6 +5418,13 @@ function cmdCiGrantCreate(repoAbs, num, opts) {
   const doc = projectDoc(repoAbs);
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
+
+  // #732: refuse before writing (and before measuring CI) when the ship gate is already known to
+  // reject this account's grant — the human readers' rule, trust-humans read from trunk as ship does.
+  const poster = grantPosterPrecheck(repoAbs, {
+    kind: 'CI', role: 'human', comments: info.comments, trust: trustAt(repoAbs, trunk),
+    remedy: `COLAB_HUMAN=1 colab ci-grant ${num} --branch ${opts.branch}`,
+  });
 
   // ---- GUARD 2 (anti-stacking) FIRST — cheaper to fail here than after measuring evidence ----
   git.git(['fetch', git.remoteFor(repoAbs), trunk], repoAbs);
@@ -5370,16 +5459,11 @@ function cmdCiGrantCreate(repoAbs, num, opts) {
   }
   const evidenceSha = evRun.sha;
 
-  const editR = git.ghIssueEdit(repoAbs, num, labels.ciGrantLabelArgs({}));
-  if (!editR.ok) throw new UserError(`gh edit #${num} failed (${editR.stderr.split('\n')[0] || editR.code})`);
-
+  // #732: comment first, its author verified, the label last (postGrantVerified).
   const iso = nowISO();
-  const commentR = git.ghIssueComment(repoAbs, num,
-    ciGrant.grantCommentBody(opts.branch, trunk, redSha, evidenceSha, commentHost(repoAbs), iso));
-  if (!commentR.ok) {
-    git.ghIssueEdit(repoAbs, num, labels.ciGrantLabelArgs({ clear: true }));
-    throw new UserError(`label applied but the grant comment failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — rolled the label back so this does not read as granted. Re-run.`);
-  }
+  postGrantVerified(repoAbs, num,
+    ciGrant.grantCommentBody(opts.branch, trunk, redSha, evidenceSha, commentHost(repoAbs), iso),
+    labels.ciGrantLabelArgs({}), poster);
 
   print(`Granted #${num} in ${shortRepo(repoAbs)} a CI exemption for branch "${opts.branch}".`);
   print(`  Bound to red trunk sha ${shortSha(redSha)} and evidence run ${shortSha(evidenceSha)}.`);

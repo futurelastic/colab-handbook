@@ -101,4 +101,49 @@ function labelApplierIsHuman(actors, trust, labelName) {
   return { ok: true, reason: '' };
 }
 
-module.exports = { KEY, LOGIN_RE, TRUSTED_ASSOCIATIONS, parseTrustHumans, authorIsHuman, labelApplierIsHuman };
+/**
+ * The WRITER's half (#732): will a grant this account is about to post read as trusted to the
+ * reader above? The readers judged the author; the writers (`colab ci-grant`, `colab
+ * migration-grant`) never did, so an account whose comments read `NONE` posted a grant that was
+ * dead from the moment it landed — label applied, hold lifted, and the ship pass found the red row
+ * later. The repo-permission API cannot predict this (it reported `write` for exactly such an
+ * account), so nothing here asks it.
+ *
+ * WHY EXISTING COMMENTS PREDICT A NEW ONE. GitHub computes `authorAssociation` per author at read
+ * time, not per comment at write time, so every comment one author already has reads the same
+ * association to one reader as the grant comment will. No comment by this login anywhere the caller
+ * looked → `unknown`, and the caller verifies the posted comment instead.
+ *
+ *   login    — the posting account (`gh api user`), or null when it could not be read.
+ *   comments — any mix of gh's shape `{ author: { login }, authorAssociation }` and the REST shape
+ *              `{ user: { login }, author_association }`. The LAST one by `login` decides.
+ *   trust    — parseTrustHumans(...) for the human role; ignored for the reviewer role.
+ *   role     — 'human' judges by authorIsHuman (the human readers' rule); anything else judges by
+ *              the bare association class (the reviewer readers' rule, ci-grant.js / migration-grant.js
+ *              reviewer branch). Mirror each reader exactly: a stricter writer refuses grants the
+ *              gate would honour, a looser one is this issue.
+ * Returns { verdict: 'trusted' | 'untrusted' | 'unknown', reason, association }.
+ */
+function posterTrust({ login, comments, trust, role }) {
+  const me = String(login || '').toLowerCase();
+  const human = role === 'human';
+  const declared = human && trust && trust.declared;
+  // A declared list decides the login half with no comment at all.
+  if (declared && me && !(trust.humans && trust.humans.has(me))) {
+    return { verdict: 'untrusted', association: '',
+      reason: `${login} is not listed in trust-humans${trust.valid ? '' : ' (the list is malformed, so nobody is)'}` };
+  }
+  if (!me) return { verdict: 'unknown', association: '', reason: 'the posting account could not be read' };
+  const authorOf = (c) => String((c && ((c.author && c.author.login) || (c.user && c.user.login))) || '').toLowerCase();
+  const assocOf = (c) => String((c && (c.authorAssociation || c.author_association)) || '');
+  const mine = (Array.isArray(comments) ? comments : []).filter((c) => authorOf(c) === me && assocOf(c));
+  if (mine.length === 0) return { verdict: 'unknown', association: '', reason: `no comment by ${login} to read its association from` };
+  const association = assocOf(mine[mine.length - 1]);
+  const who = human
+    ? authorIsHuman({ login, authorAssociation: association }, trust)
+    : (TRUSTED_ASSOCIATIONS.has(association) ? { ok: true, reason: '' }
+      : { ok: false, reason: `${login} (${association}) — not a repo owner/member/collaborator` });
+  return who.ok ? { verdict: 'trusted', association, reason: '' } : { verdict: 'untrusted', association, reason: who.reason };
+}
+
+module.exports = { KEY, LOGIN_RE, TRUSTED_ASSOCIATIONS, parseTrustHumans, authorIsHuman, labelApplierIsHuman, posterTrust };
