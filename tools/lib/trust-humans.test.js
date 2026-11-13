@@ -214,3 +214,74 @@ test('ruling pair: an agent-posted ⚖ record beside needs-decision is no pair �
   assert.strictEqual(pair, null);
   assert.deepStrictEqual(dr.answeredOptionRefs([comment(dr.decisionCommentBody('boss', 'issuecomment-1', HOST, NOW), { login: AGENT })], TRUST), []);
 });
+
+// --- #732: the writer's half — posterTrust predicts what the reader will see -----------------
+
+test('posterTrust: an account whose comments read NONE is untrusted — the reader would reject its grant', () => {
+  const comments = [comment('triage note', { login: AGENT, authorAssociation: 'NONE' })];
+  const p = th.posterTrust({ login: AGENT, comments, trust: ABSENT, role: 'human' });
+  assert.strictEqual(p.verdict, 'untrusted');
+  assert.strictEqual(p.association, 'NONE');
+  assert.match(p.reason, /agent-bot \(NONE\) — not a repo owner\/member\/collaborator/);
+  // The reviewer role applies the same association class.
+  assert.strictEqual(th.posterTrust({ login: AGENT, comments, role: 'reviewer' }).verdict, 'untrusted');
+});
+
+test('posterTrust: a trusted association is trusted, login matched case-insensitively', () => {
+  const comments = [comment('hi', { login: 'Operator-A', authorAssociation: 'COLLABORATOR' })];
+  const p = th.posterTrust({ login: 'operator-a', comments, trust: ABSENT, role: 'human' });
+  assert.deepStrictEqual(p, { verdict: 'trusted', association: 'COLLABORATOR', reason: '' });
+});
+
+test('posterTrust: other authors\' comments say nothing about this account — unknown, never a guess', () => {
+  const comments = [comment('hi', { login: HUMAN, authorAssociation: 'OWNER' })];
+  const p = th.posterTrust({ login: AGENT, comments, trust: ABSENT, role: 'human' });
+  assert.strictEqual(p.verdict, 'unknown');
+  assert.strictEqual(th.posterTrust({ login: null, comments, trust: ABSENT, role: 'human' }).verdict, 'unknown');
+  assert.strictEqual(th.posterTrust({ login: AGENT, comments: null, trust: ABSENT, role: 'human' }).verdict, 'unknown');
+});
+
+test('posterTrust: the LAST comment by the account decides (an association can change)', () => {
+  const comments = [
+    comment('old', { login: AGENT, authorAssociation: 'NONE' }),
+    comment('new', { login: AGENT, authorAssociation: 'MEMBER' }),
+  ];
+  assert.strictEqual(th.posterTrust({ login: AGENT, comments, trust: ABSENT, role: 'human' }).verdict, 'trusted');
+});
+
+test('posterTrust: reads the REST shape (user.login, author_association) as well as gh\'s', () => {
+  const rest = [{ body: 'x', user: { login: AGENT }, author_association: 'NONE' }];
+  const p = th.posterTrust({ login: AGENT, comments: rest, trust: ABSENT, role: 'reviewer' });
+  assert.strictEqual(p.verdict, 'untrusted');
+  assert.strictEqual(p.association, 'NONE');
+});
+
+test('posterTrust: a declared trust-humans list refuses an unlisted human-role poster with no comment at all', () => {
+  const p = th.posterTrust({ login: AGENT, comments: [], trust: TRUST, role: 'human' });
+  assert.strictEqual(p.verdict, 'untrusted');
+  assert.match(p.reason, /agent-bot is not listed in trust-humans/);
+  // Listed, and a trusted comment: trusted. Listed, comment reads NONE: untrusted (the association half stays).
+  assert.strictEqual(th.posterTrust({ login: HUMAN, comments: [comment('x')], trust: TRUST, role: 'human' }).verdict, 'trusted');
+  const lost = th.posterTrust({ login: HUMAN, comments: [comment('x', { authorAssociation: 'NONE' })], trust: TRUST, role: 'human' });
+  assert.strictEqual(lost.verdict, 'untrusted');
+  assert.match(lost.reason, /listed in trust-humans but is no longer/);
+});
+
+test('posterTrust: the reviewer role ignores trust-humans, exactly as the reviewer readers do', () => {
+  const comments = [comment('x', { login: AGENT, authorAssociation: 'MEMBER' })];
+  assert.strictEqual(th.posterTrust({ login: AGENT, comments, trust: TRUST, role: 'reviewer' }).verdict, 'trusted');
+});
+
+test('posterTrust agrees with the reader: every verdict it calls trusted, authorIsHuman / the reviewer class also passes', () => {
+  for (const assoc of ['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'NONE']) {
+    for (const trust of [ABSENT, TRUST]) {
+      for (const login of [HUMAN, AGENT]) {
+        const comments = [comment('x', { login, authorAssociation: assoc })];
+        const human = th.posterTrust({ login, comments, trust, role: 'human' });
+        assert.strictEqual(human.verdict === 'trusted', th.authorIsHuman({ login, authorAssociation: assoc }, trust).ok, `${login}/${assoc}/${trust.declared}`);
+        const rev = th.posterTrust({ login, comments, trust, role: 'reviewer' });
+        assert.strictEqual(rev.verdict === 'trusted', th.TRUSTED_ASSOCIATIONS.has(assoc), `reviewer ${login}/${assoc}`);
+      }
+    }
+  }
+});
