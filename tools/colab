@@ -50,6 +50,7 @@ const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
 const treeGreen = require('./lib/tree-green');
 const verifyRuns = require('./lib/verify-runs');
+const releaseOnly = require('./lib/release-only'); // #736: the release-only red-trunk door
 const ciWait = require('./lib/ci-wait'); // #495
 const ciProfile = require('./lib/ci-profile'); // #559
 const thresholdsLib = require('./lib/thresholds'); // #560
@@ -11242,6 +11243,17 @@ function ciGrantTrailerLine(grantVerdict, branch, trunk) {
  * through the widened door on a branch editing the CI config is a materially different fact from an
  * ordinary one. The commit is the only artifact that still says so after the runs age out.
  */
+/**
+ * #736: the `CI-Release-Only:` trailer — the audit trail of a merge that landed over a trunk red only on
+ * release-only checks, naming the red it ignored. Deliberately NOT `CI-Grant:` / `CI-Cure:`:
+ * computeAntiStacking greps exactly those two prefixes ("one exemption per red episode"), and a
+ * release-only red is precisely the one many branches must be able to land over, one after another.
+ */
+function releaseOnlyTrailerLine(v, branch, trunk) {
+  if (!v || !v.ok) return null;
+  return `CI-Release-Only: branch ${branch} over-red ${trunk}@${shortSha(v.redSha)} ignored ${releaseOnly.ignoredList(v.ignored)}`;
+}
+
 function ciCureTrailerLine(cureVerdict, branch, trunk) {
   if (!cureVerdict || !cureVerdict.ok) return null;
   const via = (cureVerdict.carveOut
@@ -11464,6 +11476,19 @@ only ONE exemption per continuous red (more only while its red-job set shrinks, 
 Its own honest limit: it proves the red jobs still ran the steps they ran and still cost the time —
 never what those steps ASSERTED. Known false refusal: a trunk job that failed by TIMEOUT ran longer
 than any healthy run, so (4c) refuses the genuine repair; take the ordinary ci-grant door there.
+
+THE RELEASE-ONLY DOOR (#736) is tried before both. A repo may declare, in .github/project.yml, the
+checks that matter only to a release, each next to the paths it covers:
+  release-only-checks:
+    Install smoke: [packaging/, scripts/install.sh]     # a whole workflow, by its name:
+    "CI / install (*)": [installer/**]                  # one job of a workflow, * in the job part
+When trunk's red comes ONLY from declared checks (every other judged workflow — or job — green, at
+least one of them), and the branch touches none of the paths of the checks that are red, the row
+passes; the detail, \`--dry --json\`'s \`releaseOnly\` and a \`CI-Release-Only:\` trailer name the red it
+ignored. A branch that touches those paths falls through to the cure rule — it must show that check
+green itself. Read at trunk, never the branch's own descriptor. No anti-stacking: many branches may
+land over one release-only red. It makes nothing green — \`colab trunk-ci\` still reads RED and
+\`colab release cut\` still refuses that commit. Declaring nothing (or an invalid key) changes nothing.
 
 The default squash subject is the branch's HIGHEST-WEIGHT commit (breaking > feat > fix > perf >
 refactor > docs > test > chore, ties to the oldest) — NOT its newest commit, which on a well-run
@@ -12144,11 +12169,41 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk, branch =
   const r = readCiVerdict(repoAbs, gh, target, trunk);
   // #678: on a forge the engine map names, the verdict is final — the #482 no-workflow door counts
   // `.github/workflows` and reads the branch through gh, neither of which describes a forge's CI.
-  if (forgeCi(repoAbs)) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null };
+  if (forgeCi(repoAbs)) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null, releaseOnlyVerdict: null };
   const nw = noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch, docsOnlyThunk);
-  if (nw) return { name, ...nw, grantVerdict: null, cureVerdict: null };
-  if (r.final) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null };
-  return applyRedTrunkExemptions({ name, ...r.verdict }, target, trunk, r.run.sha, grantThunk, cureThunk);
+  if (nw) return { name, ...nw, grantVerdict: null, cureVerdict: null, releaseOnlyVerdict: null };
+  if (r.final) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null, releaseOnlyVerdict: null };
+  // #736: the release-only door is built here, not passed in — it needs only the branch, so every
+  // caller (the table, --dry, B1) gets it without a new parameter, and a call with no branch never does.
+  const releaseOnlyThunk = branch ? (redSha) => shipReleaseOnly(repoAbs, target, trunk, redSha, branch) : null;
+  return applyRedTrunkExemptions({ name, ...r.verdict }, target, trunk, r.run.sha, grantThunk, cureThunk, releaseOnlyThunk);
+}
+
+/**
+ * #736: the release-only door's measurement — I/O only; the rule is tools/lib/release-only.js.
+ *
+ *   - the declaration is read at TRUNK (`projectDocAt`), never the branch: a branch that adds its own
+ *     check to the list does not change what its own ship reads (the same discipline as trust-humans);
+ *   - the runs at the red sha through the SAME verifying policy readCiVerdict used, asking for the judged
+ *     heads (git.summarizeRunsForCommit `opts.heads`), so "which workflow is red" is the gate's own answer;
+ *   - a run's jobs only for a workflow declared at job level (one `gh run view` each, lazily);
+ *   - the paths the branch changes: the three-dot diff the squash would land, renames as delete + add so
+ *     a file moved OUT of a covered path still counts as touching it.
+ *
+ * Returns release-only.js's verdict plus `redSha`, or null when nothing is declared (or the declaration
+ * is invalid — the audit reports that; the reader takes it as absent), so a repo that declares nothing
+ * pays nothing and reads exactly as before.
+ */
+function shipReleaseOnly(repoAbs, target, trunk, redSha, branch) {
+  if (target !== trunk || !redSha || !branch) return null;
+  const decl = releaseOnly.parseReleaseOnly(projectDocAt(repoAbs, trunk));
+  if (!decl.valid || !decl.checks.length) return null;
+  const run = git.ghRunForCommit(repoAbs, trunk, redSha, undefined, { verifying: verifyingPolicy(repoAbs), heads: true });
+  const heads = run && Array.isArray(run.heads) ? run.heads : null;
+  const diff = git.git(['diff', '--name-only', '-z', '--no-renames', `${target}...${shipRefFor(repoAbs, branch)}`, '--'], repoAbs);
+  const changed = diff.ok ? diff.stdout.split('\0').map((x) => x.replace(/^\n+/, '')).filter(Boolean) : null;
+  const v = releaseOnly.releaseOnlyVerdict({ heads, jobsOf: (id) => git.ghRunJobs(repoAbs, id), changed, checks: decl.checks });
+  return v.applies ? { ...v, redSha } : null;
 }
 
 /**
@@ -12778,8 +12833,21 @@ function dirtyOwnerDetail(baseDetail, advisory) {
  * on a human, or on the tracker read; a branch that does not falls through to the grant exactly as
  * it always has, unaffected by this rule's existence.
  */
-function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThunk) {
-  if (target !== trunk) return { ...raw, grantVerdict: null, cureVerdict: null };
+function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThunk, releaseOnlyThunk = null) {
+  if (target !== trunk) return { ...raw, grantVerdict: null, cureVerdict: null, releaseOnlyVerdict: null };
+
+  // #736: the release-only door goes FIRST — no tracker read and no evidence to measure, only which
+  // workflow is red and what the branch touches. It admits a branch over a red the repo declared
+  // release-only; a refusal falls through to the cure rule and the grant exactly as before (a branch
+  // that touches a red check's paths must show that check green itself — which is the cure rule).
+  const releaseOnlyVerdict = releaseOnlyThunk ? releaseOnlyThunk(redSha) : null;
+  if (releaseOnlyVerdict && releaseOnlyVerdict.ok) {
+    return {
+      name: raw.name, ok: true, class: null,
+      detail: `PRECONDITION OVERRIDDEN by the release-only door (#736) — ${trunk}@${shortSha(redSha)} is red only on release-only check(s), IGNORED for this merge: ${releaseOnly.ignoredList(releaseOnlyVerdict.ignored)}; the branch touches none of their paths. The red still blocks a release cut (raw: ${raw.detail})`,
+      grantVerdict: null, cureVerdict: null, releaseOnlyVerdict, redSha,
+    };
+  }
 
   const cureVerdict = cureThunk ? cureThunk(redSha) : null;
   if (cureVerdict && cureVerdict.ok) {
@@ -12793,7 +12861,7 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
     return {
       name: raw.name, ok: true, class: null,
       detail: `PRECONDITION OVERRIDDEN by the cure rule (#281) — branch contains red ${shortSha(redSha)} and is green at its own head${via}${viaDry} (raw: ${raw.detail})`,
-      grantVerdict: null, cureVerdict, redSha,
+      grantVerdict: null, cureVerdict, releaseOnlyVerdict, redSha,
     };
   }
 
@@ -12808,21 +12876,22 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
     return {
       name: raw.name, ok: true, class: null,
       detail: `PRECONDITION OVERRIDDEN by ${who} on ${by} — trunk was red at ${shortSha(redSha)} (raw: ${raw.detail})`,
-      grantVerdict, cureVerdict, redSha,
+      grantVerdict, cureVerdict, releaseOnlyVerdict, redSha,
     };
   }
   // #534: both doors were consulted and both refused — say WHY on the row itself, so the prose table,
   // `--dry`, and B1's abort line all tell "needs a grant" from "missing evidence" from "stacked". The
   // JSON payload already carried `ciCure.reason`; the prose detail used to end at the raw trunk read.
-  return { ...raw, detail: `${raw.detail}${doorRefusalNote(cureVerdict, grantVerdict)}`, grantVerdict, cureVerdict, redSha };
+  return { ...raw, detail: `${raw.detail}${doorRefusalNote(cureVerdict, grantVerdict, releaseOnlyVerdict)}`, grantVerdict, cureVerdict, releaseOnlyVerdict, redSha };
 }
 
 /**
- * Which red-trunk door let a trunk-CI row pass — `'cure rule'`, `'ci-grant'`, or null for a row that
+ * Which red-trunk door let a trunk-CI row pass — `'release-only door'` (#736), `'cure rule'`, `'ci-grant'`, or null for a row that
  * passed on its own (green) or did not pass (#538: B1 re-measures only a door the table relied on).
  */
 function doorThatAdmitted(ciResult) {
   if (!ciResult || !ciResult.ok) return null;
+  if (ciResult.releaseOnlyVerdict && ciResult.releaseOnlyVerdict.ok) return 'release-only door';
   if (ciResult.cureVerdict && ciResult.cureVerdict.ok) return 'cure rule';
   if (ciResult.grantVerdict && ciResult.grantVerdict.ok) return 'ci-grant';
   return null;
@@ -12838,8 +12907,9 @@ const B1_REMEASURE_MS = Number.isFinite(Number(process.env.COLAB_B1_REMEASURE_MS
  * cure's `reason`, the grant's per-issue `missing[].reason` — never a re-wording, so the prose and
  * the `--dry --json` fields cannot read differently.
  */
-function doorRefusalNote(cureVerdict, grantVerdict) {
+function doorRefusalNote(cureVerdict, grantVerdict, releaseOnlyVerdict = null) {
   const parts = [];
+  if (releaseOnlyVerdict && !releaseOnlyVerdict.ok && releaseOnlyVerdict.reason) parts.push(`release-only door (#736): ${releaseOnlyVerdict.reason}`);
   if (cureVerdict && !cureVerdict.ok && cureVerdict.reason) parts.push(`cure rule (#281): ${cureVerdict.reason}`);
   if (grantVerdict && !grantVerdict.ok) {
     const why = (grantVerdict.missing || []).map((m) => (m.issue ? `#${m.issue}: ` : '') + m.reason)
@@ -13140,6 +13210,22 @@ function priorExemptionRedJobs(repoAbs, trunk, stacking) {
 }
 
 /**
+ * #736: the trunk-CI-green row's --dry --json additive payload for the release-only door — built from
+ * the SAME verdict shipCiCheck computed. `null` when the door was not consulted or had nothing to say
+ * (nothing declared, a green trunk, a red that is not a finished run), so a repo that declares nothing
+ * sees `releaseOnly: null` and nothing else changes.
+ */
+function releaseOnlyPayload(ciResult) {
+  const v = ciResult && ciResult.releaseOnlyVerdict;
+  if (!v) return null;
+  return {
+    ok: v.ok, reason: v.reason, redSha: v.redSha || null,
+    ignored: (v.ignored || []).map((x) => ({ ...x })),
+    touched: (v.touched || []).map((x) => ({ check: x.check, paths: x.paths.slice() })),
+  };
+}
+
+/**
  * The trunk-CI-green row's --dry --json additive payload for the cure rule (#281), parallel to
  * `ciGrantPayload` above and built from the SAME cureVerdict `shipCiCheck` already computed (never
  * re-derived). `null` when the cure rule was never consulted — the ordinary green-trunk case, or a
@@ -13382,6 +13468,7 @@ function cmdShipDryJson(opts) {
   // that same check, below. Parallel to ciGrantPayloadVal, never both non-null at once (the cure
   // rule short-circuits before the grant is even consulted once it succeeds).
   let ciCurePayloadVal = null;
+  let releaseOnlyPayloadVal = null; // #736
   // #293: null unless the sha this branch was cut from turned out to be measurably red — see
   // `baseCiAdvisory`'s doc comment. ADVISORY ONLY: never folds into `ok` — the `checks` row it also
   // produces (below) is always `ok: true` for the same reason.
@@ -13406,7 +13493,7 @@ function cmdShipDryJson(opts) {
     const body = {
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
       target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, refsBrakeFindings, checks,
-      migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
+      migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal, releaseOnly: releaseOnlyPayloadVal,
       baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal, autonomyGate: autonomyGatePayloadVal,
       coreReview: coreReviewPayloadVal,
       ...machineTrailerPayload(mode === 'squash' || mode === 'pr-pending'),
@@ -13471,6 +13558,7 @@ function cmdShipDryJson(opts) {
     () => shipDocsOnlyCi(repoAbs, doc, target, sess.branch)); // #711: the #482 door learns the #606 measurement
   ciGrantPayloadVal = ciGrantPayload(ciResultJson);
   ciCurePayloadVal = ciCurePayload(ciResultJson);
+  releaseOnlyPayloadVal = releaseOnlyPayload(ciResultJson);
   checks.push({ name: ciResultJson.name, ok: ciResultJson.ok, class: ciResultJson.class, detail: ciResultJson.detail });
 
   // #293: advisory only — was the sha this branch was cut from actually green? Always `ok: true`
@@ -15323,6 +15411,7 @@ function cmdShip(argv) {
   // never silently ride the same exemption twice.
   let ciGrantForTrailer = null; // #105: set below when B1 shipped UNDER a grant — read at commit-message time
   let ciCureForTrailer = null; // #281: set below when B1 shipped UNDER the cure rule — read at commit-message time
+  let releaseOnlyForTrailer = null; // #736: set below when B1 shipped over a release-only red — read at commit-message time
   if (gh || forgeCi(repoAbs)) { // #678: a forge's CI is re-read at B1 exactly as GitHub's is
     const measureB1 = () => shipCiCheck(repoAbs, gh, target, trunk,
       (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
@@ -15350,7 +15439,10 @@ function cmdShip(argv) {
         : `✗ B1: CI for ${target} is no longer green — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`);
       return 1;
     }
-    if (ciResultB1.cureVerdict && ciResultB1.cureVerdict.ok) {
+    if (ciResultB1.releaseOnlyVerdict && ciResultB1.releaseOnlyVerdict.ok) {
+      warn(`  ✓ trunk CI green ONLY because the red is on release-only check(s), ignored for this merge: ${releaseOnly.ignoredList(ciResultB1.releaseOnlyVerdict.ignored)} — this merge carries a CI-Release-Only: trailer; the red still blocks a release cut.`);
+      releaseOnlyForTrailer = ciResultB1.releaseOnlyVerdict;
+    } else if (ciResultB1.cureVerdict && ciResultB1.cureVerdict.ok) {
       warn(ciResultB1.cureVerdict.carveOut
         ? `  ✓ trunk CI green ONLY because of the machine-checkable cure rule, through the #321 WORKFLOW CARVE-OUT (this branch edits .github/workflows/**; jobs proven: ${ciResultB1.cureVerdict.carveOut.jobs.map((j) => j.name).join(', ')}) — this merge carries a CI-Cure: trailer.`
         : `  ✓ trunk CI green ONLY because of the machine-checkable cure rule — this merge carries a CI-Cure: trailer.`);
@@ -15464,7 +15556,8 @@ function cmdShip(argv) {
   // rule short-circuits before the grant is even consulted once it succeeds), so at most one of
   // these two calls ever returns non-null.
   const ciTrailer = ciGrantTrailerLine(ciGrantForTrailer, sess.branch, target) ||
-    ciCureTrailerLine(ciCureForTrailer, sess.branch, target);
+    ciCureTrailerLine(ciCureForTrailer, sess.branch, target) ||
+    releaseOnlyTrailerLine(releaseOnlyForTrailer, sess.branch, target); // #736 — the three doors are exclusive per B1
   // #324: an adopted remote-only branch records WHOSE work this was — there is no issue to comment
   // on (a zero-claim ship by definition), so the immutable squash is the one place it survives.
   // #367: on a public repo the host tail is dropped — the branch and sha stay, they are the audit trail.
@@ -15490,7 +15583,7 @@ function cmdShip(argv) {
     for (const tl of ciTrailerLines) {
       if (commitMsg.toLowerCase().includes(tl.toLowerCase())) continue;
       const lastLine = commitMsg.split('\n').pop().trim();
-      commitMsg += (/^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|CI-Grant|CI-Cure|Colab-Adopted|Colab-Handoff|Machine):\s*\S/i.test(lastLine) ? '\n' : '\n\n') + tl;
+      commitMsg += (/^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|CI-Grant|CI-Cure|CI-Release-Only|Colab-Adopted|Colab-Handoff|Machine):\s*\S/i.test(lastLine) ? '\n' : '\n\n') + tl;
     }
   } else {
     // Preserve the branch's crafted commit (subject + footers); insert Closes/Refs above the footers.
@@ -16810,6 +16903,8 @@ scheduled finalize, a dispatch, a deploy — comes after the verdict and is set 
 the detail (--json: setAside). Override in .github/project.yml, by workflow name:
   ship-gate-workflows: [CI]       exactly these workflows count, whatever their trigger
   ship-ignore-workflows: [Deploy] set these aside too, even when push-triggered
+release-only-checks (#736) never changes this verdict: a red on a release-only check is RED here;
+only ship's per-branch release-only door reads that key.
 
 The first output word is one verdict:
   GREEN       every judged workflow's newest run at the sha succeeded — ship's row would pass

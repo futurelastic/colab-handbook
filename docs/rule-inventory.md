@@ -1649,6 +1649,16 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.cure.66 | default |  | A cure that passed condition 3 by progress appends after-progress healed and reports ciCure.progress. | A cure that passed condition 3 by progress (#477) appends | tools/docs/red-trunk.md | #477 |
 | C5c.cure.67 | default |  | `colab ci-grant`'s anti-stacking scan recognises either the CI-Grant: or the CI-Cure: trailer as an exemption already merged against the red. | anti-stacking scan now recognises either trailer | tools/docs/red-trunk.md | #281 |
 | C5c.cure.68 | default |  | The cure rule is scoped identically to the grant: trunk-only, and never exempts anything but trunk-CI-green. | never exempts anything but trunk-CI-green | tools/docs/red-trunk.md | #281 |
+
+### Release-only checks — a red only a release reads (#736)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C5d.ro.01 | hard | tools/lib/release-only.js::is not a release-only check | The release-only door admits only when every finished red at trunk's head is a declared release-only check (whole workflow, or every red job a declared job). | every one that finished red is covered | tools/docs/red-trunk.md | #736 |
+| C5d.ro.02 | hard | tools/lib/release-only.js::nothing but release-only checks verified | A sha that only release-only checks verified is not admitted. | A sha only release-only checks verified is not admitted | tools/docs/red-trunk.md | #736 |
+| C5d.ro.03 | hard | tools/lib/release-only.js::the branch touches what a red release-only check covers | A branch touching a path of a red release-only check is not admitted; it falls through to the cure rule and the ci-grant. | touches no path of a check that is **red** there | tools/docs/red-trunk.md | #736 |
+| C5d.ro.04 | default |  | The declaration is read at trunk, never from the branch being judged. | It reads the declaration **at trunk** | tools/docs/red-trunk.md | #736 |
+| C5d.ro.05 | default |  | The door never makes trunk green: trunk-ci still reads the red and release cut still refuses. | What it never does: make trunk green | tools/docs/red-trunk.md | #736 |
 | C5c.expl.01 | explanation |  | Rationale moved to the ADR: Condition 1. | A ci-grant's evidence guard checks the branch's own head is | docs/adr/281-cure-rule-rationale.md | — |
 | C5c.expl.02 | explanation |  | Rationale moved to the ADR: Condition 2b. | A green run alone never proved the check trunk is | docs/adr/281-cure-rule-rationale.md | — |
 | C5c.expl.03 | explanation |  | Rationale moved to the ADR: Condition 3, progress admission. | A trunk with two independent failures, or a fix that | docs/adr/281-cure-rule-rationale.md | — |

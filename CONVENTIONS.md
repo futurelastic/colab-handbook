@@ -706,7 +706,7 @@ other key parses identical on both sides; and every tuning key that moved holds 
 is absent. The allowlist: `ship-batch` (inside its cap), `ship-batch-wait`, `ship-batch-steps`,
 `ci-wait-factor`, `thresholds`. **[Hard — gate: colab ship autonomy gate]** **Never tuning**, because they grant
 authority or change what deploys: `autonomy`, `promotion`, `migration-grant`, `ci-grant`,
-`trust-humans`, `exposure`, `tier`, `trunk`, `deploy`, `release`, `production`. A malformed value
+`release-only-checks`, `trust-humans`, `exposure`, `tier`, `trunk`, `deploy`, `release`, `production`. A malformed value
 is refused by `config set` and by the class alike (#416). Both lists are constants in
 `tools/lib/config-set.js`, widened only by a reviewed handbook change.
 
@@ -1314,7 +1314,7 @@ disposition marker, the decision record and the grants — is documented with th
    asks again because time has passed.
 9. **[Hard C5.contract.09 — refuse: landing a migration that carries no valid grant]**
    Some acts only a person decides: landing a migration (or a declared reviewer, where the repo opts
-   in), landing onto a red trunk without a proven cure, a promotion or a final that deploys,
+   in), landing onto a red trunk without a proven cure (or a declared release-only red), a promotion or a final that deploys,
    production access, credentials, and destructive or non-undoable operations. A grant is bound to
    one branch and expires with its issue, an agent never mints one, and "a person is behind this" is
    transcribed from that person in a live conversation, never inferred.
@@ -1782,6 +1782,14 @@ one branch and the red commit, given by a person or — where a repo opts in wit
 The other door needs no grant: a branch that contains the red commit, is green at its own head,
 and provably runs what failed on trunk lands as the fix. The conditions and how the CLI measures
 them: [`tools/docs/red-trunk.md`](tools/docs/red-trunk.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281).
+
+#### Release-only checks — a red only a release reads (#736)
+
+A check that matters only to a release (install the artifact, sign, publish) may be declared in
+[`release-only-checks`](project.schema.md#release-only-checks--optional), next to the paths it covers.
+A trunk red only on such checks holds the release cut, never a branch that touches none of their
+paths; it stays red everywhere else. How ship reads it:
+[`tools/docs/red-trunk.md`](tools/docs/red-trunk.md#release-only-checks--a-red-only-a-release-reads-736).
 
 #### Scheduled drivers — provenance and autonomy meet a caller that is not a person
 
@@ -2583,10 +2591,12 @@ trunk moves, updating the CI triggers is part of the move, and the audit checks 
 **The handbook holds a CI contract, not a CI.** What a repo's CI runs, and on which runners, is
 the repo's business; these four invariants hold whatever it runs (#635):
 
-1. **[Hard C7.contract.01 — refuse: a merge onto a red trunk unless the change is that red's fix]**
+1. **[Hard C7.contract.01 — refuse: a merge onto a red trunk unless the change is that red's fix, or the red is only on declared release-only checks whose paths it does not touch]**
    Never merge onto a red trunk; only its fix lands
    ([*Red-trunk exemption*](#red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105),
-   [*Cure rule*](#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281)).
+   [*Cure rule*](#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281)) — or, where the
+   red is only on checks the owner declared release-only, a branch that touches none of their paths
+   ([*Release-only checks*](#release-only-checks--a-red-only-a-release-reads-736)).
 2. **[Hard C7.contract.02 — refuse: a CI result read from any commit other than the one judged]**
    A CI result counts for the exact commit it ran on — never for a newer or older one, and never
    as "the latest run".

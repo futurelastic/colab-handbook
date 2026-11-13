@@ -1348,6 +1348,10 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
     // row it meets, which can be a `skipped` one beside a real failure; a caller asking "did any run
     // finish red here" reads this list instead. Absent when none did.
     ...(opts && opts.finishedRed && judged.some(isFinishedRed) ? { finishedRed: excludedRunSummary(judged.filter(isFinishedRed)) } : {}),
+    // #736: opt-in (`opts.heads`) — the JUDGED heads themselves (newest run per counted workflow, the
+    // wholly skipped set aside), so the release-only door can tell which workflow made the sha red.
+    // Absent unless asked, exactly like `finishedRed`.
+    ...(opts && opts.heads ? { heads: excludedRunSummary(judged) } : {}),
     // #651: the rows came from the unfiltered listing because the forge's filter index was empty.
     ...(allForSha.some((x) => x && x.readVia === 'unfiltered-listing') ? { readVia: 'unfiltered-listing' } : {}),
   };

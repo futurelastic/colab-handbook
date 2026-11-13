@@ -1,4 +1,4 @@
-# A red trunk — the two doors, and who opens the patch
+# A red trunk — the doors through it, and who opens the patch
 
 The mechanics behind invariant 1 of the CI contract
 ([CONVENTIONS.md §7](../../CONVENTIONS.md#what-ship-reads--the-ci-contract-607)): never merge onto
@@ -297,3 +297,40 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
 Why, with the measurements and the accepted false refusals: [ADR 281](../../docs/adr/281-cure-rule-rationale.md).
 
 Why, with the measurement: [ADR 539](../../docs/adr/539-cure-rationale.md).
+
+## Release-only checks — a red only a release reads (#736)
+
+The rule: [CONVENTIONS.md, *Release-only checks — a red only a release reads (#736)*](../../CONVENTIONS.md#release-only-checks--a-red-only-a-release-reads-736).
+The declaration: [`release-only-checks`](../../project.schema.md#release-only-checks--optional).
+
+A third door through trunk-CI-green, tried **before** the cure rule and the ci-grant, and needing no
+evidence and no tracker read. `colab ship` consults it when the raw trunk-CI-green check fails
+HUMAN_GATED, on trunk only, for a candidate branch. It reads the declaration **at trunk** — a branch
+that adds its own check to the list does not change what its own ship reads. It **admits iff**:
+
+1. **[Hard — gate: colab ship refuses (release-only door)]** every judged workflow at trunk's red head
+   finished (none in flight), and every one that finished red is covered: a whole-workflow key covers
+   the run; a `<workflow> / <job>` key covers it only when every job of that run that finished red
+   matches a declared job of that workflow. A red the declaration does not cover refuses, naming it.
+   Jobs that cannot be read refuse.
+2. **[Hard — gate: colab ship refuses (release-only door)]** something other than the release-only
+   checks ran green at that sha — a green workflow that is not wholly declared, or a green job outside
+   the declared ones in a job-covered run. A sha only release-only checks verified is not admitted.
+3. **[Hard — gate: colab ship refuses (release-only door)]** the branch's three-dot diff (the squash it
+   would land; renames read as delete + add) touches no path of a check that is **red** there. A path of
+   a release-only check that is green does not matter. An unreadable diff refuses.
+
+A refusal falls through to the cure rule and the ci-grant exactly as before. That is how a branch that
+touches a red check's paths "shows that check green on itself": the cure rule. The refusal reason rides
+on the trunk-CI row (`release-only door (#736): …`) and in `--dry --json`'s `releaseOnly`.
+
+On admission the row reads `PRECONDITION OVERRIDDEN by the release-only door (#736)` and names every
+ignored run. `--dry --json` carries `releaseOnly: {ok, reason, redSha, ignored, touched}`. The squash
+carries `CI-Release-Only: branch <b> over-red <trunk>@<sha> ignored <check> (run N), …`. It is
+deliberately not `CI-Grant:` / `CI-Cure:`: the anti-stacking scan reads only those two, because many
+branches must be able to land over one release-only red, one after another.
+
+What it never does: make trunk green. `colab trunk-ci` reads the red as before, `colab release cut`
+still refuses that commit (it never reads this key), and a batch (`ship-batch`) never passes this door
+any more than the other two — each member meets it on its own. A repo that declares nothing, or
+declares the key invalidly (the audit fails it), reads exactly as before.

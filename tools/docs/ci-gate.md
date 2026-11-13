@@ -28,6 +28,9 @@ The rule: [CONVENTIONS.md §4](../../CONVENTIONS.md#4-branches-and-commits), and
   ship never waits for it ([why](../../docs/adr/539-schema-checks-and-gates-rationale.md)) — except a
   dispatch of the push- or PR-triggered CI workflow with no push run at the sha (#567: a lost push
   event). `ship-gate-workflows:` / `ship-ignore-workflows:` override the set by workflow name ([schema](../../project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
+  `release-only-checks:` does **not** (#736): a red on a release-only check is red here, for
+  `trunk-ci` and the release cut alike; only ship's per-branch release-only door reads that key
+  ([red-trunk.md](red-trunk.md#release-only-checks--a-red-only-a-release-reads-736)).
   A trunk sha whose tree has **no workflow file at all** (#482) — a freshly adopted repo whose
   adoption branch is what adds CI — can never draw a run, so nothing there can be red: its
   `none` gets the *Branch CI* treatment for a run that cannot arrive, and the candidate's own

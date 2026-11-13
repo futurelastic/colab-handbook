@@ -46,7 +46,7 @@ const TUNING_KEYS = Object.freeze(Object.keys(TUNING));
  * can say WHY it refuses them; any key outside TUNING is refused all the same.
  */
 const AUTHORITY_KEYS = Object.freeze([
-  'autonomy', 'promotion', 'migration-grant', 'ci-grant', 'trust-humans',
+  'autonomy', 'promotion', 'migration-grant', 'ci-grant', 'release-only-checks', 'trust-humans',
   'exposure', 'tier', 'trunk', 'deploy', 'release', 'production',
 ]);
 
