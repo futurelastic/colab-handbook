@@ -112,6 +112,18 @@ candidate: [`templates/release-tag.yml`](../../templates/release-tag.yml) publis
 as pre-releases, the audit flags a deploy trigger that matches one, and every
 current-release read skips them.
 
+**A run with nothing to do ends in its first job (#735).** Most runs of
+[`release-auto.yml`](../../templates/release-auto.yml) find nothing to do. Its first job,
+`decide`, has a one-commit checkout and a tag list, and no toolchain. It skips the `release`
+job (and with it npm, deploy and the downloads jobs) on three kinds of run: a CI-fired run at a
+sha that CI failed, a CI-fired run at a sha that already carries a release tag (the cut there is a
+no-op, #443), and an hourly run with nothing to retry (#547). The daily run and every dispatch
+always run the full job, because finalize, promotion and the npm and downloads sweeps are the
+CLI's to rule on, and a dry run proves a fix only by running it (#474). `decide` skips only where
+the full job is provably a no-op: a read it cannot make counts as work. It always concludes
+success, so a run that skips everything else still concludes success at main's sha (#435). Why
+this shape: [ADR 735](../../docs/adr/735-release-auto-decide-first.md).
+
 ## A Forgejo remote — candidates by the workflow, finals by a human (#681)
 
 On a remote the machine config's `forges` map names as Forgejo ([ci-gate.md, *A Forgejo remote*](ci-gate.md#a-forgejo-remote--ci-from-commit-statuses-landing-only-678)),

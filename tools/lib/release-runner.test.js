@@ -73,7 +73,7 @@ test('private repo + template copy unedited → one advisory per hosted job, npm
   const r = reader({ '.github/workflows/ci.yml': CI_SELF, '.github/workflows/release-auto.yml': TEMPLATE });
   const out = rr.findings({ ...r, visibility: 'private' });
   const jobs = out.map((t) => t.match(/job `([^`]+)`/)[1]).sort();
-  assert.deepStrictEqual(jobs, ['deploy', 'npm-record', 'release']);
+  assert.deepStrictEqual(jobs, ['decide', 'deploy', 'npm-record', 'release']);
   for (const t of out) {
     assert.match(t, /runs-on: \[self-hosted, linux, trunk\]/);
     assert.match(t, /ci\.yml/);
