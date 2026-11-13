@@ -189,8 +189,25 @@
 # Every other hourly run checks those and stops: no cut, no promotion, no finalize, so a held head is
 # not tagged sooner than the daily run would tag it, and a standing refusal is not re-announced every
 # hour. Nothing is stored between runs; the facts are re-read each time. EDIT: the cron string inside
-# RETRY_RUN (release job env) must stay byte-identical to the hourly `cron:` line, or no run is
+# RETRY_RUN (the workflow `env:`) must stay byte-identical to the hourly `cron:` line, or no run is
 # recognised as a retry run — and the hourly run would then promote and finalize every hour.
+#
+# A RUN WITH NOTHING TO DO ENDS IN SECONDS (#735). Most runs find nothing to do — the hourly run with
+# nothing to retry, a CI re-run at a commit that already carries its tag, a red CI run — and each one
+# used to take a runner and pay the full setup (full-history checkout, CLI fetch) before saying so. So
+# the first job, `decide`, rules on the cases it can prove with a one-commit checkout and a tag list,
+# and `release` (and with it `npm`, `npm-record`, `deploy` and your downloads jobs, which all need it)
+# runs only when `decide` says there is work:
+#   workflow_run, CI not green                 no work — nothing is cut at a red sha
+#   workflow_run, the sha already carries a    no work — the cut there is a no-op (#443), and a run
+#   release tag (vX.Y.Z or vX.Y.Z-rc.N)          fired by CI does nothing but the cut and what it tags
+#   the hourly run                             the #547 retry step's verdict (it lives in `decide`)
+#   the daily run, a dispatch                  always work — promotion, finalize and the npm and
+#                                                downloads sweeps are the CLI's to rule on, and a dry
+#                                                run proves a fix only by running the whole job (#474)
+# `decide` is a filter, never a second decider: it skips only where `release` is provably a no-op, and
+# says "work" whenever it cannot read what it needs. It has no job-level `if:` and always concludes
+# success, so a run that skips every other job still concludes success at main's sha (#435).
 #
 # A REFUSAL IS NOT A FAILURE. `colab release cut --auto` refusing (nothing owed, a check
 # failed) is the ordinary output of most runs; it is printed to the run summary as a
@@ -221,7 +238,7 @@
 # owner's billing fails GitHub refuses a hosted job before it starts: main goes red, every landing
 # is refused until a human steps in — measured twice in a row on one adopting repo, where this was
 # the only workflow on main still on hosted runners. So:
-#   private / internal repo   `release` and `npm-record` run on the trunk class, `[self-hosted,
+#   private / internal repo   `decide`, `release` and `npm-record` run on the trunk class, `[self-hosted,
 #                             trunk]` — the class your ci.yml's trunk jobs use (CONVENTIONS.md §7,
 #                             "Runner classes"); `deploy`, if you enable it, on its own restricted
 #                             deploy label. The runner needs git, node, gh and jq on its PATH
@@ -250,7 +267,7 @@ on:
     # hour is when scheduled runs queue longest.
     - cron: "17 3 * * *"
     # #547: the hourly RETRY run — cut only, only when the CLI moved or a run was displaced (header,
-    # "A REFUSAL THE HANDBOOK FIXES"). Keep it byte-identical to the string in RETRY_RUN (release job env).
+    # "A REFUSAL THE HANDBOOK FIXES"). Keep it byte-identical to the string in RETRY_RUN (workflow `env:`).
     - cron: "47 * * * *"
   workflow_dispatch:
     # #474: a DRY RUN for a fix branch — see "DRY RUN ON A FIX BRANCH" in the header. A dispatch on
@@ -285,6 +302,9 @@ env:
   # it never fails the run (#480).
   HANDBOOK_REF: "stable"
   HANDBOOK_REPO: "https://github.com/futurelastic/colab-handbook.git"
+  # #547: 'true' on the hourly retry run, read by both jobs (#735). EDIT: the cron string here is
+  # byte-identical to the hourly `cron:` under `on.schedule`.
+  RETRY_RUN: ${{ github.event_name == 'schedule' && github.event.schedule == '47 * * * *' }}
   # A TRANSIENT UPSTREAM ERROR NEVER TURNS MAIN RED (#464). This run fires on every landing, and a
   # red run at main's head blocks every `colab ship` — so a GitHub / registry 5xx, a 429, a timeout
   # or a dropped connection must not fail a step that a plain re-run would pass. Every step that
@@ -354,13 +374,130 @@ env:
     }
 
 jobs:
+  # ---------------------------------------------------------------------------------------------
+  # decide (#735) — whether this run has any work, ruled on a one-commit checkout before any job that
+  # fetches history or the CLI starts. See "A RUN WITH NOTHING TO DO ENDS IN SECONDS" in the header.
+  decide:
+    name: Decide whether there is work
+    # No job-level `if:` and no `needs:` here, ever (#435): this job always runs and concludes success,
+    # which is what keeps the run from concluding `skipped` when it skips every other job. GitHub
+    # records a run whose every job a job-level `if:` skipped as `skipped` at that main sha, and
+    # `colab ship` reads any finished run that is neither success nor cancelled as "not green".
+    # EDIT: PRIVATE repo → the trunk class, [self-hosted, trunk] — the same label as `release` below
+    # (RUNNERS, above). ubuntu-latest only on a public repo.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # list the tags (git ls-remote) over the checkout's origin
+      actions: read # the #547 retry reads this workflow's runs at main's head
+    outputs:
+      work: ${{ steps.work.outputs.work }}
+      retry: ${{ steps.retry.outputs.retry }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # EDIT: how recent a move of the CLI still earns a retry (#547). Two hourly runs plus slack, so one
+      # scheduled run GitHub drops under load does not lose the retry; a second retry is a no-op.
+      RETRY_WINDOW_MINUTES: "130"
+    steps:
+      # One commit, no tags, no blobs outside .github: only what `git rev-parse HEAD` and `git ls-remote
+      # origin` need. EDIT: if your trunk is not `main`, name it here too (the same branch as below).
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          fetch-depth: 1
+          sparse-checkout: .github
+          # Left on: `git ls-remote origin` reads the tags with this job's read-only token.
+          persist-credentials: true
+
+      # #547: on the hourly retry run only — decide whether a cut is worth re-trying (header, "A REFUSAL
+      # THE HANDBOOK FIXES"). Ends green either way; retry=true is the hourly run's only work. A dry run
+      # never runs it (tools/lib/ci-cure.js DRY_RUN_CONDITIONAL_STEPS names it).
+      - name: Retry a refused cut once the CLI moved (#547)
+        id: retry
+        if: env.RETRY_RUN == 'true'
+        run: |
+          set -uo pipefail
+          eval "$RETRY_TRANSIENT"
+          decide() { echo "retry=$1" >> "$GITHUB_OUTPUT"; echo "Retry run (#547): $2" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          HEAD="$(git rev-parse HEAD)"
+          # #735: this checkout carries no tags, so they are read from origin. A list that cannot be read
+          # rules nothing out — the checks below decide.
+          TAGGED=""
+          if REFS="$(retry_transient git ls-remote --tags origin)"; then
+            TAGGED="$(awk -v h="$HEAD" '$1 == h && $2 ~ /^refs\/tags\/v/ { t = substr($2, 11); if (substr(t, length(t) - 2) == "^{}") t = substr(t, 1, length(t) - 3); print t; exit }' <<< "$REFS")"
+          fi
+          [ -z "$TAGGED" ] || decide false "main's head ${HEAD:0:7} already carries $TAGGED — nothing to retry."
+          # When the CLI reached HANDBOOK_REF: a channel moves onto a release tag's commit, so that
+          # tag's date is the move; a plain branch or an untagged commit falls back to the commit date.
+          # #735: the ref is fetched here with no blobs and no working tree — only its commit and the tags
+          # at it are read. A ref that cannot be fetched (one the handbook does not carry, #480) cannot
+          # rule a move out: the release job fetches the CLI, with its fallback, and re-tries the cut.
+          CLI_DIR="$RUNNER_TEMP/colab-handbook-ref"
+          fetch_ref() { rm -rf "$CLI_DIR"; git clone --quiet --depth 1 --filter=blob:none --no-checkout --branch "$HANDBOOK_REF" "$HANDBOOK_REPO" "$CLI_DIR"; }
+          retry_transient fetch_ref > /dev/null \
+            || decide true "could not fetch HANDBOOK_REF \"$HANDBOOK_REF\", so a move of the colab CLI cannot be ruled out and main's head ${HEAD:0:7} has no tag — re-trying the cut."
+          CLI_SHA="$(git -C "$CLI_DIR" rev-parse --short HEAD 2> /dev/null || echo unknown)"
+          MOVED="$(git -C "$CLI_DIR" for-each-ref --points-at HEAD --format='%(taggerdate:unix)' refs/tags 2> /dev/null | grep -E '^[0-9]+$' | sort -n | tail -n 1)"
+          [ -n "$MOVED" ] || MOVED="$(git -C "$CLI_DIR" log -1 --format=%ct HEAD 2> /dev/null || true)"
+          AGE=""; [ -n "$MOVED" ] && AGE=$(( $(date +%s) - MOVED ))
+          if [ -n "$AGE" ] && [ "$AGE" -le $(( ${RETRY_WINDOW_MINUTES:-130} * 60 )) ]; then
+            decide true "the colab CLI ($CLI_SHA) reached HANDBOOK_REF $(( AGE / 60 )) min ago and main's head ${HEAD:0:7} has no tag — re-trying the cut with it."
+          fi
+          # A run this one displaced: the newest OTHER run of this workflow at main's head, cancelled.
+          # An unreadable list re-tries rather than guessing — a cut with nothing owed is a no-op.
+          RUNS="$(retry_transient gh run list --workflow "$GITHUB_WORKFLOW" --commit "$HEAD" --limit 20 --json databaseId,conclusion,createdAt)" \
+            || decide true "could not list this workflow's runs at ${HEAD:0:7}, so a displaced run cannot be ruled out — re-trying the cut."
+          LAST="$(jq -r --arg me "${GITHUB_RUN_ID:-0}" '[.[] | select((.databaseId | tostring) != $me)] | sort_by(.createdAt) | last | .conclusion // ""' <<< "$RUNS" 2> /dev/null || echo unreadable)"
+          case "$LAST" in
+            cancelled) decide true "the last run at main's head ${HEAD:0:7} was cancelled (displaced from the shared concurrency group) — doing its cut." ;;
+            unreadable) decide true "could not read this workflow's runs at ${HEAD:0:7}, so a displaced run cannot be ruled out — re-trying the cut." ;;
+          esac
+          decide false "the colab CLI ($CLI_SHA) has not moved in the last ${RETRY_WINDOW_MINUTES:-130} min and no run at ${HEAD:0:7} was displaced — nothing to retry; the daily run cuts as usual."
+
+      # #735: the verdict the other jobs read — work=true whenever this job cannot prove the run is a
+      # no-op (header, "A RUN WITH NOTHING TO DO ENDS IN SECONDS"). Ends green either way.
+      - name: Decide whether this run has work
+        id: work
+        env:
+          EVENT: ${{ github.event_name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RETRY: ${{ steps.retry.outputs.retry }}
+        run: |
+          set -uo pipefail
+          eval "$RETRY_TRANSIENT"
+          decide() { echo "work=$1" >> "$GITHUB_OUTPUT"; echo "Work (#735): $2" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          case "${EVENT:-}" in
+            workflow_dispatch)
+              decide true "a dispatch runs the whole release job — a dry run proves a fix only by running it (#474)." ;;
+            schedule)
+              if [ "${RETRY_RUN:-false}" != "true" ]; then
+                decide true "the daily run — promotion, finalize and the npm and downloads sweeps are the colab CLI's to rule on."
+              elif [ "${RETRY:-}" = "true" ]; then
+                decide true "the hourly run re-tries the cut (the retry step above says why)."
+              else
+                decide false "the hourly run has nothing to retry, and it never promotes, finalizes or sweeps — the release job does not start."
+              fi ;;
+            workflow_run)
+              [ "${CONCLUSION:-}" = "success" ] \
+                || decide false "CI concluded \`${CONCLUSION:-unknown}\` at ${RUN_SHA:-an unnamed sha} — nothing to cut; the release job does not start."
+              [ -n "${RUN_SHA:-}" ] || decide true "the CI run names no sha — the release job reads main itself."
+              REFS="$(retry_transient git ls-remote --tags origin)" \
+                || decide true "could not list the tags, so a release tag at ${RUN_SHA:0:7} cannot be ruled in — the release job decides."
+              AT="$(awk -v s="$RUN_SHA" '$1 == s { t = substr($2, 11); if (substr(t, length(t) - 2) == "^{}") t = substr(t, 1, length(t) - 3); if (substr($2, 1, 10) == "refs/tags/" && t ~ /^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$/) { print t; exit } }' <<< "$REFS")"
+              [ -z "$AT" ] \
+                || decide false "${RUN_SHA:0:7} already carries $AT — a cut there is a no-op (#443), and a run fired by CI does nothing else; the release job does not start."
+              decide true "${RUN_SHA:0:7} carries no release tag — the release job decides the cut." ;;
+            *)
+              decide true "event \`${EVENT:-unknown}\` — the release job decides." ;;
+          esac
+
   release:
     name: Cut, finalize, publish
-    # No job-level `if:` here, on purpose (#435): a red CI run is gated in the first step below,
-    # so this run concludes success. A job-level `if:` would skip every job, GitHub would record
-    # the whole run as `skipped` at that main sha, and `colab ship` reads any finished run that is
-    # neither success nor cancelled as "not green". Re-run CI green on that sha and the skipped
-    # Release (auto) row would still sit beside it, refusing every ship until main moves.
+    # #735: only when `decide` found work. This job-level `if:` cannot make the run conclude `skipped`
+    # (#435): `decide` always runs and concludes success, so a run that skips this job still concludes
+    # success at main's sha. A red CI run is gated in a step below as well, as before #735.
+    needs: decide
+    if: needs.decide.outputs.work == 'true'
     # EDIT: PRIVATE repo → the trunk class, [self-hosted, trunk] — a class, never a host
     # (RUNNERS, above). ubuntu-latest only on a public repo.
     runs-on: ubuntu-latest
@@ -390,12 +527,6 @@ jobs:
       # Never on workflow_run or schedule. Every write below is off when it is.
       # EDIT: if your trunk is not `main`, name it here too (the same branch as `ref:` below).
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref_name != 'main') }}
-      # #547: 'true' on the hourly retry run. EDIT: the cron string here is byte-identical to the hourly
-      # `cron:` under `on.schedule`.
-      RETRY_RUN: ${{ github.event_name == 'schedule' && github.event.schedule == '47 * * * *' }}
-      # EDIT: how recent a move of the CLI still earns a retry. Two hourly runs plus slack, so one
-      # scheduled run GitHub drops under load does not lose the retry; a second retry is a no-op.
-      RETRY_WINDOW_MINUTES: "130"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -421,8 +552,8 @@ jobs:
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # A red CI run on main is not a candidate. Gated here rather than by a job-level `if:` so
-      # this run concludes success, never `skipped` (#435; the comment on the job above).
+      # A red CI run on main is not a candidate. The decide job already skips the release job on one
+      # (#735); this step keeps that true on its own, so the cut never reads a red sha whatever runs it.
       - name: Gate on the triggering CI run
         id: gate
         env:
@@ -466,39 +597,6 @@ jobs:
           # The tags are annotated; git needs an identity to write one.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      # #547: on the hourly retry run only — decide whether a cut is worth re-trying (header, "A REFUSAL
-      # THE HANDBOOK FIXES"). Ends green either way; retry=true lets the cut step below run.
-      - name: Retry a refused cut once the CLI moved (#547)
-        id: retry
-        if: env.RETRY_RUN == 'true'
-        run: |
-          set -uo pipefail
-          eval "$RETRY_TRANSIENT"
-          decide() { echo "retry=$1" >> "$GITHUB_OUTPUT"; echo "Retry run (#547): $2" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
-          HEAD="$(git rev-parse HEAD)"
-          TAGGED="$(git tag --points-at "$HEAD" --list 'v*' | head -n 1)"
-          [ -z "$TAGGED" ] || decide false "main's head ${HEAD:0:7} already carries $TAGGED — nothing to retry."
-          # When the CLI reached HANDBOOK_REF: a channel moves onto a release tag's commit, so that
-          # tag's date is the move; a plain branch or an untagged commit falls back to the commit date.
-          CLI_DIR="${COLAB%/tools/colab}"
-          CLI_SHA="$(git -C "$CLI_DIR" rev-parse --short HEAD 2> /dev/null || echo unknown)"
-          MOVED="$(git -C "$CLI_DIR" for-each-ref --points-at HEAD --format='%(taggerdate:unix)' refs/tags 2> /dev/null | grep -E '^[0-9]+$' | sort -n | tail -n 1)"
-          [ -n "$MOVED" ] || MOVED="$(git -C "$CLI_DIR" log -1 --format=%ct HEAD 2> /dev/null || true)"
-          AGE=""; [ -n "$MOVED" ] && AGE=$(( $(date +%s) - MOVED ))
-          if [ -n "$AGE" ] && [ "$AGE" -le $(( ${RETRY_WINDOW_MINUTES:-130} * 60 )) ]; then
-            decide true "the colab CLI ($CLI_SHA) reached HANDBOOK_REF $(( AGE / 60 )) min ago and main's head ${HEAD:0:7} has no tag — re-trying the cut with it."
-          fi
-          # A run this one displaced: the newest OTHER run of this workflow at main's head, cancelled.
-          # An unreadable list re-tries rather than guessing — a cut with nothing owed is a no-op.
-          RUNS="$(retry_transient gh run list --workflow "$GITHUB_WORKFLOW" --commit "$HEAD" --limit 20 --json databaseId,conclusion,createdAt)" \
-            || decide true "could not list this workflow's runs at ${HEAD:0:7}, so a displaced run cannot be ruled out — re-trying the cut."
-          LAST="$(jq -r --arg me "${GITHUB_RUN_ID:-0}" '[.[] | select((.databaseId | tostring) != $me)] | sort_by(.createdAt) | last | .conclusion // ""' <<< "$RUNS" 2> /dev/null || echo unreadable)"
-          case "$LAST" in
-            cancelled) decide true "the last run at main's head ${HEAD:0:7} was cancelled (displaced from the shared concurrency group) — doing its cut." ;;
-            unreadable) decide true "could not read this workflow's runs at ${HEAD:0:7}, so a displaced run cannot be ruled out — re-trying the cut." ;;
-          esac
-          decide false "the colab CLI ($CLI_SHA) has not moved in the last ${RETRY_WINDOW_MINUTES:-130} min and no run at ${HEAD:0:7} was displaced — nothing to retry; the daily run cuts as usual."
 
       # #440: where project.yml grants `promotion: main-loop` on `deploy: tag`, promote a green dev
       # into main, then dispatch CI there — its green run fires this workflow again to cut the
@@ -557,7 +655,7 @@ jobs:
       # (a release.guard-run reads the working tree) and restored afterwards.
       - name: Cut a candidate (colab release cut --auto)
         id: cut
-        if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.promote.outputs.promoted != 'true' && (env.RETRY_RUN != 'true' || steps.retry.outputs.retry == 'true')
+        if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.promote.outputs.promoted != 'true' && (env.RETRY_RUN != 'true' || needs.decide.outputs.retry == 'true')
         env:
           EVENT: ${{ github.event_name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}

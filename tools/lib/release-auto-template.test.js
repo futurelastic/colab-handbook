@@ -305,10 +305,13 @@ function runGate(env, text = TEXT) {
   return { status: r.status, out: fs.readFileSync(out, 'utf8') };
 }
 
-test('template: the release job has no job-level if — a red CI run is gated in a step, so the run never concludes skipped (#435)', () => {
+test('template: the decide job has no job-level if or needs, and the release job\'s only gate is its verdict — so the run never concludes skipped (#435, #735)', () => {
+  const decide = TEXT.slice(TEXT.indexOf('\n  decide:\n'), TEXT.indexOf('\n  release:\n'));
+  assert.ok(decide.length > 0 && TEXT.indexOf('\n  decide:\n') < TEXT.indexOf('\n  release:\n'), 'decide job not found ahead of release');
+  assert.doesNotMatch(decide, /^ {4}(if|needs):/m, 'a job-level if:/needs: on decide could skip every job, and the run would conclude skipped');
   const release = TEXT.slice(TEXT.indexOf('\n  release:\n'), TEXT.indexOf('\n  npm:'));
   assert.ok(release.length > 0, 'release job not found');
-  assert.doesNotMatch(release, /^ {4}if:/m, 'job-level if: on the release job');
+  assert.deepStrictEqual(release.match(/^ {4}(if|needs):.*$/gm), ['    needs: decide', "    if: needs.decide.outputs.work == 'true'"]);
   // The gate comes before anything that could tag, and the cut step is switched off by it.
   assert.ok(release.indexOf(`- name: ${GATE}`) >= 0, 'no gate step');
   assert.ok(release.indexOf(`- name: ${GATE}`) < release.indexOf(`- name: ${CUT}`), 'gate after cut');
@@ -1409,15 +1412,21 @@ const minutesAgo = (m) => Math.floor(Date.now() / 1000) - m * 60;
  * commit, e.g. a plain branch ref); `headTag` tags main's head; `runs` is what `gh run list` prints,
  * or null for a list that fails.
  */
-function runRetry({ cli, headTag = null, runs = [], runId = '900' }) {
+function runRetry({ cli, headTag = null, lightweight = false, runs = [], runId = '900', ref }) {
   const dir = tmpdir('release-auto-547-');
   const main = path.join(dir, 'main');
+  const origin = path.join(dir, 'origin.git');
   const hb = path.join(dir, 'colab-handbook');
   for (const d of [main, hb]) { fs.mkdirSync(d); gitIn(d, ['init', '-q']); }
   gitIn(main, ['commit', '-q', '--allow-empty', '-m', 'feat: x']);
-  if (headTag) gitIn(main, ['tag', '-a', headTag, '-m', headTag]);
+  if (headTag) gitIn(main, lightweight ? ['tag', headTag] : ['tag', '-a', headTag, '-m', headTag]);
+  // #735: the decide job's checkout carries no tags — the step reads them from origin, as on a runner.
+  gitIn(dir, ['clone', '-q', '--bare', main, origin]);
+  gitIn(main, ['remote', 'add', 'origin', origin]);
+  for (const t of gitIn(main, ['tag', '--list']).split('\n').filter(Boolean)) gitIn(main, ['tag', '-d', t]);
   gitIn(hb, ['commit', '-q', '--allow-empty', '-m', 'fix: the false positive'], minutesAgo(cli.commitAgo));
   if (cli.tagAgo !== undefined) gitIn(hb, ['tag', '-a', 'v1.13.0-rc.21', '-m', 'rc'], minutesAgo(cli.tagAgo));
+  const hbBranch = gitIn(hb, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
   const log = path.join(dir, 'gh.log');
@@ -1429,7 +1438,9 @@ function runRetry({ cli, headTag = null, runs = [], runId = '900' }) {
   fs.writeFileSync(out, '');
   const r = spawnSync('bash', ['-c', stepScript(RETRY_STEP)], {
     cwd: main, encoding: 'utf8',
-    env: { ...process.env, ...RETRY_ENV, PATH: `${bin}:${process.env.PATH}`, COLAB: path.join(hb, 'tools', 'colab'),
+    // #735: the step fetches HANDBOOK_REF itself (a file:// URL, so --depth and the tag auto-follow behave
+    // as over the network); the release job's CLI checkout is not there yet.
+    env: { ...process.env, ...RETRY_ENV, PATH: `${bin}:${process.env.PATH}`, HANDBOOK_REPO: `file://${hb}`, HANDBOOK_REF: ref || hbBranch,
       RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, GITHUB_WORKFLOW: 'Release (auto)', GITHUB_RUN_ID: runId, RETRY_WINDOW_MINUTES: '130' },
   });
   const retry = (/^retry=(\w+)$/m.exec(fs.readFileSync(out, 'utf8')) || [])[1];
@@ -1468,6 +1479,18 @@ test('#547 nothing to retry: a CLI that has not moved within the window, or a he
   assert.strictEqual(tagged.retry, 'false');
   assert.match(tagged.summary, /already carries v2\.0\.0-rc\.1/);
   assert.strictEqual(tagged.gh, '');
+  // #735: read from origin's list, a lightweight tag (no peeled ^{} line) counts the same.
+  const light = runRetry({ cli: { commitAgo: 20, tagAgo: 5 }, headTag: 'v2.0.0-rc.2', lightweight: true });
+  assert.strictEqual(light.retry, 'false');
+  assert.match(light.summary, /already carries v2\.0\.0-rc\.2 /);
+});
+
+test('#735 retry: a HANDBOOK_REF that cannot be fetched cannot rule a move out — the release job re-tries the cut', () => {
+  const r = runRetry({ cli: { commitAgo: 400, tagAgo: 300 }, ref: 'no-such-channel' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.retry, 'true');
+  assert.match(r.summary, /could not fetch HANDBOOK_REF "no-such-channel"/);
+  assert.strictEqual(r.gh, '', 'decided before the run listing');
 });
 
 test('#547 a run the hourly run displaced from the shared concurrency group gets its cut done', { skip: !HAS_JQ && 'jq not installed' }, () => {
@@ -1495,8 +1518,10 @@ test('#547 a run the hourly run displaced from the shared concurrency group gets
 test('#547 wiring: the hourly run is recognised, cuts only through the retry step, and never promotes or finalizes', () => {
   const crons = [...TEXT.matchAll(HOURLY)].map((m) => m[1]);
   assert.ok(crons.includes('17 3 * * *'), 'the daily cron is still there');
-  const retryRun = /^ {6}RETRY_RUN: \$\{\{ github\.event_name == 'schedule' && github\.event\.schedule == '([^']+)' \}\}$/m.exec(TEXT);
-  assert.ok(retryRun, 'RETRY_RUN not declared in the release job env');
+  // #735: workflow-level, so the decide job and the release job read the one string.
+  const retryRun = /^ {2}RETRY_RUN: \$\{\{ github\.event_name == 'schedule' && github\.event\.schedule == '([^']+)' \}\}$/m.exec(TEXT);
+  assert.ok(retryRun, 'RETRY_RUN not declared in the workflow env');
+  assert.strictEqual(TEXT.match(/^\s+RETRY_RUN:/gm).length, 1, 'one RETRY_RUN, one copy of the cron string');
   assert.ok(crons.includes(retryRun[1]), `RETRY_RUN names "${retryRun[1]}", which is not a cron of on.schedule (${crons.join(' | ')})`);
   assert.notStrictEqual(retryRun[1], '17 3 * * *', 'the retry cron must not be the daily one');
   assert.match(TEXT, /^ {6}RETRY_WINDOW_MINUTES: "\d+"/m);
@@ -1508,9 +1533,114 @@ test('#547 wiring: the hourly run is recognised, cuts only through the retry ste
   for (const name of ['Promote unattended (colab promote --auto)', FIN]) {
     assert.match(ifOf(name), /\(github\.event_name == 'schedule' && env\.RETRY_RUN != 'true'\) \|\| github\.event_name == 'workflow_dispatch'/, name);
   }
-  assert.match(ifOf(CUT), /&& \(env\.RETRY_RUN != 'true' \|\| steps\.retry\.outputs\.retry == 'true'\)$/);
+  // #735: the retry step lives in the decide job; the cut reads its verdict through the job output.
+  assert.match(ifOf(CUT), /&& \(env\.RETRY_RUN != 'true' \|\| needs\.decide\.outputs\.retry == 'true'\)$/);
   assert.match(ifOf(RETRY_STEP), /if: env\.RETRY_RUN == 'true'$/);
-  const order = ['Fetch the colab CLI', RETRY_STEP, CUT].map((n) => TEXT.indexOf(`- name: ${n}`));
-  assert.ok(order[0] < order[1] && order[1] < order[2], 'the retry step runs after the CLI is fetched and before the cut');
+  const decide = TEXT.slice(TEXT.indexOf('\n  decide:\n'), TEXT.indexOf('\n  release:\n'));
+  assert.ok(decide.includes(`- name: ${RETRY_STEP}\n`), 'the retry step is a step of the decide job');
+  assert.strictEqual(TEXT.split(`- name: ${RETRY_STEP}\n`).length, 2, 'exactly one retry step');
+  assert.match(decide, /^ {6}retry: \$\{\{ steps\.retry\.outputs\.retry \}\}$/m);
+  assert.ok(decide.indexOf(`- name: ${RETRY_STEP}`) < decide.indexOf('- name: Decide whether this run has work'), 'the retry verdict exists before the work verdict reads it');
   assert.match(stepScript(RETRY_STEP), /retry_transient gh run list/);
+  assert.match(stepScript(RETRY_STEP), /retry_transient fetch_ref/);
+});
+
+// ---- #735: a run with nothing to do ends in the decide job -----------------------------------------
+const WORK_STEP = 'Decide whether this run has work';
+
+/**
+ * Runs the decide job's work step against an origin whose tags are `tags` ({ name: sha-key }), with the
+ * checkout's origin pointing at it. `sha` picks the commit the event names: 'head', 'old' or a literal.
+ */
+function runWork({ event, conclusion = '', sha = 'head', retryRun = 'false', retry = '', tags = {}, noOrigin = false }) {
+  const dir = tmpdir('release-auto-735-');
+  const main = path.join(dir, 'main');
+  const origin = path.join(dir, 'origin.git');
+  fs.mkdirSync(main);
+  gitIn(main, ['init', '-q']);
+  gitIn(main, ['commit', '-q', '--allow-empty', '-m', 'feat: old']);
+  const old = gitIn(main, ['rev-parse', 'HEAD']).trim();
+  gitIn(main, ['commit', '-q', '--allow-empty', '-m', 'feat: head']);
+  const head = gitIn(main, ['rev-parse', 'HEAD']).trim();
+  const shas = { head, old };
+  for (const [name, at] of Object.entries(tags)) gitIn(main, ['tag', '-a', name, '-m', name, shas[at]]);
+  gitIn(dir, ['clone', '-q', '--bare', main, origin]);
+  gitIn(main, ['remote', 'add', 'origin', noOrigin ? path.join(dir, 'gone.git') : origin]);
+  const out = path.join(dir, 'output');
+  const summary = path.join(dir, 'summary');
+  fs.writeFileSync(out, '');
+  const r = spawnSync('bash', ['-c', stepScript(WORK_STEP)], {
+    cwd: main, encoding: 'utf8',
+    env: { ...process.env, ...RETRY_ENV, RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary,
+      EVENT: event, CONCLUSION: conclusion, RUN_SHA: shas[sha] !== undefined ? shas[sha] : sha, RETRY_RUN: retryRun, RETRY: retry },
+  });
+  const work = (/^work=(\w+)$/m.exec(fs.readFileSync(out, 'utf8')) || [])[1];
+  return { status: r.status, stderr: r.stderr, work, summary: fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '' };
+}
+
+test('#735 done-when: a CI-fired run at a sha that already carries its tag starts no release job', () => {
+  for (const tag of ['v2.0.0-rc.3', 'v2.0.0']) {
+    const r = runWork({ event: 'workflow_run', conclusion: 'success', tags: { [tag]: 'head' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.work, 'false', tag);
+    assert.match(r.summary, new RegExp(`already carries ${tag.replace(/\./g, '\\.')} — a cut there is a no-op`));
+  }
+  // The release job's only gate is this verdict, and npm, npm-record and deploy all need the release job.
+  const release = TEXT.slice(TEXT.indexOf('\n  release:\n'), TEXT.indexOf('\n  npm:'));
+  assert.match(release, /^ {4}if: needs\.decide\.outputs\.work == 'true'$/m);
+  assert.match(TEXT.slice(TEXT.indexOf('\n  decide:\n'), TEXT.indexOf('\n  release:\n')), /^ {6}work: \$\{\{ steps\.work\.outputs\.work \}\}$/m);
+  for (const job of ['npm', 'npm-record', 'deploy']) {
+    const body = TEXT.slice(TEXT.indexOf(`\n  ${job}:\n`));
+    assert.match(body, /^ {4}needs: (release|\[release, npm\])$/m, job);
+  }
+});
+
+test('#735 done-when: an hourly run on a tagged head starts no release job', () => {
+  const r = runWork({ event: 'schedule', retryRun: 'true', retry: 'false' });
+  assert.strictEqual(r.work, 'false');
+  assert.match(r.summary, /nothing to retry/);
+  assert.strictEqual(runWork({ event: 'schedule', retryRun: 'true', retry: 'true' }).work, 'true');
+  // The retry step itself, on a tagged head: retry=false — the verdict the line above turns into work=false.
+  assert.strictEqual(runRetry({ cli: { commitAgo: 20, tagAgo: 5 }, headTag: 'v2.0.0-rc.1' }).retry, 'false');
+});
+
+test('#735 a red CI run is no work; an untagged sha, a non-release tag, or a tag on another commit is work', () => {
+  for (const conclusion of ['failure', 'cancelled', 'timed_out', '']) {
+    const r = runWork({ event: 'workflow_run', conclusion });
+    assert.strictEqual(r.work, 'false', conclusion);
+    assert.match(r.summary, /nothing to cut/);
+  }
+  assert.strictEqual(runWork({ event: 'workflow_run', conclusion: 'success' }).work, 'true');
+  assert.strictEqual(runWork({ event: 'workflow_run', conclusion: 'success', tags: { 'v2.0.0-rc.1': 'old' } }).work, 'true', 'a tag at an older commit');
+  assert.strictEqual(runWork({ event: 'workflow_run', conclusion: 'success', sha: 'old', tags: { 'v2.0.0-rc.1': 'head' } }).work, 'true', 'the head carries one, the CI-tested sha does not — the CLI rules (#622)');
+  for (const name of ['v2', 'v2.0.0-beta.1', 'v2.0.0-rc.0', 'release-2.0.0', 'v2.0.0-rc.1-hotfix']) {
+    assert.strictEqual(runWork({ event: 'workflow_run', conclusion: 'success', tags: { [name]: 'head' } }).work, 'true', name);
+  }
+});
+
+test('#735 anything the decide job cannot read is work: an unreadable tag list, an unnamed sha, an unknown event', () => {
+  const gone = runWork({ event: 'workflow_run', conclusion: 'success', tags: { 'v2.0.0-rc.1': 'head' }, noOrigin: true });
+  assert.strictEqual(gone.status, 0, gone.stderr);
+  assert.strictEqual(gone.work, 'true');
+  assert.match(gone.summary, /could not list the tags/);
+  assert.strictEqual(runWork({ event: 'workflow_run', conclusion: 'success', sha: '' }).work, 'true');
+  assert.strictEqual(runWork({ event: 'repository_dispatch' }).work, 'true');
+});
+
+test('#735 a dispatch (dry or not) and the daily run always run the release job', () => {
+  const dispatch = runWork({ event: 'workflow_dispatch', tags: { 'v2.0.0-rc.1': 'head' } });
+  assert.strictEqual(dispatch.work, 'true');
+  assert.match(dispatch.summary, /a dry run proves a fix only by running it \(#474\)/);
+  const daily = runWork({ event: 'schedule', retryRun: 'false', tags: { 'v2.0.0': 'head' } });
+  assert.strictEqual(daily.work, 'true');
+  assert.match(daily.summary, /the daily run/);
+});
+
+test('#735 wiring: the decide job is a one-commit checkout with no toolchain, the CLI never fetched in full', () => {
+  const decide = TEXT.slice(TEXT.indexOf('\n  decide:\n'), TEXT.indexOf('\n  release:\n'));
+  assert.match(decide, /fetch-depth: 1\n\s+sparse-checkout: \.github\n/);
+  assert.doesNotMatch(decide, /setup-node|fetch-depth: 0|tools\/colab|node "\$COLAB"/);
+  assert.match(decide, /^ {6}contents: read\b/m);
+  assert.doesNotMatch(decide, /: write\b/, 'the decide job writes nothing');
+  assert.match(decide, /- name: Decide whether this run has work\n {8}id: work\n {8}env:/, 'the work step has no if: — it runs on every event, dispatch included');
 });
