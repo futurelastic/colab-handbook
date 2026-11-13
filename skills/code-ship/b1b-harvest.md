@@ -84,10 +84,12 @@ run the same check yourself before you write the commit message, and treat a
 hit as a stop, not a note —
 
 ```sh
-gh issue view $N --json body,comments -q '.body, (.comments[].body)' | grep -E '^\s*- \[[ ]\]|^Remainder: #'
+gh issue view $N --json body,comments -q '.body, (.comments[].body)' | grep -E '^\s*- \[[ ]\]|(^|[^[:alnum:]])Remainder[*_]*:[*_]*[[:space:]]*#[0-9]'
 ```
 
-any `- [ ]` line with no `Remainder: #M` anywhere in that output means **Partial**,
+any `- [ ]` line with no `Remainder: #M` anywhere in that output means **Partial**
+(the declaration counts wherever it sits — on its own line, at the end of the unticked item,
+or inside a sentence or bold, exactly as the gate reads it, #737),
 not **Done** — file the remainder issue and tick what shipped (B2b's evidence
 template below) *before* you write `Closes #N`; do not squash-merge this issue
 until you have. Ticking the remaining boxes, or an explicit, deliberate

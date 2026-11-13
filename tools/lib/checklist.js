@@ -31,9 +31,18 @@ const ANY_HEADING_RE = /^#{1,6}\s+\S/;
 /** A GitHub checklist line: `- [ ] …` or `- [x] …` (case-insensitive on the mark). */
 const ITEM_RE = /^-\s*\[([ xX])\]\s*(.+)$/;
 
-/** `Remainder: #M` — the trailer that hands unticked boxes to a follow-up issue, same shape as
- *  the `Filed-by:` / `Group:` / `Because:` trailers this repo already writes onto issues. */
-const REMAINDER_RE = /^Remainder:\s*#(\d+)\b/im;
+/** `Remainder: #M` — the declaration that hands unticked boxes to a follow-up issue, same shape as
+ *  the `Filed-by:` / `Group:` / `Because:` trailers this repo already writes onto issues.
+ *
+ *  Read ANYWHERE in a text, not only at the start of a line (#737): no rule says the declaration
+ *  must start a line, and the two common forms people actually write were both missed — at the end
+ *  of the unticked item it hands off (`- [ ] measure X … — Remainder: #M`) and inside a sentence or
+ *  in bold (`item 4 moved to **Remainder: #M**`, `**Remainder:** #M`). Measured: a graded,
+ *  CI-green branch sat refused for ~16 h until the same trailer was restated on its own line.
+ *  The left edge still has to be a word boundary (`xRemainder:` does not count), and `#M` must be
+ *  digits, so the `Remainder: #M` placeholder in prose and refusal messages never matches.
+ *  Emphasis markers (`*`, `_`) are allowed on either side of the colon. */
+const REMAINDER_RE = /(?<![A-Za-z0-9])Remainder[*_]*:[*_]*\s*#(\d+)\b/i;
 
 /**
  * The raw text of the `## Plan` section (between its heading and the next heading, or the end of

@@ -116,6 +116,24 @@ test('findRemainder reads it from a comment when the body has none', () => {
   assert.strictEqual(findRemainder('## Plan\n- [ ] x\n', comments), 45);
 });
 
+// #737: the declaration does not have to start a line. Both forms below were measured refusing a
+// graded, CI-green ship until the same trailer was restated on a line of its own.
+test('findRemainder reads one written inline at the end of the unticked item it hands off', () => {
+  const body = '## Plan\n- [x] ship the gate\n- [ ] Measure X over the first week \u2014 Remainder: #812\n';
+  assert.strictEqual(findRemainder(body, []), 812);
+});
+
+test('findRemainder reads one inside a sentence or in bold, in a comment', () => {
+  assert.strictEqual(findRemainder('## Plan\n- [ ] x\n', [{ body: 'item 4 moved to **Remainder: #77**' }]), 77);
+  assert.strictEqual(findRemainder('## Plan\n- [ ] x\n', [{ body: 'item 4 moved — **Remainder:** #78.' }]), 78);
+  assert.strictEqual(findRemainder('## Plan\n- [ ] x\n', [{ body: 'see (Remainder: #79) for the rest' }]), 79);
+});
+
+test('findRemainder ignores the #M placeholder and a match glued to a preceding word', () => {
+  assert.strictEqual(findRemainder('file `Remainder: #M` for the rest', []), null);
+  assert.strictEqual(findRemainder('xRemainder: #5', []), null);
+});
+
 test('findRemainder returns null when nothing declares one', () => {
   assert.strictEqual(findRemainder('## Plan\n- [ ] x\n', [{ body: 'just a status update' }]), null);
 });
@@ -151,6 +169,12 @@ test('closeGate: ok — unticked box, but a Remainder issue is declared in a com
   assert.strictEqual(g.ok, true);
   assert.strictEqual(g.remainderIssue, 99);
   assert.strictEqual(g.unchecked, 1); // still reports the true count — ok does not mean "complete"
+});
+
+test('closeGate: ok — the remainder is declared inline on the unticked item itself (#737)', () => {
+  const g = closeGate('## Plan\n- [x] shipped\n- [ ] not shipped yet \u2014 Remainder: #99\n', []);
+  assert.strictEqual(g.ok, true);
+  assert.strictEqual(g.remainderIssue, 99);
 });
 
 test('closeGate: prose-only Plan section is ok (reported via proseOnly, not blocked)', () => {
