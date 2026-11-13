@@ -192,6 +192,6 @@ test('PHP comes from the call, which resolved it once (#724)', () => {
   // Behind the gate: off a red call, and off a run where the gate reused a green run of this tree.
   assert.match(block.join('\n'), /^ {4}if: \$\{\{ !cancelled\(\) && needs\.ci\.result == 'success' && needs\.ci\.outputs\.tested != 'true' \}\}$/m);
   const light = fs.readFileSync(path.resolve(__dirname, '..', '..', '.github', 'workflows', 'ci-light.yml'), 'utf8');
-  assert.match(light, /php-version:\n {8}description: [^\n]*\n {8}value: \$\{\{ jobs\.full\.outputs\.php-version \}\}/);
+  assert.match(light, /php-version:\n {8}description: [^\n]*\n {8}value: \$\{\{ jobs\.full\.outputs\.php-version \|\| jobs\.full-staged\.outputs\.php-version \}\}/);
   assert.match(jobBlock(light, 'full').join('\n'), /outputs:\n(?: {6}.*\n)* {6}php-version: \$\{\{ steps\.toolchain\.outputs\.php-version \}\}/);
 });

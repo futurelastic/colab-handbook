@@ -282,14 +282,8 @@ unprefixed commit is invisible in the changelog (`CONVENTIONS.md` [§4](../../CO
 ### A5. Push the session branch as backup — then read the run it started
 
 ```sh
-git push -u origin <branch>    # a backup/record, NOT a PR, NOT trunk
-git push origin --delete refs/backup/<branch> 2>/dev/null || true   # only if you pushed one mid-session
+git push -u origin <branch>    # NOT a PR, NOT trunk — the push that runs CI; a mid-session backup is refs/backup/<branch> (#734)
 ```
-
-**This is the push that runs CI — always.** A backup *before* hand-off goes to
-`git push origin HEAD:refs/backup/<branch>`: outside `refs/heads`, so it starts no run (#734,
-`CONVENTIONS.md` [§7](../../CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719) rule 5).
-Never back up mid-session to `<branch>` itself, and never with `[skip ci]` — the hand-off must get its run.
 
 **Rule:** A3's local green does not answer for branch CI. Read every run at the pushed head
 (`HEAD=$(git rev-parse HEAD)`, then `gh run list --branch <branch>` filtered to `$HEAD`); waiting on
