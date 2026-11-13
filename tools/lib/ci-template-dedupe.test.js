@@ -95,11 +95,15 @@ for (const file of FILES) {
       const cond = key(jobs[j], 'if') || '';
       assert.match(cond, /!cancelled\(\)/, `${j}: if: must carry !cancelled() — implicit success() reads every ancestor, dedupe included`);
       const needs = key(jobs[j], 'needs');
-      if (needs === 'dedupe') {
-        assert.match(cond, /needs\.dedupe\.outputs\.tested != 'true'/, `${j}: must skip when dedupe says tested`);
-      } else {
-        assert.ok(needs && others.includes(needs), `${j}: needs neither dedupe nor a guarded job (${needs})`);
-        assert.match(cond, new RegExp(`needs\\.${needs}\\.result == 'success'`), `${j}: must require ${needs} to have succeeded`);
+      // A list (`[dedupe, quick]` — the staged full job, #734) holds each member to the same rule.
+      const list = needs && /^\[.*\]$/.test(needs) ? needs.slice(1, -1).split(',').map((s) => s.trim()).filter(Boolean) : [needs];
+      for (const n of list) {
+        if (n === 'dedupe') {
+          assert.match(cond, /needs\.dedupe\.outputs\.tested != 'true'/, `${j}: must skip when dedupe says tested`);
+        } else {
+          assert.ok(n && others.includes(n), `${j}: needs neither dedupe nor a guarded job (${n})`);
+          assert.match(cond, new RegExp(`needs\\.${n}\\.result == 'success'`), `${j}: must require ${n} to have succeeded`);
+        }
       }
     }
     assert.ok(others.some((j) => key(jobs[j], 'needs') === 'dedupe'));

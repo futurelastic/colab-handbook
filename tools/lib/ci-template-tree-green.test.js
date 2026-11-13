@@ -398,6 +398,41 @@ for (const file of FILES) {
     }
   });
 
+  // #734: the heavy job runs as two twins of one name — `full` on trunk, `full-staged` (after quick)
+  // elsewhere — so every green run skips one of them. A skipped job whose name a successful job of the
+  // same run carries is not a skip; without that, no branch run could ever be cited again.
+  if (file === REUSABLE) test(`${file}: a skipped twin of a job that ran is not a skip (#734)`, { skip: !HAVE_JQ && 'jq not installed' }, () => {
+    const { run, cleanup } = makeRunner(guardScript(jobs.dedupe));
+    try {
+      const green = runObj(77, 'feat/x-1', 'bbb222', 'T1');
+      const FULL = 'ci / Full (test, build)';
+      const fx = (list) => ({ list: [green], trees: { bbb222: 'T1' }, jobs: { 77: list } });
+      const base = [{ name: `ci / ${GUARD}`, conclusion: 'skipped' }, { name: 'ci / Quick (lint, types, unit)', conclusion: 'success' }];
+      // A branch run: the staged twin ran, the trunk twin skipped — reused, cited.
+      let r = run(fx([...base, { name: FULL, conclusion: 'skipped' }, { name: FULL, conclusion: 'success' }]));
+      assert.deepStrictEqual(r.out, { tested: 'true', cited: 'https://github.com/o/r/actions/runs/77' });
+      // Order in the listing does not matter.
+      r = run(fx([...base, { name: FULL, conclusion: 'success' }, { name: FULL, conclusion: 'skipped' }]));
+      assert.strictEqual(r.out.tested, 'true');
+      // Both twins skipped (no full ran at all): not reused, and named.
+      r = run(fx([...base, { name: FULL, conclusion: 'skipped' }, { name: FULL, conclusion: 'skipped' }]));
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      assert.match(r.stdout, /Run 77 skipped ci \/ Full \(test, build\)/);
+      // A skip-chained run (the guard succeeded, the suite skipped): still never reused.
+      r = run(fx([{ name: `ci / ${GUARD}`, conclusion: 'success' }, { name: 'ci / Quick (lint, types, unit)', conclusion: 'skipped' },
+        { name: FULL, conclusion: 'skipped' }, { name: FULL, conclusion: 'skipped' }]));
+      assert.strictEqual(r.out.tested, 'false');
+      // The twin must share the WHOLE name: a different job that ran excuses nothing.
+      r = run(fx([...base, { name: FULL, conclusion: 'success' }, { name: 'ci / E2E', conclusion: 'skipped' }]));
+      assert.strictEqual(r.out.tested, 'false');
+      // A twin that FAILED excuses nothing either (a red run is not listed as green, but the rule stays exact).
+      r = run(fx([...base, { name: FULL, conclusion: 'failure' }, { name: FULL, conclusion: 'skipped' }]));
+      assert.strictEqual(r.out.tested, 'false');
+    } finally {
+      cleanup();
+    }
+  });
+
   test(`${file}: trunk walks the candidates and cites the newest reusable one, not just the newest (#592)`, { skip: !HAVE_JQ && 'jq not installed' }, () => {
     const { run, cleanup } = makeRunner(guardScript(jobs.dedupe));
     try {

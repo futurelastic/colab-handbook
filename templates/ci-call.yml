@@ -2,7 +2,8 @@
 # with `colab template ci-call --dest .github/workflows/ci.yml`: it writes this repo's trunk refs and pins the call to the handbook
 # release it stamps the copy with. Like templates/ci-<stack>.yml (callers too since #724, each with one
 # stack's `with:` filled in — this one is the generic caller, for a hybrid), nothing below the `uses:` line is
-# yours to maintain — the dedupe gate, the secret scan, the quick/full split and the job-class
+# yours to maintain — the dedupe gate, the secret scan, the quick/full split (full staged behind quick on
+# a non-trunk ref, #734) and the job-class
 # `runs-on` live once, in .github/workflows/ci-light.yml of the handbook, and a release moves them.
 #
 # EDIT POINTS are marked `# EDIT:` — the `with:` block is the only real one.
