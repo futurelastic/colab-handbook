@@ -81,7 +81,7 @@ Why each shape, and why only `gated` changes ship: [ADR 610](../../docs/adr/610-
 
 The rule: [CONVENTIONS.md, *One verdict per tree — quick on branches, full once (#719)*](../../CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719).
 
-Where each of the four rules is kept today:
+Where each of the five rules is kept today (rule 5 has two halves):
 
 | Rule | Kept by | Reads as |
 |---|---|---|
@@ -89,6 +89,8 @@ Where each of the four rules is kept today:
 | 2. Light on branches; full/heavy once per sha, where the profile says | the two lanes and [`integration-profile:`](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610) | the table above |
 | 3. A schedule skips a passed sha; one dispatch per sha | the heavy templates' `plan` job: the nightly skips when its tip is the last green nightly's sha, or a green dispatched run of the same workflow tested it (#719); `colab ship` / `colab release` dispatch the heavy lane only when no run exists at that sha | `heavy-skipped` notice |
 | 4. A trunk-only job never blocks reuse | a separate workflow, or `TRUNK_ONLY_JOBS` in the guard (#717) | — |
+| 5a. A superseded run costs one quick slot: on a non-trunk ref (the refs `concurrency` cancels) heavy jobs start only after quick succeeded; a trunk run is never cancelled, never delayed | the reusable `ci-light.yml`: the full command as twins of one name — `full` (trunk ref, beside `quick`) and `full-staged` (any other ref, `needs: [dedupe, quick]`, only on quick's success); a hand-written copy stages its own heavy jobs the same way ([templates README](../../templates/README.md#the-reusable-light-lane--calling-instead-of-copying-721)) | `Staged start proof` in the handbook's self-test |
+| 5b. A mid-session backup push starts no run; the hand-off push always does | the session: `git push origin HEAD:refs/backup/<branch>` mid-session — outside `refs/heads`, so no push workflow fires (the claim ref's mechanism, #550); [`code-wrap`](../../skills/code-wrap/SKILL.md) A5's push to the branch runs CI and deletes the backup ref | — |
 
 - **Called, the guard reads the same runs a copy did** (#721): a called workflow's `github` context is the
   caller's, so the run id and the workflow id are the caller's. Its jobs are listed as `<caller job> / <job>`,
@@ -99,6 +101,21 @@ Where each of the four rules is kept today:
   branch push, so a session's first real commit always gets a run of its own at its own sha (#418).
 - **Under `gated`, a landing's light run may still be a reuse** — the landing's verdict is its heavy run
   at that sha; the light lane's skip only avoids testing the same tree twice.
+- **Rule 5a's twins and #511** (#734): every green run now skips one of the two `Full (test, build)` twins,
+  so #511 passes over a skipped job whose exact name a *successful* job of the same run also carries. A
+  skip-chained run is still refused — its suite jobs have no twin that ran. Same predicate as the caller's
+  `cancel-in-progress` (a ref outside `trunk-branches`): the stage applies exactly where a run can be
+  cancelled. A red `quick` on such a ref leaves full unrun — that push's verdict is already red.
+- **No settle step before the stage — measured, not guessed** (#734). On the busiest self-hosted repository's
+  main CI over 7 days (95 cancelled push runs that had a successor), the next push to the same branch came a
+  median 16 min after the cancelled run started (p10 9 min, p90 33 min); only 4 of 95 came within 5 min. A
+  settle long enough to cover the typical gap would delay every branch verdict by a quarter of an hour, and
+  one short enough not to would catch almost nothing. What the stage saves is `quick`'s duration × the heavy
+  jobs' width on *every* cancelled run, plus the whole run when the cancel lands during `quick`; the larger
+  lever is rule 5b — a backup push that starts no run at all.
+- **A backup ref is not secret-scanned until the hand-off push** (rule 5b). The scan is detective either way —
+  a pushed secret is on the remote before any CI sees it — so the pre-commit hooks stay the preventive layer;
+  the hand-off push scans the same commits (#716's range).
 - **`TRUNK_ONLY_JOBS` names jobs outside the gate only.** A cited branch run that skipped one of them is
   still reused, because that job's `if:` never reads the guard's `tested` output and so runs on trunk
   anyway. A suite job, or any job behind the gate, must never be listed: trunk would then skip it a second

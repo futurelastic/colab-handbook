@@ -10,6 +10,19 @@ A3 runs the suite *locally*, on this machine; CI runs it on the runner.
 This push is usually the branch's **first**: `colab worktree new` recorded the claim as the ref
 `refs/claims/<branch>`, which runs no CI (#550), so this is where branch CI starts.
 
+**Backed up mid-session? Do it without a run, and clean it up here (#734).** A backup *before*
+hand-off goes to `git push origin HEAD:refs/backup/<branch>` — outside `refs/heads`, so no push
+workflow fires (the claim ref's mechanism). Never back up mid-session to `<branch>` itself: each
+such push starts a run the next push cancels, after its heavy jobs already took runners. Never use
+`[skip ci]` either — a trailer that lands in the hand-off commit would skip the one run that must
+happen. This push to `<branch>` is the one that always runs CI; after it, delete the backup ref:
+
+```sh
+git push origin --delete refs/backup/<branch> 2>/dev/null || true   # only if you pushed one
+```
+
+Rule: `CONVENTIONS.md` [§7](../../CONVENTIONS.md#one-verdict-per-tree--quick-on-branches-full-once-719), *One verdict per tree*, rule 5.
+
 So read it here, where the push just created it, and pass the answer forward as a
 **class** rather than a pass/fail:
 

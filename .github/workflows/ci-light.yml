@@ -20,6 +20,9 @@
 #   - The quick / full split (jobs `quick` and `full`): `quick` runs the caller's lint/types/unit
 #     command on a small slot; `full` runs its test/build command. Both run on every push the gate
 #     does not skip; the heavy lane (templates/ci-<stack>-heavy.yml) stays where it is.
+#   - The staged start (#734): on a ref the caller's `concurrency` can cancel (every non-trunk ref),
+#     the full command runs only after `quick` passed (job `full-staged`), so a run superseded during
+#     `quick` never took a full slot; a trunk run keeps both beside each other (job `full`).
 #   - The job-class `runs-on` (CONVENTIONS.md §7, "Runner classes", #720).
 #   - The package caches (#571): npm, pip and Composer, each on only on a GitHub-hosted runner AND
 #     with the file it keys on present — a persistent self-hosted runner keeps its own (#512). #724
@@ -133,13 +136,13 @@ on:
         value: ${{ jobs.dedupe.outputs.cited }}
       node-version:
         description: The Node version the full job resolved (empty when it was skipped or not asked for).
-        value: ${{ jobs.full.outputs.node-version }}
+        value: ${{ jobs.full.outputs.node-version || jobs.full-staged.outputs.node-version }}
       python-version:
         description: The Python version the full job resolved.
-        value: ${{ jobs.full.outputs.python-version }}
+        value: ${{ jobs.full.outputs.python-version || jobs.full-staged.outputs.python-version }}
       php-version:
         description: The PHP version the full job resolved.
-        value: ${{ jobs.full.outputs.php-version }}
+        value: ${{ jobs.full.outputs.php-version || jobs.full-staged.outputs.php-version }}
 
 permissions:
   actions: read
@@ -184,9 +187,12 @@ jobs:
           # the trunk ref is `skipped` on every branch push and a skipped job does not fail the
           # run, so citing that run would skip the trunk-only job on trunk a second time — unless
           # the job is named in TRUNK_ONLY_JOBS: it sits outside the gate and runs here anyway (#717).
+          # #734 twin: a skipped job whose exact name a SUCCESSFUL job of the same run also carries is not a
+          # skip — the heavy job's two twins (`full` on trunk, `full-staged` elsewhere) share one name and
+          # exactly one of them runs. A skip-chained run still fails: its suite jobs have no ran twin.
           reusable() {
             if ! SK="$(gh api "repos/$REPO/actions/runs/$1/jobs?per_page=100" \
-                   --jq 'if .total_count > (.jobs | length) then "(more than 100 jobs)" else [.jobs[] | select(.conclusion == "skipped" and .name != env.GUARD_NAME and (.name | endswith(" / " + env.GUARD_NAME) | not)) | .name | select(. as $n | any((env.TRUNK_ONLY_JOBS // "") | split(",")[] | gsub("^\\s+|\\s+$"; "") | select(. != ""); . as $t | $n == $t or ($n | endswith(" / " + $t))) | not)] | join(", ") end' 2>/dev/null)"; then
+                   --jq 'if .total_count > (.jobs | length) then "(more than 100 jobs)" else ([.jobs[] | select(.conclusion == "success") | .name]) as $ran | [.jobs[] | select(.conclusion == "skipped" and .name != env.GUARD_NAME and (.name | endswith(" / " + env.GUARD_NAME) | not)) | .name | select(. as $n | any($ran[]; . == $n) | not) | select(. as $n | any((env.TRUNK_ONLY_JOBS // "") | split(",")[] | gsub("^\\s+|\\s+$"; "") | select(. != ""); . as $t | $n == $t or ($n | endswith(" / " + $t))) | not)] | join(", ") end' 2>/dev/null)"; then
               echo "::notice::Could not list the jobs of run $1 — running the full suite (#511)."
               return 1
             elif [ -n "$SK" ]; then
@@ -707,10 +713,180 @@ jobs:
           if [ -z "$QUICK" ]; then echo "::notice::No quick command (input \`quick\`) — nothing to run."; exit 0; fi
           bash -eo pipefail -c "$QUICK"
 
+  # The heavy job, twice (#734): `needs:` cannot be conditional, and a non-trunk run must start it only
+  # after `quick` passed while a trunk run must not wait. `full` is the trunk twin (unchanged: beside
+  # `quick`, never delayed); `full-staged` the twin for every other ref — the refs the caller's
+  # `concurrency` cancels, so a run superseded during `quick` never took a full slot. Exactly one twin runs
+  # per run; both carry ONE display name, so a required check by name is met by the job that ran and the
+  # dedupe gate's #511 rule passes over the skipped twin (`twin`). Below `if:`, the two bodies are
+  # identical — tools/lib/ci-light-staged.test.js pins it: edit one, edit both.
   full:
     name: Full (test, build)
     needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && contains(fromJSON(inputs.trunk-branches), github.ref_name) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
+    runs-on: ${{ inputs.runs-on == 'classes' && fromJSON(format('["self-hosted",{0}"{1}"]', inputs.runner-lane != '' && format('"{0}",', inputs.runner-lane) || '', contains(fromJSON(inputs.trunk-branches), github.ref_name) && 'trunk' || 'full')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.full-timeout-minutes }}
+    # The versions it resolved, for a caller job beside the call (a migration round-trip, #724) —
+    # resolved once, here, never a second time with a second rule.
+    outputs:
+      node-version: ${{ steps.toolchain.outputs.node-version }}
+      python-version: ${{ steps.toolchain.outputs.python-version }}
+      php-version: ${{ steps.toolchain.outputs.php-version }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # Toolchain versions — strict precedence (CONVENTIONS.md §7): .github/project.yml's key, then the
+      # ecosystem's own manifest, else FAIL. The same resolution the copied templates carry, per toolchain.
+      - name: Resolve toolchain versions
+        id: toolchain
+        if: inputs.toolchain != ''
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          set -euo pipefail
+          normalise() {
+            printf '%s' "$1" \
+              | tr -d '"' \
+              | sed -E 's/^[^0-9]*//' \
+              | sed -E 's/[[:space:],].*$//' \
+              | sed -E 's/\.(x|\*)$//' \
+              | sed -E 's/[^0-9.].*$//' \
+              | sed -E 's/\.$//'
+          }
+          from_project_yml() {
+            [ -f "$GITHUB_WORKSPACE/.github/project.yml" ] || return 0
+            sed -nE "s/^[[:space:]]*$1:[[:space:]]*\"?([^\"#[:space:]]+)\"?.*/\1/p" "$GITHUB_WORKSPACE/.github/project.yml" | head -1
+          }
+          json_key() { # json_key <file> <js expression over the parsed file c>
+            if command -v node >/dev/null 2>&1; then
+              node -e "try{const c=require('./$1');process.stdout.write(String(($2)||''))}catch(_){}" || true
+            elif command -v python3 >/dev/null 2>&1; then
+              python3 -c "import json,sys;c=json.load(open('$1'));print(eval(sys.argv[1]) or '')" "$3" 2>/dev/null || true
+            fi
+          }
+          want() { case ",$(printf '%s' "$TOOLCHAIN" | tr -d '[:space:]')," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+          refuse() {
+            echo "::error::No $1 version is declared in this repository, and this workflow refuses to guess one."
+            echo "Declare it in .github/project.yml ($2: \"<version>\", preferred) or in $3. Use the version the DEPLOY target runs." >&2
+            exit 1
+          }
+          for t in $(printf '%s' "$TOOLCHAIN" | tr ',' ' '); do
+            case "$t" in node|python|php) ;; *) echo "::error::toolchain '$t' is not one of node, python, php"; exit 1 ;; esac
+          done
+          if want node; then
+            V="$(from_project_yml node || true)"; SRC=".github/project.yml (node:)"
+            if [ -z "$V" ] || [ "$V" = null ]; then
+              V=""; [ -f .nvmrc ] && V="$(grep -vE '^[[:space:]]*(#|$)' .nvmrc | head -1 | tr -d '[:space:]' || true)"; SRC=".nvmrc"
+            fi
+            if [ -z "$V" ] && [ -f package.json ]; then
+              V="$(json_key package.json '(c.engines||{}).node' "(c.get('engines') or {}).get('node')")"; SRC="package.json (engines.node)"
+            fi
+            [ -n "$V" ] || refuse Node node ".nvmrc or package.json engines.node"
+            echo "node-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "Node **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if want python; then
+            V="$(from_project_yml python || true)"; SRC=".github/project.yml (python:)"
+            if [ -z "$V" ] || [ "$V" = null ]; then
+              V=""; [ -f .python-version ] && V="$(grep -vE '^[[:space:]]*(#|$)' .python-version | head -1 | tr -d '[:space:]' || true)"; SRC=".python-version"
+            fi
+            if [ -z "$V" ] && [ -f pyproject.toml ]; then
+              V="$(sed -nE 's/^[[:space:]]*requires-python[[:space:]]*=[[:space:]]*["'"'"']([^"'"'"']+)["'"'"'].*/\1/p' pyproject.toml | head -1 || true)"; SRC="pyproject.toml (requires-python)"
+            fi
+            [ -n "$V" ] || refuse Python python ".python-version or pyproject.toml requires-python (requirements.txt does not count)"
+            echo "python-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "Python **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if want php; then
+            V="$(from_project_yml php || true)"; SRC=".github/project.yml (php:)"
+            if { [ -z "$V" ] || [ "$V" = null ]; } && [ -f composer.json ]; then
+              V="$(json_key composer.json '(c.require||{}).php' "(c.get('require') or {}).get('php')")"; SRC="composer.json (require.php)"
+            fi
+            [ -n "$V" ] && [ "$V" != null ] || refuse PHP php "composer.json require.php"
+            echo "php-version=$(normalise "$V")" >> "$GITHUB_OUTPUT"
+            echo "PHP **$(normalise "$V")** — resolved from \`$SRC\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Setup Node
+        if: steps.toolchain.outputs.node-version != ''
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ steps.toolchain.outputs.node-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles(format('{0}/package-lock.json', inputs.working-directory)) != '' && 'npm' || '' }}
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+          package-manager-cache: false
+
+      - name: Setup Python
+        if: steps.toolchain.outputs.python-version != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ steps.toolchain.outputs.python-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles(format('{0}/requirements*.txt', inputs.working-directory), format('{0}/pyproject.toml', inputs.working-directory)) != '' && 'pip' || '' }}
+          cache-dependency-path: |
+            ${{ inputs.working-directory }}/requirements*.txt
+            ${{ inputs.working-directory }}/pyproject.toml
+
+      - name: Setup PHP
+        if: steps.toolchain.outputs.php-version != ''
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ steps.toolchain.outputs.php-version }}
+          extensions: ${{ inputs.php-extensions }}
+          coverage: none
+
+      - name: Locate Composer cache
+        id: composer-cache
+        if: steps.toolchain.outputs.php-version != '' && runner.environment == 'github-hosted' && hashFiles(format('{0}/composer.lock', inputs.working-directory)) != ''
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Composer cache
+        if: steps.composer-cache.outputs.dir != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', inputs.working-directory)) }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install dependencies
+        env:
+          INSTALL: ${{ inputs.install }}
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          set -eo pipefail
+          if [ -z "$INSTALL" ]; then echo "::notice::No install (input \`install\` is empty)."; exit 0; fi
+          if [ "$INSTALL" != auto ]; then bash -eo pipefail -c "$INSTALL"; exit 0; fi
+          want() { case ",$(printf '%s' "$TOOLCHAIN" | tr -d '[:space:]')," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+          if want php && [ -f composer.json ]; then
+            composer install --no-interaction --prefer-dist --optimize-autoloader --no-scripts
+          fi
+          if want python; then
+            python -m pip install --upgrade pip
+            if [ -f pyproject.toml ]; then pip install -e .
+            elif [ -f requirements.txt ]; then pip install -r requirements.txt
+            else echo "::warning::No pyproject.toml or requirements.txt — nothing to install."; fi
+            if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          fi
+          if want node && [ -f package.json ]; then
+            if [ -f pnpm-lock.yaml ]; then corepack enable; pnpm install --frozen-lockfile
+            elif [ -f package-lock.json ]; then npm ci
+            else echo "::warning::No lockfile found — falling back to 'npm install'. Commit a lockfile so CI is reproducible."; npm install; fi
+          fi
+      - name: Full
+        env:
+          FULL: ${{ inputs.full }}
+        run: |
+          if [ -z "$FULL" ]; then echo "::notice::No full command (input \`full\`) — nothing to run."; exit 0; fi
+          bash -eo pipefail -c "$FULL"
+
+  full-staged:
+    name: Full (test, build)
+    needs: [dedupe, quick]
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && needs.quick.result == 'success' && !contains(fromJSON(inputs.trunk-branches), github.ref_name) }}
     runs-on: ${{ inputs.runs-on == 'classes' && fromJSON(format('["self-hosted",{0}"{1}"]', inputs.runner-lane != '' && format('"{0}",', inputs.runner-lane) || '', contains(fromJSON(inputs.trunk-branches), github.ref_name) && 'trunk' || 'full')) || (startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on) }}
     timeout-minutes: ${{ inputs.full-timeout-minutes }}
     # The versions it resolved, for a caller job beside the call (a migration round-trip, #724) —

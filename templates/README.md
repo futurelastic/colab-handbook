@@ -200,6 +200,31 @@ once, for every caller; `ci-node.yml`, `ci-python.yml` and `ci-laravel.yml` are 
 - **The quick/full split is two jobs**: `quick` (descriptor check, lint, types, unit — the `quick` class)
   and `full` (the light suite, the build — the `full` class); both run on every push the gate does not skip,
   and both take the `trunk` class on a trunk ref under `runs-on: classes`.
+- **On a non-trunk ref, full starts only after quick passed** (#734). Those are the refs `concurrency`
+  cancels, and a run cancelled by the next push used to have every lane running already: late cancels
+  were 8.5% of a self-hosted fleet's runner-minutes over 14 days. A trunk run is unchanged — never
+  cancelled, never delayed, full beside quick. `needs:` cannot be conditional, so the call holds the full
+  command as two jobs of one name (`full` on trunk, `full-staged` elsewhere); exactly one runs, a required
+  check by name is met by it, and the gate does not count the skipped twin as a skip (#511).
+  A red quick on a branch therefore hides that push's full failures until quick is fixed — the price of
+  not paying for a full run whose verdict is already red.
+- **Not calling it yet?** A hand-written CI with heavy jobs (full tests, browser/e2e, desktop builds) should
+  stage them the same way: on a non-trunk ref, `needs:` the quick job and require
+  `needs.<quick>.result == 'success'`; on a trunk ref, keep them beside it. The pair, as the call writes it:
+  ```yaml
+  e2e:          # trunk twin — unchanged
+    needs: dedupe
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && contains(fromJSON('["main","dev"]'), github.ref_name) }}
+  e2e-staged:   # every other ref — the ones concurrency cancels
+    name: <the same name as e2e>
+    needs: [dedupe, quick]
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && needs.quick.result == 'success' && !contains(fromJSON('["main","dev"]'), github.ref_name) }}
+  ```
+  Give both twins one `name:` and identical steps. If your copy carries the dedupe guard, its #511 skip
+  rule must also pass over a skipped job whose name a successful job of the same run carries (the call's
+  guard does — copy that `jq`), or no branch run can be cited at the landing again.
+- **Mid-session backup pushes start no run at all** when they go to `refs/backup/<branch>` instead of the
+  branch (CONVENTIONS.md §7, *One verdict per tree*, rule 5).
 - **The package caches moved too**: npm, pip and Composer, each on only on a GitHub-hosted runner and with
   its lockfile present (#571), now in the call. Laravel's PHP extensions are the `php-extensions` input.
 - A workflow still carrying its own copy of the gate is reported as drift — a suggestion until a handbook

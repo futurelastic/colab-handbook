@@ -32,3 +32,47 @@ jobs:
       install: "" # no dependencies here
       quick: node --check tools/colab && node tools/colab --help >/dev/null
       full: node --test tools/lib/template-trunk.test.js
+
+  # #734: the staged start, proven on THIS run's own jobs. On a branch push the full job that ran must have
+  # started at or after `quick` completed — so a cancel landing during `quick` precedes every full start, and
+  # a superseded run never took a full slot. On trunk the trunk twin runs beside `quick`, no order asked.
+  # Either way exactly one of the two "Full (test, build)" twins ran. Skipped with the suite (tested).
+  # tools/lib/ci-light-staged.test.js runs this script against fixtures, so it cannot pass vacuously.
+  staging-proof:
+    name: Staged start proof
+    needs: ci
+    if: ${{ !cancelled() && needs.ci.outputs.tested != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: The full job started only after quick passed (branch) / beside it (trunk)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          REF_NAME: ${{ github.ref_name }}
+          TRUNK: main
+        run: |
+          F='ci / Full (test, build)'
+          Q='ci / Quick (lint, types, unit)'
+          J="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100")"
+          ran="$(jq --arg f "$F" '[.jobs[] | select(.name == $f and .conclusion == "success")] | length' <<< "$J")"
+          skipped="$(jq --arg f "$F" '[.jobs[] | select(.name == $f and .conclusion == "skipped")] | length' <<< "$J")"
+          if [ "$ran" != 1 ] || [ "$skipped" != 1 ]; then
+            echo "::error::Expected one \"$F\" twin to run and one to skip — $ran ran, $skipped skipped (#734)."
+            exit 1
+          fi
+          if [ "$REF_NAME" = "$TRUNK" ]; then
+            echo "Trunk run: one full twin ran beside quick, the staged twin skipped (#734)."
+            exit 0
+          fi
+          qdone="$(jq -r --arg q "$Q" '[.jobs[] | select(.name == $q)][0].completed_at // ""' <<< "$J")"
+          fstart="$(jq -r --arg f "$F" '[.jobs[] | select(.name == $f and .conclusion == "success")][0].started_at // ""' <<< "$J")"
+          if [ -z "$qdone" ] || [ -z "$fstart" ] || [[ "$fstart" < "$qdone" ]]; then
+            echo "::error::The full job started at ${fstart:-?}, before quick completed (${qdone:-?}) — the stage is broken (#734)."
+            exit 1
+          fi
+          echo "Staged: quick completed $qdone, full started $fstart — a cancel during quick starts no full job (#734)."
+          echo "Staged start: quick completed \`$qdone\`, full started \`$fstart\` (#734)." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"

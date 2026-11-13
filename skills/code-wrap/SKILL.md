@@ -282,7 +282,7 @@ unprefixed commit is invisible in the changelog (`CONVENTIONS.md` [§4](../../CO
 ### A5. Push the session branch as backup — then read the run it started
 
 ```sh
-git push -u origin <branch>    # a backup/record, NOT a PR, NOT trunk
+git push -u origin <branch>    # NOT a PR, NOT trunk — the push that runs CI; a mid-session backup is refs/backup/<branch> (#734)
 ```
 
 **Rule:** A3's local green does not answer for branch CI. Read every run at the pushed head

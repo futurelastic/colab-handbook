@@ -2616,9 +2616,8 @@ declares where the heavy lane runs and what a green trunk promises. The four pro
 
 ### One verdict per tree — quick on branches, full once (#719)
 
-**A CI verdict is keyed on the git tree id: a workflow never tests a tree, or a sha, it already passed.** Four rules, kept once by the reusable `ci-light.yml` (`templates/ci-call.yml`, #721) — a copied or
-never-skipping gate is drift, not customisation; how the guard reads them:
-[`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#one-verdict-per-tree--quick-on-branches-full-once-719).
+**A CI verdict is keyed on the git tree id: a workflow never tests a tree, or a sha, it already passed.** Five rules, kept once by the reusable `ci-light.yml` (`templates/ci-call.yml`, #721) and rule 5's backup ref by the session — a copied or
+never-skipping gate is drift, not customisation; how the guard reads them: [`tools/docs/ci-lanes.md`](tools/docs/ci-lanes.md#one-verdict-per-tree--quick-on-branches-full-once-719).
 
 1. **A green run of a tree is reused wherever that tree lands** — trunk, a batch-landing ref
    (`ship-batch/**`), and a ref's first push at a sha that already passed. *Example:* a branch
@@ -2637,6 +2636,7 @@ never-skipping gate is drift, not customisation; how the guard reads them:
    it lives in a workflow of its own, or outside the gate and named in the guard's trunk-only list.
    *Example:* a branch run skipped `Deploy`; listed and ungated, trunk reuses the branch's verdict
    and still runs `Deploy`.
+5. **A superseded run costs one quick slot, and a backup push costs none** (#734) — on a non-trunk ref heavy jobs start only after quick passed, trunk never waits; a mid-session backup goes to `refs/backup/<branch>`, and the hand-off push always gets its run ([detail](tools/docs/ci-lanes.md#one-verdict-per-tree--quick-on-branches-full-once-719)).
 
 ### CI — what it is follows the unit's shape, how much follows exposure
 
