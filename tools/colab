@@ -581,8 +581,9 @@ function localClaimConflicts(st, repoAbs, nums, wtName) {
 /**
  * #325 — the claim record every machine can read, whatever the tracker: a branch on the remote whose
  * name carries the issue number (CONVENTIONS.md §4 puts the numbers in the trailing run), or — since
- * #550 — the claim ref `refs/claims/<branch>` that `colab worktree new` pushes the moment it cuts
- * (a ref no CI trigger watches; the branch itself follows at code-wrap). Asked of the remote directly (`ls-remote`, no fetch), so a
+ * #741 — the claim LOCK `refs/heads/claim/<N>` that `colab worktree new` and `colab claim` take (a
+ * `[skip ci]` commit; the branch itself follows at code-wrap), or a legacy claim ref
+ * `refs/claims/<branch>` an older cut left (#550, still read). Asked of the remote directly (`ls-remote`, no fetch), so a
  * clone that has never fetched sees exactly what a fresh one would.
  *
  * `mode`:
@@ -619,7 +620,89 @@ function remoteClaimConflicts(st, repoAbs, nums) {
     if (!carried.length || ours(h.branch)) continue;
     for (const num of carried) conflicts.push({ num, remote, branch: h.branch, sha: h.sha, claimRef: !!h.claimRef });
   }
-  return { mode: 'ok', remote, conflicts };
+  // #741: the lock, `refs/heads/claim/<N>`. Ours when (a) this machine's own claim record holds that
+  // exact lock — the ONLY test for a lock colab wrote, because two colab homes on one host share the
+  // hardware and a `Machine:` line would read each other's locks as their own; or (b) another tool
+  // wrote it (no `Claimed-By: colab`) naming THIS machine — an orchestrator holding the issue for the
+  // session it spawned here, which that session adopts instead of being refused by its own lock.
+  // A lock whose commit cannot be read is foreign: fail closed, like an unreachable remote.
+  const ownLocks = [];
+  for (const l of heads.locks || []) {
+    if (!want.has(l.issue)) continue;
+    const rec = (st.claims || {})[claimKey(repoAbs, l.issue)];
+    const recSha = rec && rec.lock && rec.lock.sha ? String(rec.lock.sha) : '';
+    if (recSha && machine.isLocal(rec) && (l.fullSha.startsWith(recSha) || recSha.startsWith(l.fullSha))) {
+      ownLocks.push({ num: l.issue, sha: l.fullSha, adopted: !!rec.lock.adopted });
+      continue;
+    }
+    const read = git.readClaimLock(repoAbs, remote, l.issue, l.fullSha);
+    const tr = read.ok ? read.trailers : {};
+    if (read.ok && !tr.colab && tr.machine && branchName.machineLabel(tr.machine) === branchName.machineLabel(HOST)) {
+      ownLocks.push({ num: l.issue, sha: l.fullSha, adopted: true, writer: tr.author || null });
+      continue;
+    }
+    conflicts.push({ num: l.issue, remote, lock: true, sha: l.sha, fullSha: l.fullSha,
+      branch: tr.branch || null, machine: tr.machine || null, writer: tr.colab ? 'colab' : (tr.author || null),
+      unread: read.ok ? null : String(read.stderr || '').split('\n')[0] });
+  }
+  return { mode: 'ok', remote, conflicts, ownLocks };
+}
+
+/**
+ * #741 — take the claim locks `refs/heads/claim/<N>` for `nums`, after `remoteClaimConflicts` ran.
+ * Locks already ours (`check.ownLocks`) are kept, not re-pushed; a foreign lock is overwritten only
+ * under `--force` (its observed sha becomes the lease), and everything else is created in ONE atomic
+ * create-only push. `{ ok, locks: { N: { ref, sha, adopted? } }, taken: [N], stderr? }`; no remote →
+ * `{ ok: true, locks: {}, taken: [] }` (the local record is the whole truth there).
+ */
+function takeClaimLocksFor(repoAbs, check, nums, { branch = null, session = '', force = false } = {}) {
+  if (!check || check.mode !== 'ok' || !check.remote || !nums.length) return { ok: true, locks: {}, taken: [] };
+  const locks = {};
+  for (const o of check.ownLocks || []) {
+    if (nums.includes(o.num)) locks[o.num] = { ref: git.claimLockRef(o.num), sha: o.sha, ...(o.adopted ? { adopted: true } : {}) };
+  }
+  const expect = {};
+  if (force) for (const c of check.conflicts || []) if (c.lock && c.fullSha) expect[c.num] = c.fullSha;
+  const toTake = nums.filter((n) => !locks[n]);
+  if (!toTake.length) return { ok: true, locks, taken: [] };
+  const message = git.claimLockMessage({
+    nums: toTake, branch, machine: branchName.machineLabel(HOST), machineId: machine.machineToken(myMachineId()) || '', session,
+  });
+  const commit = git.makeClaimLockCommit(repoAbs, message);
+  if (!commit.ok) return { ok: false, locks, taken: [], stderr: commit.stderr };
+  const push = git.takeClaimLocks(repoAbs, check.remote, toTake, commit.sha, { expect });
+  if (!push.ok) return { ok: false, locks, taken: [], rejected: push.rejected, stderr: push.stderr };
+  for (const n of toTake) locks[n] = { ref: git.claimLockRef(n), sha: commit.sha };
+  return { ok: true, locks, taken: toTake };
+}
+
+/**
+ * #741 — release the claim locks the given claim records hold, each only while it still points at
+ * the recorded sha (`git.releaseClaimLock`). Best effort, like the legacy claim-ref delete beside it:
+ * a failure warns with the command and undoes nothing. An adopted lock (an orchestrator's) is
+ * released too — release is unconditional (CONVENTIONS.md §5), and a lock left behind would refuse
+ * every other machine on that issue.
+ */
+function releaseClaimLocksOf(repoAbs, claims) {
+  const held = (claims || []).filter((c) => c && c.lock && c.lock.sha);
+  if (!held.length) return;
+  let remote = null;
+  try { remote = git.claimRemote(repoAbs); } catch { remote = null; }
+  if (!remote) return;
+  for (const c of held) {
+    const num = normIssueNum(c.issue);
+    const ref = git.claimLockRef(num);
+    const r = git.releaseClaimLock(repoAbs, remote, num, c.lock.sha);
+    if (r.ok && r.moved) print(`  claim lock ${remote} ${ref} now points at ${r.now} — someone else's; left in place`);
+    else if (r.ok && !r.absent) print(`  released claim lock ${remote} ${ref}`);
+    else if (!r.ok) warnDeferred(`could not release claim lock ${remote} ${ref} (${String(r.stderr || '').split('\n')[0]}) — delete it by hand: git push ${remote} --delete ${ref}`);
+  }
+}
+
+/** The refusal/stale lines for a foreign lock (#741). */
+function lockHolderText(c) {
+  const who = [c.branch ? `branch ${c.branch}` : null, c.machine ? `machine ${c.machine}` : null, c.writer && c.writer !== 'colab' ? `written by ${c.writer}` : null].filter(Boolean).join(' · ');
+  return `claim lock ${c.remote} ${git.claimLockRef(c.num)} @ ${c.sha}${who ? ` (${who})` : ''}${c.unread ? ` (holder unreadable: ${c.unread})` : ''}`;
 }
 
 /** The fail-closed refusal for an unreadable remote (#325) — no override: nothing can be checked. */
@@ -726,12 +809,21 @@ function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps, myMa
 function printRefusal(localConf, ghConf, remoteConf = []) {
   process.stderr.write('✗ Refusing — one or more issues are already claimed:\n');
   for (const c of remoteConf) {
-    process.stderr.write(c.claimRef
+    process.stderr.write(c.lock
+      ? `  #${c.num} remote: ${lockHolderText(c)} holds it, and it is not this machine's (#741)\n`
+      : c.claimRef
       ? `  #${c.num} remote: claim ref ${c.remote} ${git.claimRef(c.branch)} @ ${c.sha} carries it (branch not pushed yet), and it is not this machine's (#325, #550)\n`
       : `  #${c.num} remote: branch ${c.remote}/${c.branch} @ ${c.sha} carries it, and it is not this machine's (#325)\n`);
   }
-  if (remoteConf.length) {
-    const c = remoteConf[0];
+  const lockConf = remoteConf.filter((c) => c.lock);
+  if (lockConf.length) {
+    const c = lockConf[0];
+    process.stderr.write(`  The lock IS the claim — continue that work rather than open a second one${c.branch ? `: on its machine, or once its branch is pushed: git fetch ${c.remote} ${c.branch} && git worktree add <path> ${c.branch}` : ''}\n`);
+    process.stderr.write(`  A lock whose session is gone is stale — delete it: git push ${c.remote} --delete ${git.claimLockRef(c.num)}\n`);
+  }
+  const branchConf = remoteConf.filter((c) => !c.lock);
+  if (branchConf.length) {
+    const c = branchConf[0];
     process.stderr.write(`  That ${c.claimRef ? 'claim ref' : 'branch'} IS the claim — continue it rather than open a second one:\n`);
     process.stderr.write(c.claimRef
       ? `    git fetch ${c.remote} ${git.claimRef(c.branch)}:refs/heads/${c.branch} && git worktree add <path> ${c.branch}\n`
@@ -774,6 +866,7 @@ function halfClaimText(c) {
 /** Announce exactly what --force overrides (a takeover is visible, never silent). */
 function printTakeover(localConf, ghConf, remoteConf = []) {
   for (const c of remoteConf) {
+    if (c.lock) { print(`  --force: taking over #${c.num} although ${lockHolderText(c)} holds it (not this machine's) — the lock is overwritten`); continue; }
     print(`  --force: taking over #${c.num} although ${c.claimRef ? `claim ref ${c.remote} ${git.claimRef(c.branch)}` : `branch ${c.remote}/${c.branch}`} @ ${c.sha} carries it (not this machine's)`);
   }
   for (const c of localConf) {
@@ -856,6 +949,7 @@ function yieldIssue(repoAbs, num, winner, myLogin, session = null) {
   }
   const rc = git.ghIssueComment(repoAbs, num, claimComments.yieldReleaseBody(winner, { redact: !commentHostDecision(repoAbs).include }));
   if (!rc.ok) warn(`could not post yield comment on #${num} (${rc.stderr.split('\n')[0] || rc.code})`);
+  let yieldedLock = null;
   let placeOutcome = null;
   state.mutate((st) => {
     const key = claimKey(repoAbs, num);
@@ -869,6 +963,7 @@ function yieldIssue(repoAbs, num, winner, myLogin, session = null) {
     } else {
       const wtName = c.worktree;
       const claimSession = c.session || session || null;
+      if (c.lock) yieldedLock = { issue: c.issue, lock: c.lock };
       delete st.claims[key];
       // #312, the sharpest of the three leaks this fixed: `cmdClaim` has ALREADY acquired the
       // checkout hold by the time the tie-break decides this session lost the race, so before this
@@ -887,6 +982,7 @@ function yieldIssue(repoAbs, num, winner, myLogin, session = null) {
       }
     }
   });
+  if (yieldedLock) releaseClaimLocksOf(repoAbs, [yieldedLock]); // #741: the lock goes with the yielded claim
   if (placeOutcome && placeOutcome.released) {
     print(`  released the checkout place-claim on ${placeOutcome.rec.path}` +
       (placeOutcome.reason === 'lapsed-dead' ? ' (its holder was already gone)' : ' (this was the last claim holding it)'));
@@ -940,9 +1036,12 @@ function commentAndTieBreak(repoAbs, nums, owner) {
 const HELP_CLAIM = `colab claim <issue> [<issue> ...] [options]
 
 Claim one or more GitHub issues so parallel sessions/agents don't collide.
-The claim RECORD every machine reads is a branch on the git remote carrying the issue number
-(\`colab worktree new\` records it the moment it is cut as the claim ref refs/claims/<branch>,
-which no CI trigger watches — #325, #550). Also writes local state (fast path)
+The claim RECORD every machine reads is on the git remote: the claim lock refs/heads/claim/<N>,
+one per issue, taken by this command and by \`colab worktree new\` in one atomic create-only push
+(a [skip ci] commit, so no CI runs — #325, #550, #741), then the branch carrying the issue number,
+pushed at code-wrap. Two claimants for one issue race for the same lock; exactly one wins.
+A lock another tool took for this machine (an orchestrator spawning this session) is adopted.
+\`colab release\` and \`colab worktree rm\` release it. Also writes local state (fast path)
 and the tracker (the copy people read):
   gh issue edit N --add-assignee @me --add-label in-progress
 Remote unreachable → REFUSED (fail closed). Tracker unreachable → the claim stands and its tracker
@@ -1120,6 +1219,26 @@ function cmdClaim(argv) {
     }
   }
 
+  // #741: take the claim locks `refs/heads/claim/<N>` — one atomic create-only push, after every
+  // refusal above and before anything local is written, so a lost race leaves nothing behind here.
+  // The push decides the race the read above could only predict: two claimants that both read clear
+  // ground meet at the compare-and-swap, and exactly one ref creation succeeds.
+  const lockTake = takeClaimLocksFor(repoAbs, remoteCheck, nums, { branch, session, force: !!opts.force });
+  if (!lockTake.ok) {
+    const why = String(lockTake.stderr || '').split('\n').filter(Boolean).slice(-1)[0] || 'push refused';
+    process.stderr.write(`✗ Refusing — could not take the claim lock${nums.length > 1 ? 's' : ''} ${nums.map((n) => git.claimLockRef(n)).join(' ')} on ${remoteCheck.remote} (${why}).\n`);
+    process.stderr.write('  Most often another claimant took it a moment ago — the lock is created once, by one claimant (#741).\n');
+    process.stderr.write(`  Nothing was claimed. See who holds it: git ls-remote ${remoteCheck.remote} 'refs/heads/claim/*'\n`);
+    return 1;
+  }
+  const lockFor = (num) => (lockTake.locks[num] ? { lock: lockTake.locks[num] } : {});
+  for (const num of nums) {
+    const l = lockTake.locks[num];
+    if (!l) continue;
+    if (lockTake.taken.includes(num)) print(`  took claim lock ${remoteCheck.remote} ${l.ref} (#741)`);
+    else if (l.adopted) print(`  claim lock ${remoteCheck.remote} ${l.ref} was already taken on this machine for this work — adopted (#741)`);
+  }
+
   // #389: measured outside the lock (git, not state) — see the attach branch inside the mutation.
   const existingDir = wtName ? existingWorktreeFor(repoAbs, wtName, branch) : null;
   let attached = null;
@@ -1171,7 +1290,7 @@ function cmdClaim(argv) {
         const key = claimKey(repoAbs, num);
         const ex = st.claims[key];
         const sameHolder = !!ex && (ex.worktree || null) === (wtName || null);
-        const incoming = { issue: issueTag(num), repo: repoAbs, worktree: wtName, branch, host: HOST, machine: myMachineId(), session, sessionName, created: (ex && ex.created) || nowISO() };
+        const incoming = { issue: issueTag(num), repo: repoAbs, worktree: wtName, branch, host: HOST, machine: myMachineId(), session, sessionName, created: (ex && ex.created) || nowISO(), ...lockFor(num) };
         // #264/#267: ONE merge rule for both a plain first claim (ex absent — merge is a no-op,
         // `incoming` passes through), a same-worktree re-claim/correction (sameHolder — a blank
         // branch/session/sessionName never overwrites a known value), and a --force takeover from a
@@ -1208,7 +1327,12 @@ function cmdClaim(argv) {
           pendingRetry.push(num);
           continue;
         }
-        if (!changed) { reclaimed.push(num); continue; }
+        if (!changed) {
+          // #741: the lock is bookkeeping, not an assertion a human reads — recorded silently.
+          if (merged.lock && (!ex.lock || ex.lock.sha !== merged.lock.sha)) st.claims[key] = { ...ex, lock: merged.lock };
+          reclaimed.push(num);
+          continue;
+        }
         st.claims[key] = merged;
         updated.push(num);
         updatedDetails.push({ num, branch: merged.branch, was: ex.branch || null });
@@ -1216,6 +1340,9 @@ function cmdClaim(argv) {
       return { created, reclaimed, updated, updatedDetails, upgraded, pendingRetry };
     });
   } catch (e) {
+    // #741: nothing local landed, so the locks this call just pushed would stand on the remote owned
+    // by nobody — take them back off before reporting.
+    releaseClaimLocksOf(repoAbs, lockTake.taken.map((n) => ({ issue: issueTag(n), lock: lockTake.locks[n] })));
     // #285: an under-lock place-claim refusal is a genuine conflict, not an unreachable lock — say
     // so, and do not advise the worktree fallback the degrade path below is for.
     if (e && e.placeRace) { print(`✗ ${e.message}`); return placeRefusalCode(e.placeRace); }
@@ -2638,6 +2765,7 @@ function releaseFoundClaim(num, found, opts = {}) {
     warn(`gh not usable here (${ghUnusableWhy(repo)}) — released LOCAL-ONLY`);
   }
 
+  let releasedLock = null;
   let remaining = null;
   let placeOutcome = null;
   state.mutate((st) => {
@@ -2650,6 +2778,7 @@ function releaseFoundClaim(num, found, opts = {}) {
       c.releasePending = true;
       c.releaseNote = `GitHub release failed (${nowISO()}) — retry with: colab release ${num}`;
     } else {
+      if (c.lock) releasedLock = { issue: c.issue, lock: c.lock };
       delete st.claims[found.key];
       if (wtName) remaining = Object.values(st.claims).filter((cl) => cl.worktree === wtName).length;
       // #305: a claim with NO worktree took a checkout place-claim at `cmdClaim` (`takingPlace`),
@@ -2687,6 +2816,8 @@ function releaseFoundClaim(num, found, opts = {}) {
   });
 
   print(ghFailed ? `Release of #${num} recorded locally as PENDING (GitHub write failed — see above)` : `Released #${num} from ${shortRepo(repo)}`);
+  // #741: the claim lock goes with the claim (kept, with the claim, when the tracker write failed).
+  if (releasedLock) releaseClaimLocksOf(repo, [releasedLock]);
   // #305: say what happened to the checkout hold — silence here is what let the leak run unnoticed.
   // Nothing is printed when there was never a record to act on ('no-record'), which is the ordinary
   // case for every worktree claim and every `writes: isolated` repo.
@@ -6164,10 +6295,11 @@ function cmdWorktreeNew(argv) {
   const comps = claimIdentity.components(config);
 
   // ---- REFUSAL: don't build a worktree around issues someone else already holds ----
+  let remoteCheck = null;
   if (issues.length) {
     const st0 = state.loadState();
     // #325: the remote first — the branch on it is the claim record every machine reads.
-    const remoteCheck = remoteClaimConflicts(st0, repoAbs, issues);
+    remoteCheck = remoteClaimConflicts(st0, repoAbs, issues);
     if (remoteCheck.mode === 'unreachable') { printRemoteUnreachable(remoteCheck, 'worktree and its claims'); return 1; }
     if (remoteCheck.mode === 'no-remote') warn('no git remote — these claims are recorded on this machine only; no other machine can see them');
     const localConf = localClaimConflicts(st0, repoAbs, issues, name);
@@ -6251,38 +6383,32 @@ function cmdWorktreeNew(argv) {
   if (!add.ok) throw new UserError(`git worktree add failed: ${add.stderr}`);
   const baseSha = git.git(['rev-parse', '--short', `${remote}/${base}`], repoAbs).stdout;
 
-  // #325: push at cut. The branch on the remote IS the claim record another machine reads — before
-  // this the first push happened at code-wrap, hours after the claim, and triage named "an unpushed
-  // branch on another machine" as its own blind spot. `--force-with-lease=<ref>:` (empty expect) is
-  // CREATE-ONLY: two machines cutting the same name race on a real compare-and-swap, and the loser is
-  // rejected instead of overwriting. With issues to claim, a failed push takes nothing: the worktree
-  // and the zero-commit branch this invocation just made are removed again, so no half-claim exists
-  // anywhere. With no issues there is no claim to protect, and a failed push only warns.
-  //
-  // #550: what is pushed is the CLAIM REF `refs/claims/<branch>`, not the branch. A branch push fires
-  // every CI `push` trigger, and at cut the branch IS trunk's commit — so each cut re-ran a suite
-  // trunk had already passed (~27 % of one org's runs). A claim ref triggers nothing, and every
-  // claim reader (`remoteHeads`) lists it beside the branches. The branch itself is first pushed at
-  // code-wrap, when it has commits worth testing. The claim ref is deleted at `worktree rm`.
-  const pushRemote = git.claimRemote(repoAbs);
-  let pushed = false;
-  if (pushRemote) {
-    const claimRef = git.claimRef(branch);
-    const push = git.pushClaimRef(repoAbs, pushRemote, branch);
-    if (push.ok) {
-      pushed = true;
-      print(`  pushed ${claimRef} → ${pushRemote} (the claim record other machines read; not a branch, so no CI runs — the branch is pushed at code-wrap)`);
-    } else {
-      const why = String(push.stderr || '').split('\n').filter(Boolean).slice(-1)[0] || `exit ${push.code}`;
-      if (issues.length) {
-        git.git(['worktree', 'remove', '--force', wtPath], repoAbs);
-        git.git(['branch', '-D', branch], repoAbs);
-        throw new UserError(`git push ${pushRemote} ${claimRef} failed (${why}) — claim NOT taken: the worktree and branch ` +
-          'were removed again. The pushed claim ref is the record other machines read (#325, #550); fix the push ' +
-          `(access, network, or a claim ref of that name another machine just created — \`git ls-remote ${pushRemote} ${claimRef}\`) and re-run.`);
-      }
-      warn(`git push ${pushRemote} ${claimRef} failed (${why}) — worktree created, no claim ref on the remote`);
-    }
+  // #325: the claim record goes to the remote at cut — before this the first push happened at
+  // code-wrap, hours after the claim, and triage named "an unpushed branch on another machine" as its
+  // own blind spot. #550 moved it off the branch (a branch push at cut re-ran CI on trunk's commit) to
+  // `refs/claims/<branch>`; #741 moves it to THE lock, `refs/heads/claim/<N>` — one create-only ref
+  // per issue in the branch namespace every forge accepts, so two claimants cutting different branch
+  // names for one issue meet at the same compare-and-swap and exactly one wins. The lock commit
+  // carries `[skip ci]`, so the #550 promise (a claim starts no CI run) holds. With issues to claim, a
+  // lost or failed push takes nothing: the worktree and the zero-commit branch this invocation just
+  // made are removed again, so no half-claim exists anywhere. With no issues there is no claim, and
+  // nothing is pushed. The branch itself is first pushed at code-wrap; the locks go at `worktree rm`.
+  const lockTake = takeClaimLocksFor(repoAbs, remoteCheck, issues, { branch, session, force: !!opts.force });
+  if (!lockTake.ok) {
+    const why = String(lockTake.stderr || '').split('\n').filter(Boolean).slice(-1)[0] || 'push refused';
+    git.git(['worktree', 'remove', '--force', wtPath], repoAbs);
+    git.git(['branch', '-D', branch], repoAbs);
+    const refs = issues.map((n) => git.claimLockRef(n)).join(' ');
+    throw new UserError(`git push ${remoteCheck.remote} ${refs} failed (${why}) — claim NOT taken: the worktree and branch ` +
+      'were removed again. The claim lock is the record other machines read (#325, #741); most often another claimant ' +
+      `took it a moment ago — \`git ls-remote ${remoteCheck.remote} 'refs/heads/claim/*'\` — else fix the push (access, network) and re-run.`);
+  }
+  for (const num of issues) {
+    const l = lockTake.locks[num];
+    if (!l) continue;
+    if (lockTake.taken.includes(num)) print(`  took claim lock ${remoteCheck.remote} ${l.ref} (the claim record other machines read; [skip ci], so no CI runs — the branch is pushed at code-wrap)`);
+    else if (l.adopted) print(`  claim lock ${remoteCheck.remote} ${l.ref} was already taken on this machine for this work — adopted (#741)`);
+    else print(`  claim lock ${remoteCheck.remote} ${l.ref} is already this machine's — kept`);
   }
 
   // How far behind trunk the line is, as INFORMATION — never a threshold. A long-lived line is
@@ -6303,14 +6429,14 @@ function cmdWorktreeNew(argv) {
   }
 
   // 3. allocate ports + record worktree + claims (atomic)
-  // #325: if recording fails after the push above, take the pushed claim ref back off the remote —
+  // #325: if recording fails after the push above, take the pushed claim locks back off the remote —
   // otherwise it would stand there as a claim record nothing on any machine owns, refusing every
   // later claim on these issues. (The local worktree is left as before this change.)
   let alloc;
   try {
     alloc = allocWorktreeRecord();
   } catch (e) {
-    if (pushed) git.deleteClaimRef(repoAbs, pushRemote, branch);
+    releaseClaimLocksOf(repoAbs, lockTake.taken.map((n) => ({ issue: issueTag(n), lock: lockTake.locks[n] })));
     throw e;
   }
   function allocWorktreeRecord() { return state.mutate((st) => {
@@ -6349,7 +6475,7 @@ function cmdWorktreeNew(argv) {
       // kept OUT of the tracker writes below (assignee/label/comment are already there).
       if (ex && !ex.worktree && claimIdentity.isIntentSession(ex.session) && machine.isLocal(ex)) {
         st.claims[key] = claimIdentity.mergeClaimRecord(ex,
-          { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, machine: myMachineId(), session, sessionName, created: ex.created || nowISO() },
+          { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, machine: myMachineId(), session, sessionName, created: ex.created || nowISO(), ...(lockTake.locks[num] ? { lock: lockTake.locks[num] } : {}) },
           { sameHolder: true });
         upgraded.push(num);
         continue;
@@ -6358,7 +6484,7 @@ function cmdWorktreeNew(argv) {
       // by this point, so `mergeClaimRecord` behaves the same as the direct-overwrite this used to
       // be — but routes it through the ONE #264 merge rule (tools/lib/claim-identity.js) rather than
       // a second, independently-drifting overwrite.
-      const incoming = { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, machine: myMachineId(), session, sessionName, created: (ex && ex.created) || nowISO() };
+      const incoming = { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, machine: myMachineId(), session, sessionName, created: (ex && ex.created) || nowISO(), ...(lockTake.locks[num] ? { lock: lockTake.locks[num] } : {}) };
       if (ex) { dupes.push(num); st.claims[key] = claimIdentity.mergeClaimRecord(ex, incoming, { sameHolder: true }); continue; }
       st.claims[key] = incoming;
       claimedNums.push(num);
@@ -6530,6 +6656,7 @@ function cmdWorktreeRm(argv) {
     // record, deleted a few lines below by `delete st.places[place.placeKey(wt.path)]`.
     const claims = Object.keys(st.claims).filter((k) => st.claims[k].worktree === name);
     let deleted = 0;
+    const releasedLocks = [];
     for (const k of claims) {
       const c = st.claims[k];
       if (gh && trackerFailedSet.has(normIssueNum(c.issue))) {
@@ -6538,6 +6665,7 @@ function cmdWorktreeRm(argv) {
         c.releaseNote = `GitHub release failed at worktree rm (${nowISO()}) — retry with: colab release ${normIssueNum(c.issue)}`;
         continue;
       }
+      if (c.lock) releasedLocks.push({ issue: c.issue, lock: c.lock });
       delete st.claims[k];
       deleted++;
     }
@@ -6548,15 +6676,19 @@ function cmdWorktreeRm(argv) {
     // record surviving teardown is harmless: its liveness will read `false` (pid gone) the moment
     // anyone next checks it.
     if (st.places && wt.path) delete st.places[place.placeKey(wt.path)];
-    return { claims: deleted, freedPorts };
+    return { claims: deleted, freedPorts, releasedLocks };
   });
 
   print(`✓ Removed worktree "${name}"`);
   if (removal.action === 'rm-rf') print('  (directory was a husk from an earlier interrupted removal — cleaned up directly)');
-  // #550: the claim ref `worktree new` pushed is this worktree's claim record on the remote — release
-  // it with the claims, or it would stand there refusing every later claim on these issue numbers from
-  // another machine. Best effort: an absent ref is fine (never pushed, a pre-#550 worktree, or already
-  // gone), a failed delete only warns with the command, and nothing above is undone for it.
+  // #741: the claim locks the released claims held — each deleted only while it still points at the
+  // recorded sha, so a lock someone else re-took is never removed. A claim whose tracker release
+  // failed keeps its claim AND its lock (releasePending): the retry releases both.
+  releaseClaimLocksOf(repoAbs, removed.releasedLocks || []);
+  // #550: the legacy claim ref a pre-#741 `worktree new` pushed is this worktree's claim record on the
+  // remote — release it with the claims, or it would stand there refusing every later claim on these
+  // issue numbers from another machine. Best effort: an absent ref is fine (never pushed, a #741+
+  // worktree, or already gone), a failed delete only warns with the command, and nothing above is undone.
   if (wt.branch) {
     let claimRemoteName = null;
     try { claimRemoteName = git.claimRemote(repoAbs); } catch { claimRemoteName = null; }

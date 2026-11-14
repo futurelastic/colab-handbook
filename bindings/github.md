@@ -226,8 +226,9 @@ When two claims race, the later one yields to the earlier and says whose won:
 ✅ Released (yielded — earlier claim by user-a@h:48773651d08a wins)
 ```
 
-A **place-claim** holds a checkout, not an issue: a ref `refs/claims/<branch>` pushed to
-the remote. No comment, so **prose only**.
+At the git level a claim is also held by its **lock**, the ref `refs/heads/claim/<N>` pushed to
+the remote (a legacy `refs/claims/<branch>` still counts). A **place-claim** holds a checkout, not
+an issue. Neither has a comment, so **prose only**.
 
 A **park** holds an issue until its wake condition: the label (`deferred:*`,
 `blocked:needs-<owner>`, `needs-decision`…) plus one comment of two lines — ` — owner: `,

@@ -196,7 +196,9 @@ function sameClaimant(a, b, comps) {
 function mergeClaimRecord(existing, incoming, { sameHolder } = {}) {
   const merged = { ...incoming };
   if (existing && sameHolder) {
-    for (const field of ['branch', 'session', 'sessionName']) {
+    // #741: `lock` — the remote claim lock this claim holds — survives a same-holder re-claim, or the
+    // release would no longer know which lock is its own.
+    for (const field of ['branch', 'session', 'sessionName', 'lock']) {
       if (!merged[field] && existing[field]) merged[field] = existing[field];
     }
   }

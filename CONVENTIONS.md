@@ -121,7 +121,7 @@ an example, never the definition; its exact strings are in [`bindings/github.md`
 | **issue** | One unit of work and its memory: the goal, the decisions, the evidence ([§5](#5-claiming-work--how-to-say-im-on-this)). | an issue |
 | **parent / child** | An issue holding others as its parts, and those parts. A parent is a container, not a start candidate ([§5, *Epics*](#epics--a-container-is-not-a-start-candidate)). | sub-issues |
 | **depends on** | X cannot start until Y's output exists. Never mere file contention ([§5, *Readiness*](#readiness--open-and-unclaimed-is-not-enough)). | a `blocked_by` relationship |
-| **hold** | A record that something is not free to take: a claim holds an issue, a place-claim a checkout, a park an issue until its wake condition ([§5](#disposition--a-park-must-name-its-wake-condition-279)). | assignee + `in-progress`; `refs/claims/*`; a `deferred:*` label |
+| **hold** | A record that something is not free to take: a claim holds an issue, a place-claim a checkout, a park an issue until its wake condition ([§5](#disposition--a-park-must-name-its-wake-condition-279)). | assignee + `in-progress`; `refs/heads/claim/<N>`; a `deferred:*` label |
 | **holder** | Whoever a hold names — a session, by its session id. For a file, every branch touching it that has not landed (`colab holders`). | the claim's session id |
 | **lane** | A route by kind: an issue's by what finishing it produces ([§5, *Delivery type*](#delivery-type--route-not-start-112)), CI's light or heavy run ([§7](#two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607)). | a `delivery:*` label; a workflow |
 | **evidence** | What shows an issue's outcome: the trunk sha, a `file:line`, and what was checked, posted on the issue before it closes. | an issue comment |
@@ -1326,9 +1326,10 @@ Parallel sessions and parallel agents must not collide on the same Issue. Two la
 #### Record of a claim — the branch on the remote
 
 A claim is taken before work starts and recorded where every machine sharing the repo can read it —
-the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), item 1. How the CLI
-records it, what it refuses and the planner hold:
-[`tools/docs/claims.md`](tools/docs/claims.md#record-of-a-claim--the-branch-on-the-remote).
+the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), item 1.
+The lock is one ref per issue in the branch namespace, `refs/heads/claim/<N>`: claimants for one
+issue race for it and exactly one wins (#741). How the CLI records it, what it refuses, the legacy
+ref and the planner hold: [`tools/docs/claims.md`](tools/docs/claims.md#record-of-a-claim--the-branch-on-the-remote).
 
 #### Factories — several teams on one repository (#739)
 

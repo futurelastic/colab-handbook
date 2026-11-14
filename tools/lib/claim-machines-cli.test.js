@@ -167,6 +167,14 @@ function remoteHas(fx, branch) {
 function remoteHasClaim(fx, branch) {
   return g(fx.work, 'ls-remote', 'origin', `refs/claims/${branch}`).trim() !== '';
 }
+// #741: the claim lock, one per issue — refs/heads/claim/<N>.
+function remoteHasLock(fx, num) {
+  return g(fx.work, 'ls-remote', 'origin', `refs/heads/claim/${num}`).trim() !== '';
+}
+function lockMessage(fx, num) {
+  g(fx.work, 'fetch', '-q', 'origin', `refs/heads/claim/${num}`);
+  return g(fx.work, 'log', '-1', '--format=%B', 'FETCH_HEAD');
+}
 function jsonOut(out) { return JSON.parse(out.slice(out.indexOf('{'))); }
 
 // --- #327: canonical machine id ------------------------------------------------------------------
@@ -329,19 +337,19 @@ test('#325: machine A cuts + pushes; machine B (a clone that never fetched) is r
   const b = machineB(fx); // cloned BEFORE A pushes — B never sees the branch through a fetch
   const ra = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 'sA']);
   assert.strictEqual(ra.code, 0, ra.out + ra.err);
-  assert.ok(remoteHasClaim(fx, 'feat/x-9'), 'worktree new must push the claim ref at cut');
+  assert.ok(remoteHasLock(fx, 9), 'worktree new must take the claim lock at cut (#741)');
   assert.ok(!remoteHas(fx, 'feat/x-9'), '#550: and NOT the branch — a branch push re-runs CI on trunk\'s commit');
 
   const rb = colab(fx, ['claim', '9', '--session', 'sB'], b);
   assert.strictEqual(rb.code, 1, rb.out + rb.err);
-  assert.match(rb.err, /claim ref origin refs\/claims\/feat\/x-9/);
-  assert.match(rb.err, /git fetch origin refs\/claims\/feat\/x-9:refs\/heads\/feat\/x-9 && git worktree add/);
+  assert.match(rb.err, /claim lock origin refs\/heads\/claim\/9 @ [0-9a-f]{7} \(branch feat\/x-9/);
+  assert.match(rb.err, /once its branch is pushed: git fetch origin feat\/x-9 && git worktree add/);
   assert.strictEqual(claimsFor(b.home, 9).length, 0);
 
   const rb2 = colab(fx, ['worktree', 'new', 'feat/y-9', '--issues', '9', '--session', 'sB'], b);
   assert.strictEqual(rb2.code, 1, rb2.out + rb2.err);
-  assert.match(rb2.err, /refs\/claims\/feat\/x-9/);
-  assert.ok(!remoteHasClaim(fx, 'feat/y-9'));
+  assert.match(rb2.err, /refs\/heads\/claim\/9/);
+  assert.match(lockMessage(fx, 9), /^Branch: feat\/x-9$/m, 'the lock is still A\'s');
 
   // Resume on A: its own branch is its own claim record.
   const ra2 = colab(fx, ['claim', '9', '--worktree', 'x-9', '--branch', 'feat/x-9', '--session', 'sA']);
@@ -354,7 +362,8 @@ test('#325: --force on machine B takes the remote-carried claim over loudly', ()
   assert.strictEqual(colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 'sA']).code, 0);
   const rb = colab(fx, ['claim', '9', '--worktree', 'wb', '--session', 'sB', '--force'], b);
   assert.strictEqual(rb.code, 0, rb.out + rb.err);
-  assert.match(rb.out, /--force: taking over #9 although claim ref origin refs\/claims\/feat\/x-9/);
+  assert.match(rb.out, /--force: taking over #9 although claim lock origin refs\/heads\/claim\/9/);
+  assert.match(lockMessage(fx, 9), /^Session: sB$/m, 'the lock now names B\'s session');
 });
 
 test('#325: tracker unreachable, remote reachable → the claim succeeds with its tracker half PENDING, completed by re-running it', () => {
@@ -427,8 +436,9 @@ test('#325: single machine, nothing elsewhere → worktree new claims exactly as
   assert.strictEqual(r.code, 0, r.out + r.err);
   const [[, c]] = claimsFor(fx.home, 9);
   assert.deepStrictEqual(Object.keys(c).sort(),
-    ['branch', 'created', 'host', 'issue', 'machine', 'repo', 'session', 'sessionName', 'worktree'].sort());
-  assert.ok(remoteHasClaim(fx, 'feat/x-9'));
+    ['branch', 'created', 'host', 'issue', 'lock', 'machine', 'repo', 'session', 'sessionName', 'worktree'].sort());
+  assert.strictEqual(c.lock.ref, 'refs/heads/claim/9');
+  assert.strictEqual(g(fx.work, 'ls-remote', 'origin', 'refs/heads/claim/9').split('\t')[0], c.lock.sha, 'the record holds the lock it pushed');
   const is = issueState(fx, 9);
   assert.deepStrictEqual(is.assignees, ['me']);
   assert.strictEqual(is.comments.length, 1);
@@ -447,15 +457,15 @@ test('#550: the branch pushed for real later still refuses machine B — one row
   assert.doesNotMatch(rb.err, /claim ref origin/);
 });
 
-test('#550: worktree rm deletes the claim ref, and the issue is claimable from another machine again', () => {
+test('#550/#741: worktree rm releases the claim lock, and the issue is claimable from another machine again', () => {
   const fx = fixture();
   const b = machineB(fx);
   assert.strictEqual(colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 'sA']).code, 0);
-  assert.ok(remoteHasClaim(fx, 'feat/x-9'));
+  assert.ok(remoteHasLock(fx, 9));
   const rm = colab(fx, ['worktree', 'rm', 'x-9']);
   assert.strictEqual(rm.code, 0, rm.out + rm.err);
-  assert.match(rm.out, /deleted claim ref origin refs\/claims\/feat\/x-9/);
-  assert.ok(!remoteHasClaim(fx, 'feat/x-9'));
+  assert.match(rm.out, /released claim lock origin refs\/heads\/claim\/9/);
+  assert.ok(!remoteHasLock(fx, 9));
   const rb = colab(fx, ['claim', '9', '--session', 'sB'], b);
   assert.strictEqual(rb.code, 0, rb.out + rb.err);
 });
@@ -478,7 +488,7 @@ test('#485: an open dependabot/...-9 ref on origin does not hold #9 — worktree
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.doesNotMatch(r.err, /dependabot/);
   assert.strictEqual(claimsFor(fx.home, 9).length, 1);
-  assert.ok(remoteHasClaim(fx, 'feat/x-9'));
+  assert.ok(remoteHasLock(fx, 9));
 });
 
 test('#485: a session branch ending in the same number still refuses — only the bot ref is filtered', () => {

@@ -14,11 +14,32 @@ The rule: [CONVENTIONS.md, *Record of a claim — the branch on the remote*](../
 
 **[Hard — gate: colab claim refuses]** **The record of a claim is its branch on the git remote** — the branch whose name carries
 the issue number ([§4](../../CONVENTIONS.md#4-branches-and-commits)), recorded **the moment it is cut** at session
-start and pushed at wrap (#325). At the cut it is recorded as the **claim ref**
-`refs/claims/<branch>`, not the branch: a branch push fires every CI `push` trigger on a commit
-trunk already tested, and a claim ref fires none (#550). It is deleted at `colab worktree rm`.
-A claim is refused against the git remote: a branch or claim ref on the remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
+start and pushed at wrap (#325). At the cut — and at a `colab claim` — it is recorded as the
+**claim lock** `refs/heads/claim/<N>`, one per issue, not the branch (#741). A branch push at cut
+fires every CI `push` trigger on a commit trunk already tested (#550); the lock commit says
+`[skip ci]`, so no CI run starts. It is released at `colab worktree rm` and `colab release`.
+A claim is refused against the git remote: a lock, a branch or a legacy claim ref on the remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
 anywhere, naming the ref and how to continue it. Each machine sweeps its own worktrees.
+
+- **The lock.** One ref per issue in the branch namespace, which every forge accepts — custom
+  namespaces such as `refs/claims/*` are not safe to assume. It points at a parentless commit on
+  the empty tree (it changes no path, so `holders` and `landed` never list it) whose trailers name
+  the holder: `Branch:`, `Machine:`, `Machine-Id:`, `Session:`, `Claimed-At:`, `Claimed-By: colab`.
+  Every issue of a group is taken in **one atomic, create-only push**
+  (`--force-with-lease=refs/heads/claim/<N>:`), so the branch takes all of its issues or none, and
+  two claimants for one issue — whatever their branch names — meet at the same compare-and-swap:
+  exactly one wins, even when both read clear ground first. `--force` leases on the holder it saw.
+- **Whose lock.** A lock this tool wrote is this machine's only when its own claim record holds
+  that exact commit — two colab homes on one host share the hardware, so a `Machine:` line cannot
+  tell them apart. A lock another tool wrote (no `Claimed-By: colab`) naming **this** machine is an
+  orchestrator holding the issue for the session it spawned here: that session adopts it instead
+  of being refused, and releases it like its own. A lock whose commit cannot be read is foreign.
+- **Release** deletes a lock only while it still points at the recorded commit, so a lock someone
+  else took since is never removed. A stale lock is named in the refusal with its delete command.
+- **Legacy.** `refs/claims/<branch>` (#550, before #741) is no longer written. One left by an
+  older claim still refuses and is still deleted at `colab worktree rm`, until none is left.
+- Only `refs/heads/claim/<digits>` is a lock; any other `claim/…` ref is some tool's own and is
+  ignored. No reader treats a lock as a session branch.
 
 - **[Hard — gate: colab claim refuses]** **Remote unreachable → no claim.** Fail closed: a claim checked against nothing is not a
   lock. A repo with **no remote at all** is the one exception — nothing else could ever share
