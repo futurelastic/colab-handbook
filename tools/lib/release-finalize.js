@@ -345,13 +345,22 @@ const CUT_RUN_SLACK_MS = 120000;
  * pending run GitHub cancelled out of the release workflow's concurrency group when a newer one queued —
  * so it cut nothing and is dropped. Asked lazily, only for a cancelled row; null (unread) keeps it.
  *
+ * A SKIPPED row whose jobs `jobsOf(databaseId)` read as all skipped (or none at all) never started a
+ * job — the measured shape of a post-cut `workflow_run` smoke whose every job is gated by
+ * `if: vars.<LANE>_CI == 'true'` while that lane has no runner (#749). It published nothing, so it is
+ * neutral, the way #616 treats a skipped-only workflow for ci-green/full-suite, and the verdict names it
+ * once. Asked lazily, only for a skipped row; null (unread) keeps it, and so does a run where any job
+ * did something other than skip — a job that ran and then a publish skipped or cancelled is still the
+ * #566 refusal. A re-run cannot change a skipped run (the same `if:` skips it again), so the refusal
+ * offers `gh run rerun` only for a run that can conclude differently.
+ *
  * No run in progress at the cut → ok: the candidate was cut by hand (`colab release cut` outside a
  * workflow), and no run owes it anything. A completed row with no `updatedAt` (an older read) cannot
  * be placed around the cut and is not counted — absence of the field never refuses.
  *
  * Returns { ok, detail, runs } — `runs` the cutter rows' ids, for the report.
  */
-function cutRunVerdict(rows, { tag, cutAt, ownRunId = null, jobCount = null } = {}) {
+function cutRunVerdict(rows, { tag, cutAt, ownRunId = null, jobCount = null, jobsOf = null } = {}) {
   if (rows === null || rows === undefined) return { ok: false, detail: `the workflow runs at ${tag} could not be read — the run that cut it cannot be checked`, runs: [] };
   const cut = Date.parse(cutAt);
   if (Number.isNaN(cut)) return { ok: false, detail: `${tag} carries no readable cut time — the run that cut it cannot be found`, runs: [] };
@@ -366,16 +375,34 @@ function cutRunVerdict(rows, { tag, cutAt, ownRunId = null, jobCount = null } = 
     if (r.conclusion === 'cancelled' && typeof jobCount === 'function' && r.databaseId != null && jobCount(r.databaseId) === 0) return false;
     return true;
   });
-  const ids = cutters.map((r) => r.databaseId).filter((x) => x !== null && x !== undefined);
   const name = (r) => `${r.workflowName || '(unnamed workflow)'} run ${r.databaseId != null ? r.databaseId : '(id unread)'}`;
+  // #749: a skipped run that started no job is gated off by its own `if:` — neutral, named once.
+  const gatedOff = (r) => {
+    if (r.status !== 'completed' || r.conclusion !== 'skipped' || typeof jobsOf !== 'function' || r.databaseId == null) return false;
+    const jobs = jobsOf(r.databaseId);
+    return Array.isArray(jobs) && jobs.every((j) => j && j.status === 'completed' && j.conclusion === 'skipped');
+  };
+  const neutral = cutters.filter(gatedOff);
+  const vouching = cutters.filter((r) => !neutral.includes(r));
+  const note = neutral.length ? ` (${neutral.map((r) => `${name(r)} skipped by its own gate — not a publisher at this candidate`).join('; ')})` : '';
+  const ids = vouching.map((r) => r.databaseId).filter((x) => x !== null && x !== undefined);
   if (!cutters.length) return { ok: true, detail: `no workflow run at ${tag} was in progress when it was cut (${cutAt}) — cut by hand, no run's publish to wait for`, runs: [] };
-  const bad = cutters.filter((r) => !(r.status === 'completed' && r.conclusion === 'success'));
-  if (!bad.length) return { ok: true, detail: `the run that cut ${tag} (${cutters.map(name).join(', ')}) concluded success`, runs: ids };
+  if (!vouching.length) return { ok: true, detail: `no run that cut ${tag} published anything after the cut${note}`, runs: [] };
+  const bad = vouching.filter((r) => !(r.status === 'completed' && r.conclusion === 'success'));
+  if (!bad.length) return { ok: true, detail: `the run that cut ${tag} (${vouching.map(name).join(', ')}) concluded success${note}`, runs: ids };
   const how = (r) => (r.status === 'completed' ? `concluded ${r.conclusion || 'with no conclusion'}` : `is still ${r.status || 'running'}`);
-  const rerun = bad.filter((r) => r.status === 'completed' && r.databaseId != null).map((r) => `gh run rerun ${r.databaseId} --failed`);
+  // A skipped run is skipped again by the same `if:` on a re-run — never offer one for it.
+  const rerunnable = (r) => r.status === 'completed' && r.conclusion !== 'skipped' && r.databaseId != null;
+  const rerun = bad.filter(rerunnable).map((r) => `gh run rerun ${r.databaseId} --failed`);
+  const running = bad.some((r) => r.status !== 'completed');
+  const skipped = bad.filter((r) => r.status === 'completed' && r.conclusion === 'skipped');
+  const next = [];
+  if (rerun.length) next.push(`Re-run it (${rerun.join('; ')}) and finalize again, or cut a new candidate.`);
+  else if (running) next.push('Wait for it to finish, then finalize again.');
+  if (skipped.length) next.push(`A re-run cannot change ${skipped.map(name).join(', ')}: a skipped run is skipped again by the same condition, and ${typeof jobsOf === 'function' ? 'its jobs show one did not skip, or could not be read' : 'its jobs were not read'} — look at its jobs; if none started, it is gated off and publishes nothing (#749).`);
   return {
     ok: false,
-    detail: `the run that cut ${tag} — ${bad.map((r) => `${name(r)} ${how(r)}`).join('; ')} — did not finish what it publishes after the cut (an image, a package, a Release): ${tag}'s artifacts may not exist. An earlier green run at the same commit that cut nothing cannot vouch for it (#566). ${rerun.length ? `Re-run it (${rerun.join('; ')}) and finalize again, or cut a new candidate.` : 'Wait for it to finish, then finalize again.'}`,
+    detail: `the run that cut ${tag} — ${bad.map((r) => `${name(r)} ${how(r)}`).join('; ')} — did not finish what it publishes after the cut (an image, a package, a Release): ${tag}'s artifacts may not exist. An earlier green run at the same commit that cut nothing cannot vouch for it (#566).${note} ${next.join(' ')}`,
     runs: ids,
   };
 }

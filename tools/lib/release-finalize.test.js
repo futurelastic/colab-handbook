@@ -695,6 +695,61 @@ test('#566 cutRunVerdict: the calling run is not its own cutter; a cancelled run
   assert.strictEqual(rf.cutRunVerdict(displaced, { tag: 't', cutAt: CUT }).ok, false);
 });
 
+// ---- #749: a post-cut workflow skipped by its own repo-variable gate ------------------------------
+
+const job = (name, conclusion, status = 'completed') => ({ name, status, conclusion });
+
+test('#749 cutRunVerdict: a post-cut run concluded skipped with every job skipped is neutral, named once', () => {
+  const rows = [
+    cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(20) }), // the release run, green
+    cutRow({ databaseId: 910, createdAt: off(1), updatedAt: off(1), conclusion: 'skipped', workflowName: 'Smoke (lane)' }), // gated off
+  ];
+  const jobsOf = (id) => (id === 910 ? [job('smoke-a', 'skipped'), job('smoke-b', 'skipped')] : [job('cut', 'success')]);
+  const v = rf.cutRunVerdict(rows, { tag: 'v1.2.1-rc.4', cutAt: CUT, jobsOf });
+  assert.strictEqual(v.ok, true);
+  assert.deepStrictEqual(v.runs, [902]);
+  assert.match(v.detail, /concluded success/);
+  assert.strictEqual(v.detail.match(/Smoke \(lane\) run 910 skipped by its own gate — not a publisher at this candidate/g).length, 1);
+  // Only the gated-off run around the cut (a hand cut with a smoke trailing it) is still ok.
+  const alone = rf.cutRunVerdict([rows[1]], { tag: 't', cutAt: CUT, jobsOf });
+  assert.strictEqual(alone.ok, true);
+  assert.deepStrictEqual(alone.runs, []);
+  assert.match(alone.detail, /skipped by its own gate/);
+  // A run skipped with no jobs at all started nothing either.
+  assert.strictEqual(rf.cutRunVerdict([rows[1]], { tag: 't', cutAt: CUT, jobsOf: () => [] }).ok, true);
+});
+
+test('#749 cutRunVerdict: a skipped run whose jobs are unread, or where a job ran, still refuses — without a re-run hint', () => {
+  const smoke = cutRow({ databaseId: 910, createdAt: off(1), updatedAt: off(1), conclusion: 'skipped', workflowName: 'Smoke (lane)' });
+  for (const [why, opts] of [['no reader', {}], ['unread jobs', { jobsOf: () => null }], ['a job ran', { jobsOf: () => [job('build', 'success'), job('publish', 'skipped')] }]]) {
+    const v = rf.cutRunVerdict([smoke], { tag: 't', cutAt: CUT, ...opts });
+    assert.strictEqual(v.ok, false, why);
+    assert.match(v.detail, /Smoke \(lane\) run 910 concluded skipped/, why);
+    assert.doesNotMatch(v.detail, /gh run rerun/, why);
+    assert.doesNotMatch(v.detail, /skipped by its own gate/, why);
+    assert.match(v.detail, /A re-run cannot change Smoke \(lane\) run 910/, why);
+  }
+});
+
+test('#749 cutRunVerdict: the #566 case still refuses — the publish job cancelled or skipped after another job ran', () => {
+  const cancelled = cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(20), conclusion: 'cancelled' });
+  const jobsOf = () => [job('build', 'success'), job('publish', 'cancelled')];
+  const v = rf.cutRunVerdict([cancelled], { tag: 't', cutAt: CUT, jobsOf, jobCount: () => 2 });
+  assert.strictEqual(v.ok, false);
+  assert.match(v.detail, /gh run rerun 902 --failed/, 'a cancelled run can conclude differently — the re-run hint stays');
+  // A failed cutter beside a gated-off smoke: refuses on the cutter, names the smoke as neutral, offers the re-run.
+  const mixed = rf.cutRunVerdict([
+    cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(20), conclusion: 'failure' }),
+    cutRow({ databaseId: 910, createdAt: off(1), updatedAt: off(1), conclusion: 'skipped', workflowName: 'Smoke (lane)' }),
+  ], { tag: 't', cutAt: CUT, jobsOf: (id) => (id === 910 ? [job('smoke', 'skipped')] : [job('build', 'success'), job('publish', 'failure')]) });
+  assert.strictEqual(mixed.ok, false);
+  assert.deepStrictEqual(mixed.runs, [902]);
+  assert.match(mixed.detail, /run 902 concluded failure/);
+  assert.match(mixed.detail, /Smoke \(lane\) run 910 skipped by its own gate/);
+  assert.match(mixed.detail, /gh run rerun 902 --failed/);
+  assert.doesNotMatch(mixed.detail, /gh run rerun 910/);
+});
+
 test('#566 decide: a candidate whose cutting run was cancelled is refused on the human row; a green one stays candidate-ready', () => {
   const rows = [
     cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(20), conclusion: 'cancelled' }),
