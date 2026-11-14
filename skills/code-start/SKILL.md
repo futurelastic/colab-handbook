@@ -398,10 +398,8 @@ divergence.
 **The record of a claim is its branch on the git remote; the tracker is its mirror for
 people** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), *Record of a claim*, #325). What that means here:
 
-- `colab worktree new` (step 4) **takes the claim lock `refs/heads/claim/<N>` at cut**, one per issue —
-  the record refused against; not the branch, and its commit says `[skip ci]`, so no CI runs (#550,
-  #741). `colab claim` takes it too. Plain git: a create-only push of a `[skip ci]` commit,
-  `git push origin --force-with-lease=refs/heads/claim/<N>: <commit>:refs/heads/claim/<N>`.
+- `colab worktree new` (step 4) and `colab claim` **take the lock `refs/heads/claim/<N>`**, one per issue —
+  the record refused against: a `[skip ci]` commit, never the branch, so no CI runs (#550, #741). Plain git: step 4.
 - `colab claim` / `colab worktree new` **refuse** when a branch or claim ref on the remote carries `#N` and
   is not this machine's, and name it with the commands to continue it. That is not an obstacle
   to route around — it is step 3's "Found one → continue it" arriving before you branched. Only
@@ -583,9 +581,7 @@ colab worktree new <type>/<slug>-$N --issues $N --ports 1 \
 #   spell the prefix yourself here: <login>/<machine>/<type>/<slug>-$N.
 git fetch --prune origin                     # the cut below must be origin's tip NOW, not a cache
 git worktree add -b <type>/<slug>-$N ../<slug>-$N origin/<trunk>
-C=$(git commit-tree --no-gpg-sign "$(git mktree </dev/null)" -m "claim: #$N" -m "Branch: <type>/<slug>-$N
-[skip ci]")
-git push origin --force-with-lease=refs/heads/claim/$N: "$C:refs/heads/claim/$N"   # the lock (#325, #741) — [skip ci], so no CI run (#550)
+git push origin --force-with-lease=refs/heads/claim/$N: "$(git commit-tree --no-gpg-sign "$(git mktree </dev/null)" -m "claim: #$N" -m '[skip ci]'):refs/heads/claim/$N"   # the lock, create-only (#325, #741)
 ```
 
 **Cut from a freshly fetched `origin/<trunk>`, never from local trunk (#349).** Local trunk
