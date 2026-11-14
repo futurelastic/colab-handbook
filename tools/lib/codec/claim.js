@@ -30,6 +30,11 @@ const SESSION_RE = /· session (.+)$/;
 // SESSION_RE's end anchor both parse a new comment exactly as they parse a legacy one, and a legacy
 // comment (no such field) simply has no machine and is compared by host.
 const MACHINE_RE = /· machine `(m:[0-9a-f]{12})`/;
+// #743: the claiming FACTORY (`.github/factories.yml`, #739) — written after the machine and BEFORE
+// the session suffix, for the same reason the machine field sits there: CLAIM_RE's four groups and
+// SESSION_RE's end anchor read a new comment exactly as they read a legacy one, so an older colab
+// parses it unchanged and simply ignores the field. The id grammar is factories.js FACTORY_ID_RE.
+const FACTORY_RE = /· factory `([a-z0-9][a-z0-9-]{0,38})`/;
 // A yield: the loser of a race releases, naming the winner by its identity string
 // (`claimIdentity.identityString` — `login@host`, or `login@host#session` under the fine setting).
 const YIELD_RE = /^✅ Released \(yielded — earlier claim by (.+?) wins\)/;
@@ -102,14 +107,15 @@ function parseIdentity(s) {
  * (#327, the field is then omitted); `host` is the raw hostname or its `h:` token, whichever the
  * destination allows (#369 — deciding that is the caller's job, not the codec's).
  */
-function encodeClaim({ worktree, branch, host, at, machine, session, sessionName } = {}) {
+function encodeClaim({ worktree, branch, host, at, machine, factory, session, sessionName } = {}) {
   const base = `${CLAIM_MARK} — worktree \`${worktree || '-'}\` · branch \`${branch || '-'}\` · host \`${host}\` · ${at}`;
   const mach = machine ? ` · machine \`${machine}\`` : '';
-  return base + mach + encodeSessionField(session, sessionName);
+  const fac = factory ? ` · factory \`${factory}\`` : ''; // #743 — omitted where no factories file names one
+  return base + mach + fac + encodeSessionField(session, sessionName);
 }
 
 /**
- * A claim comment body → { worktree, branch, host, at, machine, session, sessionName }, or null when
+ * A claim comment body → { worktree, branch, host, at, machine, factory, session, sessionName }, or null when
  * the body carries no claim. Lenient exactly where the readers always were (CLAIM_RE is unanchored,
  * a legacy comment simply lacks machine/session), and lossless on what `encodeClaim` writes:
  * `worktree`/`branch` keep a literal `-` rather than mapping it to empty, so the pair round-trips.
@@ -119,8 +125,12 @@ function decodeClaim(body) {
   const m = str.match(CLAIM_RE);
   if (!m) return null;
   const mm = str.match(MACHINE_RE);
+  // #743: the factory is read only BEFORE the session tail — a session name is free text and could
+  // itself spell `· factory \`x\``; the writer never puts the field after it.
+  const tail = str.match(SESSION_RE);
+  const fm = (tail ? str.slice(0, tail.index) : str).match(FACTORY_RE);
   const { session, sessionName } = parseSessionField(str);
-  return { worktree: m[1], branch: m[2], host: m[3], at: m[4], machine: mm ? mm[1] : '', session, sessionName };
+  return { worktree: m[1], branch: m[2], host: m[3], at: m[4], machine: mm ? mm[1] : '', factory: fm ? fm[1] : '', session, sessionName };
 }
 
 /**
@@ -147,7 +157,7 @@ function decodeRelease(body) {
 }
 
 module.exports = {
-  CLAIM_MARK, RELEASE_MARK, CLAIM_RE, SESSION_RE, MACHINE_RE, YIELD_RE,
+  CLAIM_MARK, RELEASE_MARK, CLAIM_RE, SESSION_RE, MACHINE_RE, FACTORY_RE, YIELD_RE,
   looksLikeSessionId,
   encodeSessionField, parseSessionField,
   encodeIdentity, parseIdentity,

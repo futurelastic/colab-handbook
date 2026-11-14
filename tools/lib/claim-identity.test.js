@@ -224,3 +224,25 @@ test('#326 sameClaimant: an intent id is never a DIFFERENT session under the fin
     { login: 'me', host: 'box', machine: 'iokit:A', session: 'intent:p1' }, { login: 'me', host: 'box', machine: 'iokit:B', session: 's1' }, fine),
   false, 'an intent id relaxes only the session compare, never the machine');
 });
+
+// --- #743: the factory is part of who holds a claim ------------------------------------------
+
+test('#743 sameFactory: decides only when both sides name a factory', () => {
+  assert.strictEqual(ci.sameFactory({ factory: 'core' }, { factory: 'core' }), true);
+  assert.strictEqual(ci.sameFactory({ factory: 'core' }, { factory: 'partner' }), false);
+  assert.strictEqual(ci.sameFactory({ factory: 'core' }, { factory: '' }), true, 'a pre-#743 comment names none');
+  assert.strictEqual(ci.sameFactory({}, { factory: 'core' }), true);
+  assert.strictEqual(ci.sameFactory(null, null), true);
+});
+
+test('#743 sameClaimant: one login, one host, two factories → two holders, under every component set', () => {
+  const a = { login: 'bot', host: 'box', machine: 'm:aaaaaaaaaaaa', factory: 'core' };
+  const b = { ...a, factory: 'partner' };
+  assert.strictEqual(ci.sameClaimant(a, b, ci.DEFAULT_COMPONENTS), false);
+  assert.strictEqual(ci.sameClaimant(a, b, ci.FINE_COMPONENTS), false);
+  assert.strictEqual(ci.sameClaimant(a, { ...a }, ci.DEFAULT_COMPONENTS), true);
+  // Degrade: our own earlier claim written before the factories file (no factory) is still ours.
+  assert.strictEqual(ci.sameClaimant(a, { ...a, factory: '' }, ci.DEFAULT_COMPONENTS), true);
+  // The factory never makes two different logins one holder.
+  assert.strictEqual(ci.sameClaimant(a, { ...a, login: 'other' }, ci.DEFAULT_COMPONENTS), false);
+});

@@ -7,6 +7,7 @@ export const RELEASE_MARK: '✅ Released';
 export const CLAIM_RE: RegExp;
 export const SESSION_RE: RegExp;
 export const MACHINE_RE: RegExp;
+export const FACTORY_RE: RegExp;
 export const YIELD_RE: RegExp;
 
 export function looksLikeSessionId(v: unknown): boolean;
@@ -30,6 +31,8 @@ export interface DecodedClaim extends SessionField {
   at: string;
   /** `m:` digest (#327), or '' on a legacy comment. */
   machine: string;
+  /** The claiming factory's id (#743, `.github/factories.yml`), or '' where none was named. */
+  factory: string;
 }
 export function encodeClaim(claim?: Partial<DecodedClaim>): string;
 export function decodeClaim(body: string | null | undefined): DecodedClaim | null;

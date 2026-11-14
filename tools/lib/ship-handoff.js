@@ -42,6 +42,11 @@
  *   7. every issue the branch carries has a LIVE `🔒 Claimed` comment naming this branch, posted by
  *      the hand-off's author before the hand-off — the claim really does live elsewhere, and the
  *      party handing off is the party holding it.
+ *      #743: "the party" is login AND factory. Where the hand-off's `colab:handoff` marker names a
+ *      factory (`factory=<id>`) and the claim names one too, they must be the same factory: two teams
+ *      may share one forge login (`.github/factories.yml`, #739), and the same login under another
+ *      factory is another holder. Either side naming none (a pre-#743 writer, a repo with no
+ *      factories file) compares by login alone, as before.
  *      ONE exemption (#647): an issue the trailing run carries that was already CLOSED before the
  *      hand-off was posted only names history (a flaky test named after it) — it needs no claim, and
  *      goes back in `refIssues` so the squash says `Refs #A` and ship neither closes it nor posts a
@@ -93,6 +98,36 @@ function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 function namesBranch(body, branch) {
   if (!branch) return false;
   return new RegExp(`(^|[^A-Za-z0-9._/-])${escapeRe(branch)}(?![A-Za-z0-9._/-])`).test(String(body || ''));
+}
+
+/**
+ * #685/#743 — the hand-off marker code-wrap opens the comment with:
+ * `<!-- colab:handoff branch=<branch> head=<full sha> [factory=<id>] -->` → `{ branch, head, factory,
+ * fields }` (`factory` '' when absent), or null when the body holds none. Fields are space-separated
+ * `key=value` pairs in any order; a value holds no space. When a body holds several markers the LAST
+ * one wins — a later hand-off on the same thread supersedes an earlier one.
+ */
+function parseHandoffMarker(body) {
+  const all = [...String(body || '').matchAll(/<!--\s*colab:handoff((?:\s+[A-Za-z][\w-]*=\S+?)*)\s*-->/g)];
+  if (!all.length) return null;
+  const fields = {};
+  for (const kv of all[all.length - 1][1].trim().split(/\s+/).filter(Boolean)) {
+    const i = kv.indexOf('=');
+    fields[kv.slice(0, i)] = kv.slice(i + 1);
+  }
+  return { branch: fields.branch || '', head: (fields.head || '').toLowerCase(), factory: fields.factory || '', fields };
+}
+
+/** #743 — the marker line for a hand-off. `factory` is omitted when '' (no factories file names one). */
+function formatHandoffMarker({ branch, head, factory }) {
+  return `<!-- colab:handoff branch=${branch} head=${head}${factory ? ` factory=${factory}` : ''} -->`;
+}
+
+/** #743 — may `claim` (a live claim entry) and a hand-off naming `factory` be the same holder's? */
+function sameFactory(claimFactory, handoffFactory) {
+  const a = String(claimFactory || '').trim();
+  const b = String(handoffFactory || '').trim();
+  return !a || !b || a === b;
 }
 
 /** Every 7–40 hex token in `body`, lower-cased — the candidate head shas a hand-off names. */
@@ -161,12 +196,20 @@ function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain, 
     return no('nothing-to-close', `every issue ${branch} carries (${issues.map((n) => '#' + n).join(' ')}) was closed before the hand-off — there is no open, claimed issue for it to land`);
   }
   const waived = new Set((refNumbers || []).map(Number));
+  const handoffFactory = (parseHandoffMarker(comment.body) || {}).factory || '';
   let executor = null;
   for (const n of issues) {
     if (refIssues.includes(n)) continue;
     const live = claimsByIssue ? claimsByIssue[n] : null;
     if (!live) return no('claims-unreadable', `#${n}'s comments could not be read — the executor's claim cannot be checked`);
-    const match = live.find((c) => c.branch === branch && c.login === comment.login && c.at < comment.createdAt);
+    const byLogin = live.filter((c) => c.branch === branch && c.login === comment.login && c.at < comment.createdAt);
+    const match = byLogin.find((c) => sameFactory(c.factory, handoffFactory));
+    if (!match && byLogin.length) {
+      // #743: the login holds it, but under another factory — a different holder handing off.
+      const other = [...new Set(byLogin.map((c) => c.factory))].join(', ');
+      return no('other-factory-claim', `#${n}'s live 🔒 claim on ${branch} by ${comment.login} names factory ${other}, but the hand-off names factory ${handoffFactory} — ` +
+        'the same login under another factory is another holder; the hand-off must come from the factory holding the claim');
+    }
     if (!match) {
       const st = issueStates && issueStates[n];
       const why = st && String(st.state).toUpperCase() === 'CLOSED'
@@ -175,7 +218,7 @@ function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain, 
       return no('no-executor-claim', `#${n} has no live 🔒 claim on ${branch} by ${comment.login || 'the hand-off author'} posted before the hand-off${why} — ` +
         'the hand-off must come from the party holding the claim');
     }
-    if (!executor) executor = { login: match.login, host: match.host, machine: match.machine || '' };
+    if (!executor) executor = { login: match.login, host: match.host, machine: match.machine || '', factory: match.factory || handoffFactory || '' };
   }
   return { ok: true, issues, refIssues, sha: refs.remoteSha, handedOff: lineage[at], syncMerges: at, executor, url: String(url).trim(),
     ref: formatHandoffRef(got), htmlUrl: comment.htmlUrl };
@@ -277,4 +320,4 @@ function parseHandoffTrailer(body) {
   return m ? { url: m[1], handedOff: m[2] } : null;
 }
 
-module.exports = { parseHandoffUrl, parseHandoffRef, formatHandoffRef, namesBranch, namedShas, handoffVerdict, closedBefore, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };
+module.exports = { parseHandoffUrl, parseHandoffRef, formatHandoffRef, parseHandoffMarker, formatHandoffMarker, sameFactory, namesBranch, namedShas, handoffVerdict, closedBefore, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };

@@ -63,6 +63,7 @@ const NOT_IN_NEXT = {
   'release-status': 'release-time report across tag-gated repos',
   template: 'optional per-repo copy, pointed to by §9 adoption, not by machine setup',
   config: 'register writes the one config key a new machine needs',
+  factory: 'per-repo read of trunk\'s factories file, used by claims and hand-offs — nothing to set up (#743)',
 };
 
 function nextBlockCommands(text) {

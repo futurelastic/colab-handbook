@@ -55,7 +55,9 @@ const SSH_KEY_RE = /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-e
 
 // ── the shared vocabulary (CONVENTIONS.md §5, *Factories*) ──────────────────────────────────
 // Prose is the source; these are the machine copy. Not in tools/lib/codec yet — that is a closed
-// public surface, and nothing writes these strings yet; the first writer (#743) moves what it writes.
+// public surface, and nothing writes these strings yet. #743 writes a factory FIELD on claim comments
+// (codec/claim.js FACTORY_RE), not the `factory:<id>` label, so none of these moved; the first command
+// that writes one of them moves it.
 const FACTORY_LABEL_PREFIX = 'factory:';
 const SLICE_LABEL_PREFIX = 'slice:';
 const QUEUE_READY_LABEL = 'queue:ready';

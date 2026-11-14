@@ -17,9 +17,10 @@ const machine = require('./machine');
 const T = (n) => new Date(Date.UTC(2026, 0, 1) + n * 1000).toISOString();
 const DAY = 86400;
 
-function claim(login, host, at, { machineTok = '', session = '' } = {}) {
+function claim(login, host, at, { machineTok = '', session = '', factory = '' } = {}) {
   let body = `🔒 Claimed — worktree \`w\` · branch \`-\` · host \`${host}\` · ${T(at)}`;
   if (machineTok) body += ` · machine \`${machineTok}\``;
+  if (factory) body += ` · factory \`${factory}\``;
   if (session) body += ` · session ${session}`;
   return { author: { login }, createdAt: T(at), body };
 }
@@ -219,4 +220,27 @@ test('parseSessionField still decodes all three session shapes (moved from tools
   assert.deepStrictEqual(cc.parseSessionField('x · session https://u/session_1'), { sessionName: '', session: 'https://u/session_1' });
   assert.deepStrictEqual(cc.parseSessionField('x · session my-name'), { sessionName: 'my-name', session: '' });
   assert.deepStrictEqual(cc.parseSessionField('x'), { sessionName: '', session: '' });
+});
+
+// --- #743: two factories on one forge login ------------------------------------------------------
+
+test('#743 liveClaimComments carries the factory a claim names, and \'\' for one that names none', () => {
+  const live = cc.liveClaimComments([claim('bot', 'box', 0, { factory: 'core' }), claim('bot', 'box2', 1)]);
+  assert.deepStrictEqual(live.map((c) => c.factory), ['core', '']);
+});
+
+test('#743 tie-break: the same login and hostname under ANOTHER factory is a rival, not ourselves', () => {
+  // Two teams, one forge login, machines that happen to share a hostname and carry no machine digest.
+  const comments = [claim('bot', 'mac', 0, { factory: 'partner' }), claim('bot', 'mac', 5, { factory: 'core' })];
+  const v = cc.tieBreakVerdict(comments, 'bot', 'mac', '', claimIdentity.DEFAULT_COMPONENTS, null, 'core');
+  assert.strictEqual(v.lost, true);
+  assert.strictEqual(v.winner.factory, 'partner');
+  // The partner, reading the same comments, keeps it.
+  assert.strictEqual(cc.tieBreakVerdict(comments, 'bot', 'mac', '', claimIdentity.DEFAULT_COMPONENTS, null, 'partner').lost, false);
+});
+
+test('#743 tie-break: with no factory on our side (no factories file) nothing changes', () => {
+  const comments = [claim('bot', 'mac', 0, { factory: 'partner' }), claim('bot', 'mac', 5)];
+  // Pre-#743 behaviour: one login on one host is one claimant, so there is nobody to yield to.
+  assert.strictEqual(cc.tieBreakVerdict(comments, 'bot', 'mac', '', claimIdentity.DEFAULT_COMPONENTS, null, '').lost, false);
 });

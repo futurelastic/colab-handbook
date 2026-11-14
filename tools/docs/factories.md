@@ -4,8 +4,8 @@ The rule this serves: [CONVENTIONS.md §5, *Factories*](../../CONVENTIONS.md#fac
 The file's shape and validity: [`project.schema.md`](../../project.schema.md#sibling-file-githubfactoriesyml).
 Why the formats are what they are: [ADR 739](../../docs/adr/739-factories-signature-format.md).
 Everything below is implemented, pure and tested, in `tools/lib/factories.js`. The commands
-that write claims and verdicts adopt it in later changes (#741, #743, #744); nothing here changes
-what a command does today.
+that write claims and verdicts adopt it in their own changes (#741, #743, #744); claims and
+hand-offs name the factory since #743 (below).
 
 ## Reading the file
 
@@ -67,6 +67,26 @@ To check one: decode it, rebuild the payload with the verifier's own `forge` and
 ssh-keygen -Y verify -f <allowed_signers> -I <factory> -n colab-verdict -s <sig file> < <payload>
 ```
 
+## The factory on a claim and a hand-off (#743)
+
+- **Which factory.** Trunk's file, looked up by this machine's **label**: the hostname's first
+  label, lower-cased, everything outside `[a-z0-9-]` replaced by `-` (`Box_A.local` → `box-a`). It is
+  the same name the claim lock's `Machine:` trailer carries, so list machines under that name.
+  `colab factory` prints the id (exit 1, with the reason, when there is none: no file, an invalid
+  file, or this machine is not listed).
+- **Claim comment.** `· factory \`<id>\`` after the `· machine` field and before the `· session` tail,
+  so an older colab parses the comment exactly as before and ignores the field. Omitted when no
+  factory is named, which keeps the comment byte-identical to the earlier format.
+- **Hand-off marker.** `<!-- colab:handoff branch=<branch> head=<full sha> factory=<id> -->`
+  ([code-wrap](../../skills/code-wrap/handoff-last-word.md)). `colab ship --handoff` matches the
+  executor's claim by login **and** factory.
+- **Readers.** Two claims that both name a factory and name different ones are two holders, whatever
+  login posted them. That is what refuses a claim (`colab claim` names the other factory), decides a
+  simultaneous race, and refuses a hand-off (`other-factory-claim`). Either side naming no factory
+  compares by login and machine alone, so a comment written before #743 is never read as a stranger.
+- **Not signed yet.** The field is plain text on the comment: it tells two honest teams apart and is
+  not proof. The signed claim commit is what proves it.
+
 ## The shared names
 
 | Kind | Name | Meaning |
@@ -79,4 +99,5 @@ ssh-keygen -Y verify -f <allowed_signers> -I <factory> -n colab-verdict -s <sig 
 | commit status | `audit` | the conventions audit at that commit |
 
 The constants live in `tools/lib/factories.js`. They move into the tracker codec when a command
-first writes them.
+first writes them. The factory **field** on a claim comment is not one of these names: its grammar,
+`FACTORY_RE`, is in `tools/lib/codec/claim.js` (#743).

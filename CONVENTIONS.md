@@ -1341,10 +1341,10 @@ repository has one team and nothing here applies.
 - The file is read from trunk's committed copy only, never from the branch being judged: a branch
   cannot grant itself a factory, a machine, a key or a human. Changing it is a human act.
 - Each machine and each slice belongs to exactly one factory. An invalid file trusts nobody.
-- Identity is by key, not by login: a claim is an SSH-signed commit and a verdict marker carries its
-  factory and a signature by that factory's key, so two factories on one forge login are still told
-  apart. A verdict signature covers a fixed payload of the fields that carry its meaning, never the
-  whole comment, and a field outside that payload is never trusted.
+- Identity is by key, not by login: a claim is an SSH-signed commit, claim and hand-off comments name
+  their factory (#743), and a verdict marker carries its factory and that factory's signature, so one
+  forge login under two factories is two holders. A verdict signature covers a fixed payload of the
+  fields that carry its meaning, never the whole comment; a field outside it is never trusted.
 
 The payload bytes, the marker, how a signature is checked and the shared labels and status names:
 [`tools/docs/factories.md`](tools/docs/factories.md).
