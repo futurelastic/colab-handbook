@@ -131,7 +131,8 @@ The rules: [CONVENTIONS.md §4, the landing contract](../../CONVENTIONS.md#4-bra
   `--track`), it reads the same as remote-only. Where no reflog survives, nothing contradicts
   the local reading. A branch that **does** name its issues, with the claim on another machine,
   lands without a takeover from its executor's hand-off (#578): `colab ship --branch <b>
-  --handoff <comment-url>` takes the issue set from the branch name once that comment names the
+  --handoff <ref>` — the comment named forge-neutrally, `<forge-host>/<owner>/<repo>#<N>@comment:<id>`,
+  or by its URL as an alias (#740) — takes the issue set from the branch name once that comment names the
   branch and its current remote head and every issue carries the executor's live claim on it;
   nothing is claimed here, and the executor keeps its worktree until it confirms the land. An
   issue in the run that was already closed before the hand-off only names history: it needs no

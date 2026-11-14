@@ -66,7 +66,7 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
 - **Claim held on ANOTHER machine** (a remote-built branch: `colab claims` here shows nothing,
   the issue shows a live `🔒 Claimed` on this branch from another host) → not a gap and not a
   re-claim: land it from the executor's distill comment, `colab ship --branch <b> --handoff
-  <comment-url>` (#578). Ship verifies the comment names the branch and its current remote head
+  <forge-host>/<owner>/<repo>#<N>@comment:<id>` (#578; the comment's URL works too, #740). Ship verifies the comment names the branch and its current remote head
   and that the executor's claim is live; it claims nothing here. **Behind its base?** Sync it
   (B0: merge the base in, push) and ship with the **same** hand-off (#579) — clean base-sync
   merges on top of the handed-off sha do not void it; a conflict you resolved by hand does. A

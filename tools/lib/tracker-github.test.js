@@ -70,6 +70,8 @@ const ARGV = [
   [(t) => t.prList({ base: 'owner-main', head: 'main', state: 'all', limit: 50, fields: ['number', 'url', 'state', 'mergedAt', 'headRefOid', 'title'] }),
     ['pr', 'list', '--base', 'owner-main', '--head', 'main', '--state', 'all', '--limit', '50', '--json', 'number,url,state,mergedAt,headRefOid,title']],
   [(t) => t.prEdit(7, { title: 'T', body: 'B' }), ['pr', 'edit', '7', '--title', 'T', '--body', 'B']],
+  // #740: `colab ship --handoff` read the comment through git.ghApi with exactly this argv.
+  [(t) => t.commentView('555'), ['api', 'repos/{owner}/{repo}/issues/comments/555']],
 ];
 
 test('every new method spawns exactly the argv and options the call site it replaced did', () => {
@@ -247,4 +249,16 @@ test('#701: ghRepoVisibility on a private fork of a public upstream reads the fo
     git._resetRemoteCache(); gh._resetPinCache();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('#740 commentView maps the comment; a failed read, unparseable output or a non-numeric id is null', () => {
+  const reply = (stdout, ok = true) => () => ({ ok, code: ok ? 0 : 1, stdout, stderr: '', error: null, timedOut: false });
+  const c = gh.withRunner(reply(JSON.stringify({ body: 'b', user: { login: 'exec' }, created_at: '2026-10-08T12:00:00Z', html_url: 'https://github.com/o/r/issues/9#issuecomment-5' })),
+    () => gh.create(REPO).commentView(5));
+  assert.deepStrictEqual(c, { body: 'b', login: 'exec', createdAt: '2026-10-08T12:00:00Z', htmlUrl: 'https://github.com/o/r/issues/9#issuecomment-5' });
+  assert.strictEqual(gh.withRunner(reply('', false), () => gh.create(REPO).commentView(5)), null);
+  assert.strictEqual(gh.withRunner(reply('not json'), () => gh.create(REPO).commentView(5)), null);
+  let spawned = false;
+  assert.strictEqual(gh.withRunner(() => { spawned = true; return reply('{}')(); }, () => gh.create(REPO).commentView('5/../../x')), null);
+  assert.strictEqual(spawned, false, 'a non-numeric id never reaches gh');
 });

@@ -1,6 +1,6 @@
 'use strict';
 /**
- * #578 — `colab ship --branch <br> --handoff <comment-url>`: land a branch whose claim lives on
+ * #578 — `colab ship --branch <br> --handoff <ref>`: land a branch whose claim lives on
  * ANOTHER machine, from the hand-off its executor already recorded, without `--force`.
  *
  * The problem. `colab ship` takes the issue set to close from THIS machine's claim registry only.
@@ -15,10 +15,17 @@
  * nothing of A's is taken over: A keeps its claim, worktree and branch until it confirms the land
  * (its own `colab worktree rm`, which releases the claim as usual).
  *
+ * The reference (#740). A hand-off is named forge-neutrally — `<forge-host>/<owner>/<repo>#<N>@comment:<id>`
+ * — and resolved through the repo's tracker adapter (the GitHub tracker, or the Forgejo forge engine:
+ * `commentView`), so nothing here parses one forge's web URL to decide what repo a comment is on.
+ * The comment URL a browser shows (`https://<host>/<owner>/<repo>/issues/<N>#issuecomment-<id>`) stays
+ * accepted as an alias, and either way the squash trailer records the neutral form.
+ *
  * What a hand-off must prove, in order — the first failure is the verdict:
- *   1. the URL is an issue-comment URL (`…/issues/<N>#issuecomment-<id>`);
- *   2. the comment was read from THIS repo (fetched through `{owner}/{repo}`, so an off-repo id is a
- *      404) and its own html_url names the same issue the URL does;
+ *   1. the reference is a neutral hand-off reference or an issue-comment URL;
+ *   2. the comment was read from THIS repo (fetched through the repo-bound adapter, so an off-repo id
+ *      is unreadable) and its own web address names the same host, repo, issue and comment id the
+ *      reference does;
  *   3. that issue is one the branch NAME carries (its trailing number run, CONVENTIONS.md §4) — the
  *      issue set is exactly that run, so git corroborates every `Closes #N` (#87) by construction;
  *   4. the body names the branch, as a whole token;
@@ -48,11 +55,36 @@
 
 const { branchIssueNumbers } = require('./branch-name');
 
-/** `https://github.com/<o>/<r>/issues/<N>#issuecomment-<id>` → parts, or null. Host-agnostic (GHE). */
+/** `https://<host>/<o>/<r>/issues/<N>#issuecomment-<id>` → parts, or null. Host-agnostic (GHE, Forgejo). The alias form (#740). */
 function parseHandoffUrl(url) {
   const m = String(url || '').trim().match(/^https?:\/\/[^/\s]+\/([^/\s]+)\/([^/\s]+)\/(?:issues|pull)\/(\d+)\/?#issuecomment-(\d+)$/);
   if (!m) return null;
   return { owner: m[1], repo: m[2], issue: Number(m[3]), commentId: m[4] };
+}
+
+/**
+ * #740 — `<forge-host>/<owner>/<repo>#<N>@comment:<id>` (the neutral form) or an issue-comment URL
+ * (the alias) → `{ host, owner, repo, issue, commentId, form: 'ref' | 'url' }`, or null. Pure. The
+ * host is lower-cased (a host name is case-insensitive); owner and repo keep their spelling and are
+ * compared case-insensitively by the verdict, as the forges themselves resolve them. No part holds
+ * a space, a `/`, a `#` or an `@`, so the batch grammar's first-`@` split (#591) and the trailer's
+ * `\S+` read both stay unambiguous.
+ */
+function parseHandoffRef(s) {
+  const str = String(s || '').trim();
+  const m = str.match(/^([^/\s#@]+)\/([^/\s#@]+)\/([^/\s#@]+)#(\d+)@comment:(\d+)$/);
+  if (m && !/^[a-z][a-z0-9+.-]*:$/i.test(m[1])) {
+    return { host: m[1].toLowerCase(), owner: m[2], repo: m[3], issue: Number(m[4]), commentId: m[5], form: 'ref' };
+  }
+  const u = parseHandoffUrl(str);
+  if (!u) return null;
+  const host = str.match(/^https?:\/\/([^/\s]+)/)[1].toLowerCase();
+  return { host, ...u, form: 'url' };
+}
+
+/** #740 — the neutral reference for `{ host, owner, repo, issue, commentId }`. Pure. */
+function formatHandoffRef(p) {
+  return `${String(p.host).toLowerCase()}/${p.owner}/${p.repo}#${p.issue}@comment:${p.commentId}`;
 }
 
 function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'); }
@@ -71,8 +103,9 @@ function namedShas(body) {
 
 /**
  * The verdict. Inputs:
- *   url          — the --handoff value
- *   comment      — { body, login, createdAt, htmlUrl } as read from THIS repo, or null (unreadable)
+ *   url          — the --handoff value: a neutral reference, or the comment's URL (#740)
+ *   comment      — { body, login, createdAt, htmlUrl } as read from THIS repo through the tracker
+ *                  adapter's `commentView`, or null (unreadable)
  *   branch       — the branch being shipped
  *   refs         — git.branchRefs(): { localSha, remoteSha, localFromRemote }
  *   claimsByIssue — { [n]: [{ login, branch, at, host, machine }] } live claim comments per issue,
@@ -82,20 +115,23 @@ function namedShas(body) {
  *   issueStates  — (#647) { [n]: { state, closedAt } } per issue as read now; a missing entry is
  *                  unknown and earns no exemption
  *   refNumbers   — (#647) the --refs numbers; used only to say why they do not waive a claim
- * Returns { ok: true, issues, refIssues, sha, handedOff, syncMerges, executor, url } or { ok: false, reason, detail }.
+ * Returns { ok: true, issues, refIssues, sha, handedOff, syncMerges, executor, url, ref, htmlUrl } or { ok: false, reason, detail }.
+ * `url` is the --handoff value as given; `ref` (#740) is the neutral reference, built from the comment's
+ * own web address as read back — so a URL-form input records the same `ref` a neutral one does.
  * `issues` is the whole trailing run; `refIssues` is its closed-before-the-hand-off subset (#647).
  * `sha` is what lands (the remote head); `handedOff` is the sha the hand-off named — equal to `sha`
  * unless the head was synced, in which case `syncMerges` counts the merges between them.
  */
 function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain, issueStates, refNumbers }) {
   const no = (reason, detail) => ({ ok: false, reason, detail });
-  const u = parseHandoffUrl(url);
-  if (!u) return no('bad-url', `--handoff ${url || '(empty)'} is not an issue-comment URL (…/issues/<N>#issuecomment-<id>)`);
+  const u = parseHandoffRef(url);
+  if (!u) return no('bad-url', `--handoff ${url || '(empty)'} is not a hand-off reference — write <forge-host>/<owner>/<repo>#<N>@comment:<id> (or the comment's URL, …/issues/<N>#issuecomment-<id>)`);
   if (!comment) return no('unreadable', `comment ${u.commentId} could not be read from this repo — it must be a comment on one of this repo's issues`);
-  const got = parseHandoffUrl(comment.htmlUrl);
-  if (!got || got.commentId !== u.commentId || got.issue !== u.issue ||
+  // The comment's own web address, as the adapter read it back, is the authority on where it lives.
+  const got = parseHandoffRef(comment.htmlUrl);
+  if (!got || got.commentId !== u.commentId || got.issue !== u.issue || got.host !== u.host ||
       got.owner.toLowerCase() !== u.owner.toLowerCase() || got.repo.toLowerCase() !== u.repo.toLowerCase()) {
-    return no('mismatch', `the URL says ${u.owner}/${u.repo}#${u.issue}, but comment ${u.commentId} is ${comment.htmlUrl || 'somewhere else'}`);
+    return no('mismatch', `the reference says ${formatHandoffRef(u)}, but comment ${u.commentId} is ${got ? formatHandoffRef(got) : (comment.htmlUrl || 'somewhere else')}`);
   }
   const issues = branchIssueNumbers(branch);
   if (!issues.length) return no('branch-names-no-issue', `${branch} carries no trailing issue number, so a hand-off has no issue set to close — ship it with --adopt if it genuinely has none`);
@@ -141,7 +177,8 @@ function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain, 
     }
     if (!executor) executor = { login: match.login, host: match.host, machine: match.machine || '' };
   }
-  return { ok: true, issues, refIssues, sha: refs.remoteSha, handedOff: lineage[at], syncMerges: at, executor, url: String(url).trim() };
+  return { ok: true, issues, refIssues, sha: refs.remoteSha, handedOff: lineage[at], syncMerges: at, executor, url: String(url).trim(),
+    ref: formatHandoffRef(got), htmlUrl: comment.htmlUrl };
 }
 
 /** #647: was this issue CLOSED strictly before `at` (the hand-off's createdAt)? Unknown ⇒ false. */
@@ -153,14 +190,15 @@ function closedBefore(st, at) {
 }
 
 /**
- * The squash trailer recording the door the issue set came through. It names the HANDED-OFF sha —
+ * The squash trailer recording the door the issue set came through: the NEUTRAL reference (#740) —
+ * never one forge's web URL — and the HANDED-OFF sha —
  * the one the executor vouched for — and, after a sync (#579), the head that actually landed.
  */
 function handoffTrailer(v) {
   if (!v || !v.ok) return '';
   const handed = String(v.handedOff || v.sha).slice(0, 12);
   const synced = v.syncMerges ? ` (synced to ${String(v.sha).slice(0, 12)} by ${v.syncMerges} base merge${v.syncMerges === 1 ? '' : 's'})` : '';
-  return `Colab-Handoff: ${v.url} @ ${handed}${synced}`;
+  return `Colab-Handoff: ${v.ref || v.url} @ ${handed}${synced}`;
 }
 
 /**
@@ -230,7 +268,8 @@ function parseBatchEntries(list) {
 
 /**
  * #591 — read a `Colab-Handoff:` trailer back off a squash commit body (handoffTrailer's inverse):
- * `{ url, handedOff }` or null. A batch lands in a second call, so the member's door is read from
+ * `{ url, handedOff }` or null. `url` is whichever form the trailer holds: the neutral reference
+ * (#740), or the comment URL a squash written before it recorded. A batch lands in a second call, so the member's door is read from
  * the commit the combined run graded, never re-supplied on the command line.
  */
 function parseHandoffTrailer(body) {
@@ -238,4 +277,4 @@ function parseHandoffTrailer(body) {
   return m ? { url: m[1], handedOff: m[2] } : null;
 }
 
-module.exports = { parseHandoffUrl, namesBranch, namedShas, handoffVerdict, closedBefore, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };
+module.exports = { parseHandoffUrl, parseHandoffRef, formatHandoffRef, namesBranch, namedShas, handoffVerdict, closedBefore, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };
