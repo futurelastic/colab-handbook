@@ -543,6 +543,28 @@ function readClaimLock(repo, remote, num, fullSha) {
   return { ok: true, trailers: parseClaimLockMessage(body.stdout) };
 }
 
+/**
+ * #744 — the committer time (ms) of the commit a remote ref points at, or null when it cannot be read.
+ * `ref` is the full remote ref (`refs/heads/<b>`, `refs/claims/<b>`, `refs/heads/claim/<N>`); `sha`
+ * (short or full) is what `ls-remote` saw. Read locally when this clone has the commit, else fetched
+ * by ref name. A null is the caller's to treat as "recent" (fail closed: an unreadable holder is
+ * never proven stale).
+ */
+function remoteRefCommitTime(repo, remote, ref, sha) {
+  const at = (rev) => {
+    const r = git(['log', '-1', '--format=%ct', rev, '--'], repo);
+    const n = r.ok ? Number(String(r.stdout).trim()) : NaN;
+    return Number.isFinite(n) && n > 0 ? n * 1000 : null;
+  };
+  if (sha) {
+    const local = git(['cat-file', '-e', `${sha}^{commit}`], repo);
+    if (local.ok) return at(sha);
+  }
+  const f = git(['fetch', '--quiet', '--no-tags', remote, ref], repo, { timeoutMs: 60_000 });
+  if (!f.ok) return null;
+  return at('FETCH_HEAD');
+}
+
 /** List worktree paths registered in a repo (porcelain). */
 function worktreeList(repo) {
   const r = git(['worktree', 'list', '--porcelain'], repo);
@@ -1859,7 +1881,7 @@ module.exports = {
   detectTrunk, branchExists, branchRefs, existingBranchRef,
   claimRemote, remoteHeads, parseRemoteHeads, CLAIM_REF_PREFIX, claimRef, pushClaimRef, deleteClaimRef,
   CLAIM_LOCK_PREFIX, claimLockRef, parseClaimLocks, claimLockMessage, parseClaimLockMessage, makeClaimLockCommit,
-  takeClaimLocks, releaseClaimLock, readClaimLock,
+  takeClaimLocks, releaseClaimLock, readClaimLock, remoteRefCommitTime,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghRunsAtShaUnfiltered, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,

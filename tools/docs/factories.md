@@ -5,7 +5,8 @@ The file's shape and validity: [`project.schema.md`](../../project.schema.md#sib
 Why the formats are what they are: [ADR 739](../../docs/adr/739-factories-signature-format.md).
 Everything below is implemented, pure and tested, in `tools/lib/factories.js`. The commands
 that write claims and verdicts adopt it in their own changes (#741, #743, #744); claims and
-hand-offs name the factory since #743 (below).
+hand-offs name the factory since #743 (below). `colab claim --force` reads it today: taking over
+another factory's claim needs a stale holder and a human ([claims.md](claims.md#cross-factory-takeover-744), #744).
 
 ## Reading the file
 
