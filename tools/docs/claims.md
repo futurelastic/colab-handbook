@@ -49,6 +49,9 @@ anywhere, naming the ref and how to continue it. Each machine sweeps its own wor
 - One account on **two machines** is two holders: a live claim comment from the same login on
   a different machine refuses too — the assignee set cannot say which machine holds it.
 - A claim names the machine by a canonical id, not its hostname (#327). The comment carries only a digest of that id. Why, with the measurement: [ADR 539](../../docs/adr/539-claims-rationale.md).
+- Where trunk has a `.github/factories.yml`, a claim comment also names the claiming **factory**,
+  and one login under **two factories** is two holders, like two machines (#743,
+  [factories](factories.md#the-factory-on-a-claim-and-a-hand-off-743)).
 - A **planner** may hold an issue before the session that will work it exists
   (`--session intent:<id>`, no worktree, #326). That session's own claim from the same machine
   upgrades it in place; a planner claim whose session never claimed is released after a short

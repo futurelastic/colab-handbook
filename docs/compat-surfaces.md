@@ -192,6 +192,7 @@ thresholds
 trunk-ci
 ci-wait
 holders
+factory
 instruction-files
 promote
 deliver

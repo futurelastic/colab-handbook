@@ -65,6 +65,7 @@ const writesAuthority = require('./lib/writes-authority');
 const claimIdentity = require('./lib/claim-identity');
 const claimComments = require('./lib/claim-comments');
 const codec = require('./lib/codec');
+const factories = require('./lib/factories');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const shipBatch = require('./lib/ship-batch');
@@ -341,6 +342,58 @@ function commentHost(repoAbs) {
 function myMachineId() { return machine.localMachine().id || null; }
 
 /**
+ * #743 — this machine's FACTORY in `repoAbs`, from `.github/factories.yml` (#739) as committed on
+ * TRUNK — never the checkout's working tree or the branch being worked on, so no branch can name its
+ * own machine into a factory (CONVENTIONS §5, *Factories*). The machine is looked up by its LABEL
+ * (`branchName.machineLabel(HOST)` — `Box_A.local` → `box-a`), the same name the claim lock's
+ * `Machine:` trailer and a `branchPrefix: machine` branch carry.
+ *
+ * Returns `{ id, reason }`: `id` '' when there is no file (one team, nothing to name), the file is
+ * invalid (fail closed — it names nobody), or it does not list this machine. Read once per repo per
+ * process: one `git show`, and the answer cannot change under a running command.
+ */
+const _factoryCache = new Map();
+function factoryFor(repoAbs) {
+  if (_factoryCache.has(repoAbs)) return _factoryCache.get(repoAbs);
+  const label = branchName.machineLabel(HOST);
+  let out = { id: '', reason: 'no-file', machine: label };
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  if (trunk) {
+    let remote = null;
+    try { remote = git.remoteFor(repoAbs); } catch (_) { remote = null; }
+    const refs = [trunk, ...(remote ? [`${remote}/${trunk}`] : [])];
+    let text = null;
+    for (const ref of refs) {
+      const r = git.git(['show', `${ref}:${factories.PATH}`], repoAbs);
+      if (r.ok) { text = r.stdout; out.ref = ref; break; }
+    }
+    if (text !== null) {
+      const parsed = factories.parseFactories(text);
+      const id = parsed.valid ? factories.factoryOfMachine(parsed, label) : null;
+      out = id ? { ...out, id, reason: 'listed' }
+        : { ...out, reason: parsed.valid ? 'unlisted' : 'invalid', findings: parsed.findings || [] };
+    }
+  }
+  _factoryCache.set(repoAbs, out);
+  return out;
+}
+
+/** #743 — the factory id a claim/hand-off written from here names, or ''. Warns once when trunk HAS a
+ *  factories file that names nobody for this machine — a claim then names no factory, and a reader
+ *  degrades to comparing it by login and machine alone. */
+const _factoryWarned = new Set();
+function myFactory(repoAbs) {
+  const f = factoryFor(repoAbs);
+  if ((f.reason === 'unlisted' || f.reason === 'invalid') && !_factoryWarned.has(repoAbs)) {
+    _factoryWarned.add(repoAbs);
+    warn(f.reason === 'invalid'
+      ? `${factories.PATH} on ${f.ref} is invalid (${(f.findings || [])[0] || 'see colab audit'}) — it names no factory, so this claim names none (#743)`
+      : `${factories.PATH} on ${f.ref} lists no factory for machine "${f.machine}" — this claim names no factory (#743)`);
+  }
+  return f.id;
+}
+
+/**
  * Resolve the session id for this invocation: --session flag > COLAB_SESSION env >
  * a DERIVED person identity (#528) > '' (absent, never an error). Free-form — any stable id for
  * the session (a URL, a uuid…).
@@ -545,12 +598,13 @@ function wtStatus(wt) { return (wt && wt.status) || 'running'; }
  * supplies what the codec deliberately does not hold — the clock and the machine digest. `-` stands
  * for "no branch"/"no worktree" (#53, it used to be the word `trunk`). `host` is the raw hostname
  * where the destination may name it, the `h:` token where it may not (#369, `commentHost`); the
- * comparable identity is the machine digest beside it (#327), omitted when no id resolved.
+ * comparable identity is the machine digest beside it (#327), omitted when no id resolved. `factory`
+ * (#743) is this machine's factory from trunk's `.github/factories.yml`, omitted when none is named.
  */
-function claimCommentBody(wtName, branch, session, sessionName, host = HOST) {
+function claimCommentBody(wtName, branch, session, sessionName, host = HOST, factory = '') {
   return codec.encodeClaim({
     worktree: wtName, branch, host, at: nowISO(),
-    machine: machine.machineToken(myMachineId()) || '', session, sessionName,
+    machine: machine.machineToken(myMachineId()) || '', factory, session, sessionName,
   });
 }
 
@@ -765,9 +819,9 @@ function settleTrackerPending(repoAbs, nums, missed, owner) {
  *     login+host is invisible to the check above. Read the comments too and look for exactly that.
  * A read failure (null) is skipped, never treated as free.
  */
-function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps, myMachine = null) {
+function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps, myMachine = null, myFactoryId = '') {
   comps = comps || claimIdentity.DEFAULT_COMPONENTS;
-  const me = { login: myLogin, host: myHost, session: mySession || '', machine: myMachine || '' };
+  const me = { login: myLogin, host: myHost, session: mySession || '', machine: myMachine || '', factory: myFactoryId || '' };
   const out = [];
   for (const num of nums) {
     const info = git.ghIssueView(repoAbs, num, ['assignees', 'labels', 'comments']);
@@ -792,6 +846,11 @@ function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps, myMa
     // different place to hold work in, while a session knob only ever distinguished co-tenants.
     {
       const live = liveClaimComments(info.comments || [], comps);
+      // #743: OUR OWN login held by ANOTHER FACTORY — two teams on one forge login (#739). The
+      // assignee set says nothing about it, and the machine check below may not either (two teams'
+      // machines can share a hostname). Checked first: it is the more specific finding.
+      const otherFactory = live.find((c) => c.login === myLogin && !claimIdentity.sameFactory(c, me));
+      if (otherFactory) { out.push({ num, assignees, otherFactory }); continue; }
       const other = live.find((c) => c.login === myLogin && !claimIdentity.sameHost(c, me));
       if (other) { out.push({ num, assignees, otherMachine: other }); continue; }
     }
@@ -839,7 +898,11 @@ function printRefusal(localConf, ghConf, remoteConf = []) {
       `  #${c.num} local: worktree "${h.worktree || '-'}" · branch ${h.branch || '-'} · host ${h.host}${sess} · since ${String(h.created).slice(0, 10)}\n`);
   }
   for (const c of ghConf) {
-    if (c.otherMachine) {
+    if (c.otherFactory) {
+      const o = c.otherFactory;
+      const id = displayIdentity(o.sessionName, o.session);
+      process.stderr.write(`  #${c.num} GitHub: live claim comment by factory ${o.factory} (host ${o.host}${id ? ` · session ${id}` : ''}) — same account, another factory (#743)\n`);
+    } else if (c.otherMachine) {
       const o = c.otherMachine;
       const id = displayIdentity(o.sessionName, o.session);
       process.stderr.write(`  #${c.num} GitHub: live claim comment from another machine (host ${o.host}${id ? ` · session ${id}` : ''}) — same account (#325)\n`);
@@ -876,7 +939,9 @@ function printTakeover(localConf, ghConf, remoteConf = []) {
     print(`  --force: taking over #${c.num} from worktree "${h.worktree || '-'}" (host ${h.host}${sess}, since ${String(h.created).slice(0, 10)})`);
   }
   for (const c of ghConf) {
-    if (c.otherMachine) {
+    if (c.otherFactory) {
+      print(`  --force: taking over #${c.num} from factory ${c.otherFactory.factory}'s claim under this account (host ${c.otherFactory.host}, #743)`);
+    } else if (c.otherMachine) {
       print(`  --force: taking over #${c.num} from this account's claim on another machine (host ${c.otherMachine.host})`);
     } else if (c.cotenant) {
       const id = displayIdentity(c.cotenant.sessionName, c.cotenant.session) || c.cotenant.identity;
@@ -891,7 +956,7 @@ function printTakeover(localConf, ghConf, remoteConf = []) {
 
 /** Post the claim comment (best-effort: a failure warns but never fails the claim). */
 function postClaimComment(repoAbs, num, wtName, branch, session, sessionName) {
-  const r = git.ghIssueComment(repoAbs, num, claimCommentBody(wtName, branch, session, sessionName, commentHost(repoAbs)));
+  const r = git.ghIssueComment(repoAbs, num, claimCommentBody(wtName, branch, session, sessionName, commentHost(repoAbs), myFactory(repoAbs)));
   if (!r.ok) warn(`could not post claim comment on #${num} (${r.stderr.split('\n')[0] || r.code}) — claim stands`);
 }
 
@@ -1004,7 +1069,7 @@ function commentAndTieBreak(repoAbs, nums, owner) {
     postClaimComment(repoAbs, num, owner.wtName, owner.branch, owner.session, owner.sessionName);
     const info = git.ghIssueView(repoAbs, num, ['comments']);
     if (!info || !Array.isArray(info.comments)) continue; // can't read comments → keep the claim
-    const verdict = tieBreakVerdict(info.comments, owner.myLogin, HOST, owner.session, comps, myMachineId());
+    const verdict = tieBreakVerdict(info.comments, owner.myLogin, HOST, owner.session, comps, myMachineId(), myFactory(repoAbs));
     if (verdict.lost) {
       yieldIssue(repoAbs, num, verdict.winner, owner.myLogin, owner.session || null);
       const w = verdict.winner;
@@ -1180,7 +1245,7 @@ function cmdClaim(argv) {
   if (remoteCheck.mode === 'no-remote') warn('no git remote — this claim is recorded on this machine only; no other machine can see it');
   const remoteConf = remoteCheck.conflicts;
   const localConf = localClaimConflicts(st0, repoAbs, nums, wtName);
-  const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin, HOST, session, comps, myMachineId()) : [];
+  const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin, HOST, session, comps, myMachineId(), myFactory(repoAbs)) : [];
   if (!gh && remoteCheck.mode === 'ok') warn(`gh not usable here (${ghUnusableWhy(repoAbs)}) — refusal checked the remote and this machine; the tracker half will be PENDING`);
   if (remoteConf.length || localConf.length || ghConf.length) {
     if (!opts.force) { printRefusal(localConf, ghConf, remoteConf); return 1; }
@@ -6303,7 +6368,7 @@ function cmdWorktreeNew(argv) {
     if (remoteCheck.mode === 'unreachable') { printRemoteUnreachable(remoteCheck, 'worktree and its claims'); return 1; }
     if (remoteCheck.mode === 'no-remote') warn('no git remote — these claims are recorded on this machine only; no other machine can see them');
     const localConf = localClaimConflicts(st0, repoAbs, issues, name);
-    const ghConf = gh ? ghClaimConflicts(repoAbs, issues, myLogin, HOST, session, comps, myMachineId()) : [];
+    const ghConf = gh ? ghClaimConflicts(repoAbs, issues, myLogin, HOST, session, comps, myMachineId(), myFactory(repoAbs)) : [];
     if (!gh && remoteCheck.mode === 'ok') warn(`gh not usable here (${ghUnusableWhy(repoAbs)}) — refusal checked the remote and this machine; the tracker half will be PENDING`);
     if (remoteCheck.conflicts.length || localConf.length || ghConf.length) {
       if (!opts.force) { printRefusal(localConf, ghConf, remoteCheck.conflicts); return 1; }
@@ -14793,7 +14858,8 @@ function applyShipHandoff(repoAbs, sess, opts, trunk) {
   sess.handoffRefs = new Set(v.refIssues || []);
   // #372: the implementer is the executor that handed off — name it, never leave it reading as the shipper.
   const claimed = v.issues.find((n) => !sess.handoffRefs.has(n));
-  const ex = (claimsByIssue[claimed] || []).find((c) => c.branch === sess.branch && c.login === v.executor.login);
+  const ex = (claimsByIssue[claimed] || []).find((c) => c.branch === sess.branch && c.login === v.executor.login
+    && shipHandoff.sameFactory(c.factory, v.executor.factory)); // #743: the same login under another factory is another holder
   if (ex && (ex.session || ex.sessionName)) sess.holder = { session: ex.session || '', sessionName: ex.sessionName || '' };
   return v;
 }
@@ -18075,6 +18141,44 @@ function cmdInstructionFiles(argv) {
   return 0;
 }
 
+const HELP_FACTORY = `colab factory [--repo <path>] [--json]
+
+This machine's FACTORY in a repo (#743): the id \`.github/factories.yml\` (#739), as committed on
+TRUNK, lists this machine under — the id a 🔒 claim comment written from here carries
+(\`· factory \\\`<id>\\\`\`) and the one code-wrap's hand-off marker names (\`factory=<id>\`).
+The machine is looked up by its label (the hostname's first label, lower-cased, \`[a-z0-9-]\` only),
+the name the claim lock's \`Machine:\` trailer carries.
+
+  exit 0   the file lists this machine; prints the id
+  exit 1   no factories file on trunk (one team — name no factory), the file is invalid
+           (it names nobody), or it does not list this machine — prints why, on stderr
+  --json   { factory, reason: listed|no-file|invalid|unlisted, machine, ref, findings? }
+`;
+
+function cmdFactory(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_FACTORY);
+  const repoAbs = resolveRepo(opts);
+  if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo — run it inside the repo, or pass --repo <path>`);
+  const f = factoryFor(repoAbs);
+  if (opts.json) {
+    print(JSON.stringify({ factory: f.id || null, reason: f.reason, machine: f.machine, ref: f.ref || null,
+      ...(f.findings && f.findings.length ? { findings: f.findings } : {}) }, null, 2));
+    return f.id ? 0 : 1;
+  }
+  if (f.id) { print(f.id); return 0; }
+  const why = {
+    'no-file': `no ${factories.PATH} on trunk — one team; a claim names no factory`,
+    invalid: `${factories.PATH} on ${f.ref} is invalid — it names nobody (${(f.findings || [])[0] || 'see colab audit'})`,
+    unlisted: `${factories.PATH} on ${f.ref} lists no factory for machine "${f.machine}"`,
+  }[f.reason] || f.reason;
+  process.stderr.write(`colab factory: ${why}\n`);
+  return 1;
+}
+
 function cmdHolders(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--base': 'base' },
@@ -18763,6 +18867,9 @@ Commands:
   holders <path> [--base B] [--json]   who else is holding <path> — refs that touched it and
                                         have not landed on the base (filters the raw git-log
                                         one-liner through \`landed\`'s content classification)
+  factory [--json]                     this machine's factory in the repo, from trunk's
+                                        .github/factories.yml (#743) — what a claim and a
+                                        hand-off marker name
   instruction-files [--base B | --staged] [--json]
                                         CLAUDE.md is only @AGENTS.md + tool blocks? ratcheted:
                                         fails only where the change touches it or would regress
@@ -18859,6 +18966,7 @@ function main(argv) {
     case 'trunk-ci': return cmdTrunkCi(rest);
     case 'ci-wait': return cmdCiWait(rest);
     case 'holders': return cmdHolders(rest);
+    case 'factory': return cmdFactory(rest);
     case 'instruction-files': return cmdInstructionFiles(rest);
     case 'promote': return cmdPromote(rest);
     case 'deliver': return cmdDeliver(rest);

@@ -538,3 +538,50 @@ test('#375: a claim this account took on another machine, released under a DIFFE
   assert.ok(!/Yielded/.test(r.out + r.err), r.out + r.err);
   assert.strictEqual(claimsFor(fx.home, 9).length, 1, 'the claim stands');
 });
+
+// --- #743: the claim names the claiming factory ----------------------------------------------------
+
+const { machineLabel } = require('./branch-name');
+const KEY_A = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOQmAeVx3k0r6Q0ZbqkDqE6gH2y0kJ8b8o7pX2z6c1aA';
+const KEY_B = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB9n4oWm5pQ2kz1X0vQf2y3nRk7m1ZpQ8c4s5t6u7v8w';
+/** Trunk gains a factories file listing THIS machine (by label) under `core`. */
+function withFactories(fx) {
+  fs.writeFileSync(path.join(fx.work, '.github', 'factories.yml'), [
+    'version: 1', 'steward: core', 'forge: github.com', 'factories:',
+    '  core:', '    tier: steward', `    machines: [${machineLabel(HOST)}]`, `    key: ${KEY_A}`, '    humans: []', '    slices: [slice:core]',
+    '  partner:', '    tier: partner', '    machines: [partner-box]', `    key: ${KEY_B}`, '    humans: []', '    slices: [slice:partner]',
+  ].join('\n') + '\n');
+  g(fx.work, 'add', '-A');
+  g(fx.work, 'commit', '-q', '-m', 'chore: factories');
+  g(fx.work, 'push', '-q', 'origin', 'main');
+}
+
+test('#743: a claim from a machine trunk\'s factories file lists names its factory, before the session', () => {
+  const fx = fixture();
+  withFactories(fx);
+  const r = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const body = issueState(fx, 9).comments[0].body;
+  assert.match(body, /· factory `core` · session s1$/, body);
+  assert.match(body, /🔒 Claimed — worktree `w` · branch `-` · host `[^`]*` · \S+/, 'legacy four-field prefix still parses');
+});
+
+test('#743: no factories file → the claim comment is byte-for-byte the pre-#743 shape (no factory field)', () => {
+  const fx = fixture();
+  assert.strictEqual(colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1']).code, 0);
+  assert.ok(!/factory/.test(issueState(fx, 9).comments[0].body));
+});
+
+test('#743: this login\'s live claim under ANOTHER factory refuses a claim here, even from the same host; --force takes it over', () => {
+  const fx = fixture();
+  withFactories(fx);
+  // Same login, same hostname, same machine digest (two teams' machines can collide on both): only the factory differs.
+  const tok = machine.machineToken(LOCAL_ID) || '';
+  seedIssue(fx, 9, { assignees: ['me'], labels: ['in-progress'], comments: [{ createdAt: fakeIso(0), author: { login: 'me' },
+    body: claimBody({ wt: 'wx', branch: 'feat/other-9', host: HOST, iso: fakeIso(0), machineTok: tok, session: 'sX' }).replace(' · session', ' · factory `partner` · session') }] });
+  const r = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /live claim comment by factory partner .* same account, another factory \(#743\)/);
+  const rf = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1', '--force']);
+  assert.match(rf.out, /--force: taking over #9 from factory partner's claim under this account/, rf.out + rf.err);
+});

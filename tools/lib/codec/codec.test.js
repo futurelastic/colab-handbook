@@ -47,6 +47,7 @@ test('the samples cover every claim/release shape the readers distinguish', () =
   assert.ok(claims.some((c) => !c.session && c.sessionName), 'bare name session');
   assert.ok(claims.some((c) => !c.session && !c.sessionName), 'no session');
   assert.ok(claims.some((c) => c.machine) && claims.some((c) => !c.machine), 'machine and legacy no-machine');
+  assert.ok(claims.some((c) => c.factory) && claims.some((c) => !c.factory), 'factory (#743) and no factory');
   assert.ok(claims.some((c) => c.branch === '-'), 'no-branch `-`');
   const kinds = new Set(samples.releases.map((s) => s.decoded.kind));
   assert.deepStrictEqual([...kinds].sort(), ['release', 'yield']);
@@ -90,6 +91,33 @@ test('encodeClaim writes the fields a claim with no worktree/branch/machine/sess
   assert.strictEqual(codec.encodeRelease(), '✅ Released');
   assert.strictEqual(codec.decodeClaim('no claim here'), null);
   assert.strictEqual(codec.decodeRelease('🔒 Claimed'), null);
+});
+
+test('#743: a claim naming its factory still parses, field for field, under the pre-#743 regexes', () => {
+  // The readers an older colab carries: CLAIM_RE, MACHINE_RE and SESSION_RE exactly as they were.
+  const OLD_CLAIM_RE = /🔒 Claimed — worktree `([^`]*)` · branch `([^`]*)` · host `([^`]*)` · (\S+)/;
+  const OLD_MACHINE_RE = /· machine `(m:[0-9a-f]{12})`/;
+  const OLD_SESSION_RE = /· session (.+)$/;
+  for (const s of samples.claims.filter((x) => x.decoded.factory)) {
+    const m = s.wire.match(OLD_CLAIM_RE);
+    assert.deepStrictEqual(m.slice(1, 5), [s.decoded.worktree, s.decoded.branch, s.decoded.host, s.decoded.at], s.wire);
+    assert.strictEqual(s.wire.match(OLD_MACHINE_RE)[1], s.decoded.machine);
+    const old = codec.parseSessionField(s.wire); // unchanged since before #743
+    assert.strictEqual(OLD_SESSION_RE.test(s.wire), true);
+    assert.deepStrictEqual({ session: old.session, sessionName: old.sessionName }, { session: s.decoded.session, sessionName: s.decoded.sessionName });
+  }
+});
+
+test('#743: the factory is read before the session tail only, and omitted when not given', () => {
+  const base = { host: 'h:000000000000', at: '2026-01-01T00:00:00.000Z' };
+  assert.strictEqual(codec.encodeClaim({ ...base, factory: '' }), codec.encodeClaim(base));
+  const w = codec.encodeClaim({ ...base, machine: 'm:0123456789ab', factory: 'team-b', session: 'https://x.test/s', sessionName: 'n' });
+  assert.match(w, /· machine `m:0123456789ab` · factory `team-b` · session \[n\]\(https:\/\/x\.test\/s\)$/);
+  assert.strictEqual(codec.decodeClaim(w).factory, 'team-b');
+  // A session NAME spelling the field does not name a factory.
+  const spoof = codec.encodeClaim({ ...base, sessionName: 'x · factory `core`' });
+  assert.strictEqual(codec.decodeClaim(spoof).factory, '');
+  assert.strictEqual(codec.decodeClaim(spoof).sessionName, 'x · factory `core`');
 });
 
 test('the old modules keep every export, by name and by value', () => {

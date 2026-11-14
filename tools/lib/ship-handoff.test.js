@@ -749,3 +749,50 @@ test('#647 e2e: a run carrying an issue closed before the hand-off lands — Clo
   assert.strictEqual(r2.code, 1, r2.out + r2.err);
   assert.match(r2.err, /#89 has no live 🔒 claim/);
 });
+
+// --- #743: the hand-off and the claim name the same factory ----------------------------------------
+
+test('#743 parseHandoffMarker reads branch, head and factory; the last marker wins; none → null', () => {
+  const m = ho.parseHandoffMarker(`<!-- colab:handoff branch=${BR} head=${HEAD.toUpperCase()} factory=core -->\nwrapped`);
+  assert.deepStrictEqual({ branch: m.branch, head: m.head, factory: m.factory }, { branch: BR, head: HEAD, factory: 'core' });
+  assert.strictEqual(ho.parseHandoffMarker(`<!-- colab:handoff branch=${BR} head=${HEAD} -->`).factory, '');
+  const two = `<!-- colab:handoff branch=a head=1111111 factory=x -->\n<!-- colab:handoff branch=b head=2222222 factory=y -->`;
+  assert.strictEqual(ho.parseHandoffMarker(two).factory, 'y');
+  assert.strictEqual(ho.parseHandoffMarker('no marker here'), null);
+});
+
+test('#743 formatHandoffMarker round-trips through parseHandoffMarker, factory omitted when none', () => {
+  const line = ho.formatHandoffMarker({ branch: BR, head: HEAD, factory: 'core' });
+  assert.strictEqual(line, `<!-- colab:handoff branch=${BR} head=${HEAD} factory=core -->`);
+  assert.strictEqual(ho.parseHandoffMarker(line).factory, 'core');
+  assert.strictEqual(ho.formatHandoffMarker({ branch: BR, head: HEAD, factory: '' }), `<!-- colab:handoff branch=${BR} head=${HEAD} -->`);
+});
+
+const marked = (factory) => ({ ...COMMENT, body: `${ho.formatHandoffMarker({ branch: BR, head: HEAD, factory })}\n${COMMENT.body}` });
+
+test('#743 a hand-off from the SAME login under ANOTHER factory than the claim is refused', () => {
+  const v = ho.handoffVerdict(base({ comment: marked('partner'), claimsByIssue: { 90: [{ ...CLAIM, factory: 'core' }] } }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.reason, 'other-factory-claim');
+  assert.match(v.detail, /factory core/);
+  assert.match(v.detail, /factory partner/);
+});
+
+test('#743 the same factory passes, and the executor names it', () => {
+  const v = ho.handoffVerdict(base({ comment: marked('core'), claimsByIssue: { 90: [{ ...CLAIM, factory: 'core' }] } }));
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.strictEqual(v.executor.factory, 'core');
+});
+
+test('#743 either side naming no factory compares by login alone, as before', () => {
+  assert.strictEqual(ho.handoffVerdict(base({ comment: marked(''), claimsByIssue: { 90: [{ ...CLAIM, factory: 'core' }] } })).ok, true);
+  assert.strictEqual(ho.handoffVerdict(base({ comment: marked('core'), claimsByIssue: { 90: [{ ...CLAIM, factory: '' }] } })).ok, true);
+  assert.strictEqual(ho.handoffVerdict(base()).ok, true, 'no marker, no factory: the pre-#743 hand-off');
+});
+
+test('#743 of two live claims by one login, the one under the hand-off\'s factory is the match', () => {
+  const claims = [{ ...CLAIM, factory: 'partner' }, { ...CLAIM, factory: 'core', host: 'box-c' }];
+  const v = ho.handoffVerdict(base({ comment: marked('core'), claimsByIssue: { 90: claims } }));
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.strictEqual(v.executor.host, 'box-c');
+});

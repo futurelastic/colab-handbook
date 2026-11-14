@@ -17,6 +17,10 @@ to look past such comments; the skill still makes the hand-off unambiguous on it
   costs a human reader nothing in the rendered comment, and it lets a tool find the hand-off
   without matching the branch name and sha in prose. The newest marker whose `head=` equals the
   branch's remote head is the live hand-off; an older one names a head that no longer lands.
+  Where trunk has a `.github/factories.yml`, add ` factory=<id>` before ` -->`: the id
+  `colab factory` prints (#743). A lander matches your claim by login **and** factory, so a
+  hand-off without it is compared by login alone. `colab factory` exiting 1 means there is no
+  factory to name, so leave the field out.
 - The branch, as a whole token, and the **full** head sha — `git rev-parse HEAD`, never a short
   form. `colab ship --handoff` accepts any 7–40 hex prefix of the remote head, but a full sha
   can never be ambiguous and reads the same on every tool that parses the thread.

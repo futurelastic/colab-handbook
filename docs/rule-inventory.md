@@ -1025,11 +1025,12 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.factories.02 | default |  | The factories file is read from trunk's committed copy only, never from the branch being judged, and changing it is a human act. | read from trunk's committed copy only, never from the branch being judged | CONVENTIONS.md | #739 |
 | C5a.factories.03 | default |  | Each machine and each slice belongs to exactly one factory; an invalid factories file trusts nobody. | Each machine and each slice belongs to exactly one factory. An invalid file trusts nobody. | CONVENTIONS.md | #739 |
 | C5a.factories.04 | default |  | Identity is by key, not login: a claim is an SSH-signed commit and a verdict marker carries its factory and a signature by that factory's key. | Identity is by key, not by login | CONVENTIONS.md | #739 |
-| C5a.factories.05 | default |  | A verdict signature covers a fixed payload of its meaningful fields, never the whole comment; a field outside the payload is never trusted. | never the whole comment, and a field outside that payload is never trusted | CONVENTIONS.md | #739 |
+| C5a.factories.05 | default |  | A verdict signature covers a fixed payload of its meaningful fields, never the whole comment; a field outside the payload is never trusted. | never the whole comment; a field outside it is never trusted | CONVENTIONS.md | #739 |
 | C5a.factories.06 | default |  | The payload's forge, repo and issue come from the verifier's context, so a marker copied elsewhere fails. | come from the verifier,** not from the comment | tools/docs/factories.md | #739 |
 | C5a.factories.07 | default |  | A signed verdict binds the full 40-hex head; a signer refuses a short sha. | **`head` is the full sha.** | tools/docs/factories.md | #739 |
 | C5a.factories.08 | default |  | A marker without `factory` and `sig` is nobody's verdict across factories. | It is nobody's verdict across factories. | tools/docs/factories.md | #739 |
 | C5a.factories.09 | explanation |  | Rationale moved to the ADR: why a payload and not the comment body, why the verifier supplies forge/repo, principal = factory id. | Sign a payload, not the comment body. | docs/adr/739-factories-signature-format.md | #739 |
+| C5a.factories.10 | default |  | Claim and hand-off comments name their factory, and one forge login under two factories is two holders. | claim and hand-off comments name their factory (#743) | CONVENTIONS.md | #743 |
 
 ### §5 Mirror for people — GitHub
 

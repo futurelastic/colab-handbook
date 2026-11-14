@@ -54,7 +54,7 @@ function releaseComments(sorted) {
 }
 
 /**
- * Live claim comments on an issue. Returns [{login, host, machine, session, sessionName, at,
+ * Live claim comments on an issue. Returns [{login, host, machine, factory, session, sessionName, at,
  * branch, worktree, identity}], `at` = the comment's real GitHub createdAt (authoritative, sub-second). `identity`
  * is built from `comps` (claim-identity.js `components()`, #267); the raw fields are returned too
  * for callers that need `sameClaimant`'s degrade-on-missing comparison.
@@ -92,7 +92,8 @@ function liveClaimComments(comments, comps) {
     const machineTok = claim.machine; // #327 — '' on a legacy comment: compared by host
     const at = c.createdAt;
     // #578: branch/worktree ride along so a reader can ask WHICH branch a live claim holds.
-    const entry = { login, host, machine: machineTok, session, sessionName, at, branch: claim.branch, worktree: claim.worktree };
+    // #743: the factory too — the same login under another factory is another holder (sameClaimant).
+    const entry = { login, host, machine: machineTok, factory: claim.factory || '', session, sessionName, at, branch: claim.branch, worktree: claim.worktree };
     const cancelled = releases.some((r) => r.at > at && (r.kind === 'release'
       || (r.login === login && !isNamedWinner(entry, r.winner))));
     if (!cancelled) live.push({ ...entry, identity: claimIdentity.identityString({ login, host, session }, comps) });
@@ -102,7 +103,7 @@ function liveClaimComments(comments, comps) {
 
 /**
  * Deterministic verdict on the simultaneous-claim race. Given the issue's comments and our own
- * identity (`myLogin`/`myHost`/`mySession`/`myMachine`): if a live claim that is NOT us under
+ * identity (`myLogin`/`myHost`/`mySession`/`myMachine`/`myFactory` — #743): if a live claim that is NOT us under
  * `comps` (`sameClaimant`, #267) is EARLIER than our own earliest live claim, by no more than
  * `RACE_WINDOW_MS` → we lost (returns the winner). Exact-timestamp ties break on identity string
  * (lexicographically smaller identity wins), so both racers, reading the same comments, reach the
@@ -122,10 +123,10 @@ function liveClaimComments(comments, comps) {
  * a record posts a SECOND comment from us, and anchoring on the latest of those would let that
  * correction restart our own priority — costing us a race we had already won.
  */
-function tieBreakVerdict(comments, myLogin, myHost, mySession, comps, myMachine = null) {
+function tieBreakVerdict(comments, myLogin, myHost, mySession, comps, myMachine = null, myFactory = '') {
   comps = comps || claimIdentity.DEFAULT_COMPONENTS;
   const live = liveClaimComments(comments, comps);
-  const me = { login: myLogin, host: myHost, session: mySession || '', machine: myMachine || '' };
+  const me = { login: myLogin, host: myHost, session: mySession || '', machine: myMachine || '', factory: myFactory || '' };
   const mine = live
     .filter((c) => claimIdentity.sameClaimant(c, me, comps))
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))[0]; // our EARLIEST live claim

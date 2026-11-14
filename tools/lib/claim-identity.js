@@ -160,8 +160,24 @@ function machineScheme(id) {
 }
 
 /**
+ * Could `a` and `b` be the SAME factory (#743)? Two teams may work one repository under one forge
+ * login (`.github/factories.yml`, #739), so a login match alone no longer names a holder: a claim
+ * that names factory `x` and one that names `y` are two holders, whatever login posted them. Like
+ * the session (DEGRADE-ON-MISSING above), the factory decides only when BOTH sides carry one — a
+ * comment written before #743, or on a repository with no factories file, names none, and must not
+ * turn our own earlier claim into a stranger's. Not behind the claimIdentity knob: the factories
+ * file is itself the adopter's declaration that factories are distinct holders.
+ */
+function sameFactory(a, b) {
+  const af = String((a && a.factory) || '').trim();
+  const bf = String((b && b.factory) || '').trim();
+  return !af || !bf || af === bf;
+}
+
+/**
  * Are `a` and `b` the SAME claimant under `comps`? `login` and the machine (`sameHost`, #327) are
- * always required to match — they are the baseline every component set includes. `session`
+ * always required to match — they are the baseline every component set includes — and so is the
+ * factory where both name one (`sameFactory`, #743). `session`
  * sharpens the match ONLY when `comps` includes it AND both sides carry a non-empty value that is a
  * real session; either side blank, or either side a planner intent id (#326 — replaced by the real
  * session at spawn, so it is not a different claimant), degrades that pair back to the coarse
@@ -170,6 +186,7 @@ function machineScheme(id) {
 function sameClaimant(a, b, comps) {
   if (!a || !b) return false;
   if ((a.login || '') !== (b.login || '')) return false;
+  if (!sameFactory(a, b)) return false;
   if (!sameHost(a, b)) return false;
   if (comps && comps.includes('session') && a.session && b.session
     && !isIntentSession(a.session) && !isIntentSession(b.session)) {
@@ -227,6 +244,6 @@ const { looksLikeSessionId } = require('./codec/claim'); // one copy of the rule
 module.exports = {
   DEFAULT_COMPONENTS, FINE_COMPONENTS,
   claimIdentityProblem, components, identityString, sameClaimant, mergeClaimRecord,
-  looksLikeSessionId, isIntentSession, sameHost,
+  looksLikeSessionId, isIntentSession, sameHost, sameFactory,
   shouldDerivePersonSession, derivePersonSession, isPersonSession,
 };
