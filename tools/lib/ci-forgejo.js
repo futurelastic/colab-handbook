@@ -10,6 +10,8 @@
  *   runsAtRef     — the rows at a batch head (#742): the same status read, ignoring the ref;
  *   issueListAll  — a READ of every issue (switch markers, the release hold, an existing tracking
  *                   record), in the GitHub adapter's shape; nothing here writes an issue;
+ *   issueView / commentView — (#740) READS of one issue (its comments and state: the executor's
+ *                   claim a hand-off land checks) and of one comment by id (the hand-off itself);
  *   releaseView / releaseCreate — the release object for a tag (`/releases`).
  * Plus three reads that are NOT contract (forge-shaped, like the GitHub adapter's raw run lists):
  * `ciRunsAt` (the status rows at a commit), `ciRunsSince` (rows for every commit on a branch since a
@@ -143,6 +145,16 @@ function issueShape(i) {
   };
 }
 
+/** One comment from Forgejo's comment API → the GitHub adapter's comment shape (`gh issue view --json comments`). Pure. */
+function commentShape(c) {
+  return {
+    author: { login: (c && c.user && c.user.login) || '' },
+    body: c && c.body != null ? String(c.body) : '',
+    createdAt: (c && c.created_at) || null,
+    url: (c && c.html_url) || null,
+  };
+}
+
 function pick(o, fields) {
   if (!Array.isArray(fields) || !fields.length) return o;
   const out = {};
@@ -257,6 +269,46 @@ function create(repoAbs, eng) {
       return result(true, { data: out.slice(0, limit).map((i) => pick(i, fields)) });
     },
 
+    /**
+     * One issue (tracker contract, #740): the GitHub adapter's shape, narrowed to `fields`; null when it
+     * could not be read (absent, any failed read). `comments` costs a second, paged
+     * read, so it is made only when asked for — and a partial comment list is null, never a short list.
+     */
+    issueView: (num, fields = null) => {
+      const r = httpGet(`${base}/issues/${Number(num)}`, eng.tokenEnv);
+      if (r.status !== 200) return null;
+      let i;
+      try { i = JSON.parse(r.body); } catch (_) { return null; }
+      if (!i || typeof i !== 'object' || Array.isArray(i)) return null;
+      const out = issueShape(i);
+      if (Array.isArray(fields) && fields.includes('comments')) {
+        const comments = [];
+        for (let page = 1; ; page++) {
+          if (page > MAX_PAGES) return null; // more comments than we read: never a partial claim read
+          const c = httpGet(`${base}/issues/${Number(num)}/comments?page=${page}&limit=${PAGE_LIMIT}`, eng.tokenEnv);
+          if (c.status !== 200) return null;
+          let list;
+          try { list = JSON.parse(c.body); } catch (_) { return null; }
+          if (!Array.isArray(list)) return null;
+          for (const x of list) comments.push(commentShape(x));
+          if (list.length < PAGE_LIMIT) break;
+        }
+        out.comments = comments;
+      }
+      return pick(out, fields);
+    },
+
+    /** One issue comment by id (tracker contract, #740): `{ body, login, createdAt, htmlUrl }`, null when unread. */
+    commentView: (id) => {
+      if (!/^\d+$/.test(String(id || ''))) return null;
+      const r = httpGet(`${base}/issues/comments/${String(id)}`, eng.tokenEnv);
+      if (r.status !== 200) return null;
+      let c;
+      try { c = JSON.parse(r.body); } catch (_) { return null; }
+      if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+      return { body: c.body == null ? '' : String(c.body), login: (c.user && c.user.login) || '', createdAt: c.created_at || '', htmlUrl: c.html_url || '' };
+    },
+
     /** #681, not contract: the issues blocking issue `num` — `[{ number, state, closedAt }]`, null when unread. */
     blockedBy: (num) => {
       const r = httpGet(`${base}/issues/${Number(num)}/dependencies?limit=${PAGE_LIMIT}`, eng.tokenEnv);
@@ -303,4 +355,4 @@ function notGreen(rows) {
     .map((x) => ({ name: x.workflowName || 'unnamed', status: x.status, conclusion: x.conclusion || null }));
 }
 
-module.exports = { create, withFetcher, statusRow, rowsFromPages, notGreen, issueShape, PAGE_LIMIT };
+module.exports = { create, withFetcher, statusRow, rowsFromPages, notGreen, issueShape, commentShape, PAGE_LIMIT };

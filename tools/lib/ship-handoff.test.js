@@ -27,6 +27,7 @@ const ho = require('./ship-handoff');
 const BR = 'feat/thing-90';
 const HEAD = 'abcdef0123456789abcdef0123456789abcdef01';
 const URL = 'https://github.com/acme/widget/issues/90#issuecomment-555';
+const REF = 'github.com/acme/widget#90@comment:555'; // #740: the neutral form of the same comment
 const COMMENT = {
   body: `wrapped on \`${BR}\` (head ${HEAD.slice(0, 8)}, cut from main @ 1234567).`,
   login: 'exec', createdAt: '2026-10-08T12:00:00Z', htmlUrl: URL,
@@ -55,7 +56,9 @@ test('#578 a complete hand-off passes and yields the branch-named issue set', ()
   assert.deepStrictEqual(v.issues, [90]);
   assert.strictEqual(v.sha, HEAD);
   assert.strictEqual(v.executor.login, 'exec');
-  assert.strictEqual(ho.handoffTrailer(v), `Colab-Handoff: ${URL} @ ${HEAD.slice(0, 12)}`);
+  assert.strictEqual(ho.handoffTrailer(v), `Colab-Handoff: ${REF} @ ${HEAD.slice(0, 12)}`, '#740: a URL-form hand-off records the neutral form');
+  assert.strictEqual(v.url, URL, 'the value as given stays on the verdict');
+  assert.strictEqual(v.ref, REF);
 });
 
 test('#578 a group branch needs the executor\'s live claim on EVERY member', () => {
@@ -284,6 +287,9 @@ function postHandoff(fx, issue, id, body, login = 'me') {
 }
 
 const SHIPPER = { session: 'https://example.invalid/session_LANDER' };
+/** #740: the neutral reference for a hand-off comment URL — what the trailer records. */
+const refOf = (url) => ho.formatHandoffRef(ho.parseHandoffRef(url));
+const reEsc = (x) => x.replace(/[.?/#]/g, '\\$&');
 
 test('#578 e2e: claim on machine A, ship on machine B from the hand-off — lands and closes, no --force', () => {
   const fx = fixture();
@@ -297,7 +303,8 @@ test('#578 e2e: claim on machine A, ship on machine B from the hand-off — land
   assert.match(bare.err, /claim registry has nothing for this branch/);
 
   // The dry JSON a lander reads first — the hand-off row passes and nothing is human-gated.
-  const dry = colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB, '--dry', '--json'], { home: fx.homeB, ...SHIPPER });
+  // #740: named forge-neutrally here, and by its URL (the alias) for the land below — same door.
+  const dry = colab(fx, ['ship', '--branch', BR, '--handoff', refOf(url), '--repo', fx.workB, '--dry', '--json'], { home: fx.homeB, ...SHIPPER });
   const rep = JSON.parse(dry.out);
   const row = rep.checks.find((c) => /hand-off verified/.test(c.name));
   assert.ok(row && row.ok, JSON.stringify(rep.checks, null, 1));
@@ -313,7 +320,7 @@ test('#578 e2e: claim on machine A, ship on machine B from the hand-off — land
   // Landed on origin's trunk, as one squash carrying Closes + the door it came through.
   const msg = execFileSync('git', ['--git-dir', fx.origin, 'log', '-1', '--format=%B', 'main'], { encoding: 'utf8' });
   assert.match(msg, /Closes #90/);
-  assert.match(msg, new RegExp(`Colab-Handoff: ${url.replace(/[.?/#]/g, '\\$&')} @ ${head.slice(0, 12)}`));
+  assert.match(msg, new RegExp(`Colab-Handoff: ${reEsc(refOf(url))} @ ${head.slice(0, 12)}`), '#740: the URL-form hand-off records the neutral form');
   assert.strictEqual(execFileSync('git', ['--git-dir', fx.origin, 'show', 'main:thing.txt'], { encoding: 'utf8' }), 'built on A\n');
 
   // The 🚢 comment names the hand-off; no takeover anywhere; the branch is kept for the executor.
@@ -382,7 +389,7 @@ test('#579 verdict: a hand-off naming a sha the head reached through base-sync m
   assert.strictEqual(v.sha, M2, 'what lands is the synced head');
   assert.strictEqual(v.handedOff, H);
   assert.strictEqual(v.syncMerges, 2);
-  assert.strictEqual(ho.handoffTrailer(v), `Colab-Handoff: ${URL} @ ${H.slice(0, 12)} (synced to ${M2.slice(0, 12)} by 2 base merges)`);
+  assert.strictEqual(ho.handoffTrailer(v), `Colab-Handoff: ${REF} @ ${H.slice(0, 12)} (synced to ${M2.slice(0, 12)} by 2 base merges)`);
   // Without the chain the same hand-off is head-moved — the rule #578 shipped, unchanged.
   const bare = ho.handoffVerdict(base({ comment: c, refs: { localSha: null, remoteSha: M2 } }));
   assert.strictEqual(bare.reason, 'head-moved');
@@ -391,7 +398,59 @@ test('#579 verdict: a hand-off naming a sha the head reached through base-sync m
   assert.strictEqual(short.reason, 'head-moved');
   assert.match(short.detail, /nor the sha its base-sync merges sit on/);
   // An unsynced hand-off's trailer is exactly #578's.
-  assert.strictEqual(ho.handoffTrailer(ho.handoffVerdict(base())), `Colab-Handoff: ${URL} @ ${HEAD.slice(0, 12)}`);
+  assert.strictEqual(ho.handoffTrailer(ho.handoffVerdict(base())), `Colab-Handoff: ${REF} @ ${HEAD.slice(0, 12)}`);
+});
+
+// =================================================================================================
+// #740 — the forge-neutral reference: <forge-host>/<owner>/<repo>#<N>@comment:<id>
+// =================================================================================================
+
+test('#740 parseHandoffRef: the neutral form, and the URL kept as an alias', () => {
+  assert.deepStrictEqual(ho.parseHandoffRef(REF), { host: 'github.com', owner: 'acme', repo: 'widget', issue: 90, commentId: '555', form: 'ref' });
+  assert.deepStrictEqual(ho.parseHandoffRef(URL), { host: 'github.com', owner: 'acme', repo: 'widget', issue: 90, commentId: '555', form: 'url' });
+  assert.deepStrictEqual(ho.parseHandoffRef('Forge.Example:3000/OWNER/REPO#7@comment:12'),
+    { host: 'forge.example:3000', owner: 'OWNER', repo: 'REPO', issue: 7, commentId: '12', form: 'ref' }, 'a host is case-insensitive; a port rides along');
+  for (const bad of ['acme/widget#90@comment:555', 'github.com/acme/widget#90', 'github.com/acme/widget#90@comment:', 'github.com/acme/widget/x#90@comment:5',
+    'github.com/acme/widget#90@issuecomment:555', 'https://github.com/acme/widget#90@comment:555', '555', '']) {
+    assert.strictEqual(ho.parseHandoffRef(bad), null, bad);
+  }
+  assert.strictEqual(ho.formatHandoffRef(ho.parseHandoffRef(URL)), REF);
+});
+
+test('#740 GitHub: a neutral reference passes exactly as its URL does, and records itself', () => {
+  const v = ho.handoffVerdict(base({ url: REF }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v));
+  assert.deepStrictEqual(v.issues, [90]);
+  assert.strictEqual(v.url, REF);
+  assert.strictEqual(v.ref, REF);
+  assert.strictEqual(ho.handoffTrailer(v), `Colab-Handoff: ${REF} @ ${HEAD.slice(0, 12)}`);
+  // Owner and repo compare case-insensitively, as the forge resolves them; the record keeps the forge's spelling.
+  assert.strictEqual(ho.handoffVerdict(base({ url: 'GitHub.com/ACME/Widget#90@comment:555' })).ref, REF);
+});
+
+test('#740 Forgejo: a neutral reference on a forge host resolves against the comment the forge engine read back', () => {
+  const FURL = 'https://forge.example/OWNER/REPO/issues/90#issuecomment-555';
+  const FREF = 'forge.example/OWNER/REPO#90@comment:555';
+  const c = { ...COMMENT, htmlUrl: FURL };
+  const v = ho.handoffVerdict(base({ url: FREF, comment: c }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v));
+  assert.strictEqual(ho.handoffTrailer(v), `Colab-Handoff: ${FREF} @ ${HEAD.slice(0, 12)}`);
+  const alias = ho.handoffVerdict(base({ url: FURL, comment: c }));
+  assert.strictEqual(alias.ok, true, JSON.stringify(alias));
+  assert.strictEqual(alias.ref, FREF, 'the Forgejo comment URL is an alias too, and records the neutral form');
+});
+
+test('#740 a neutral reference naming another host, repo, issue or comment is a mismatch, named in neutral form', () => {
+  for (const url of ['forge.example/acme/widget#90@comment:555', 'github.com/acme/other#90@comment:555',
+    'github.com/acme/widget#7@comment:555', 'github.com/acme/widget#90@comment:556',
+    'https://forge.example/acme/widget/issues/90#issuecomment-555']) {
+    const v = ho.handoffVerdict(base({ url }));
+    assert.strictEqual(v.reason, 'mismatch', `${url} → ${v.reason}`);
+    assert.match(v.detail, /but comment 55[56] is github\.com\/acme\/widget#90@comment:555/);
+  }
+  const bad = ho.handoffVerdict(base({ url: 'acme/widget#90' }));
+  assert.strictEqual(bad.reason, 'bad-url');
+  assert.match(bad.detail, /<forge-host>\/<owner>\/<repo>#<N>@comment:<id>/);
 });
 
 /** A throwaway repo with a `main` and a branch `br` off it, for the chain walk on real git. */
@@ -490,7 +549,7 @@ test('#579 e2e: a handed-off branch behind trunk is synced by the lander and lan
   assert.match(r.out, /✓ Shipped feat\/thing-90 → main/);
   const msg = execFileSync('git', ['--git-dir', fx.origin, 'log', '-1', '--format=%B', 'main'], { encoding: 'utf8' });
   assert.match(msg, /Closes #90/);
-  assert.ok(msg.includes(`Colab-Handoff: ${url} @ ${head.slice(0, 12)} (synced to ${synced.slice(0, 12)} by 1 base merge)`), msg);
+  assert.ok(msg.includes(`Colab-Handoff: ${refOf(url)} @ ${head.slice(0, 12)} (synced to ${synced.slice(0, 12)} by 1 base merge)`), msg);
   assert.strictEqual(execFileSync('git', ['--git-dir', fx.origin, 'show', 'main:thing.txt'], { encoding: 'utf8' }), 'built on A\n');
   assert.strictEqual(execFileSync('git', ['--git-dir', fx.origin, 'show', 'main:other.txt'], { encoding: 'utf8' }), 'landed elsewhere\n');
   assert.ok(!callLog(fx).includes('--force'));
@@ -535,7 +594,11 @@ test('#591 parseBatchEntries / parseHandoffTrailer: the member grammar and the t
   assert.match(ho.parseBatchEntries(`${BR}@`).errors[0], /no hand-off URL/);
   assert.match(ho.parseBatchEntries(`${BR}@${URL},${BR}@${URL}0`).errors[0], /two different hand-offs/);
   const v = ho.handoffVerdict(base());
-  assert.deepStrictEqual(ho.parseHandoffTrailer(`fix: x\n\nCloses #90\n${ho.handoffTrailer(v)}\n`), { url: URL, handedOff: HEAD.slice(0, 12) });
+  assert.deepStrictEqual(ho.parseHandoffTrailer(`fix: x\n\nCloses #90\n${ho.handoffTrailer(v)}\n`), { url: REF, handedOff: HEAD.slice(0, 12) });
+  // #740: a squash written before the neutral form recorded the URL — it still reads back.
+  assert.deepStrictEqual(ho.parseHandoffTrailer(`fix: x\n\nCloses #90\nColab-Handoff: ${URL} @ ${HEAD.slice(0, 12)}\n`), { url: URL, handedOff: HEAD.slice(0, 12) });
+  // #740: a neutral member reference splits on its FIRST @ — the `@comment:` inside it stays with the reference.
+  assert.deepStrictEqual(ho.parseBatchEntries(`a-1,${BR}@${REF}`), { members: ['a-1', BR], handoffs: { [BR]: REF }, errors: [] });
   assert.strictEqual(ho.parseHandoffTrailer('fix: x\n\nCloses #90\n'), null);
 });
 
@@ -546,7 +609,7 @@ test('#591 e2e: one local + one hand-off member land on ONE combined run — the
   g(fx.workB, 'pull', '-q', 'origin', 'main');
   landerBuilds(fx, LOCAL, 91);
 
-  const list = `${LOCAL},${BR}@${url}`;
+  const list = `${LOCAL},${BR}@${refOf(url)}`; // #740: a neutral member reference — its own @ stays with it
   let r = colab(fx, ['ship', '--batch', list, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
   assert.strictEqual(r.code, 3, r.out + r.err);
   assert.match(r.out, /BATCH-PENDING ship-batch\//);
@@ -559,10 +622,10 @@ test('#591 e2e: one local + one hand-off member land on ONE combined run — the
 
   // Two squashes on trunk, one fast-forward; the hand-off member's carries its door and its Closes.
   const subjects = execFileSync('git', ['--git-dir', fx.origin, 'log', '--format=%B%x00', 'main'], { encoding: 'utf8' }).split('\0');
-  const hand = subjects.find((b) => /Ship-Batch-Member: .*feat\/thing-90/.test(b) || b.includes(`Colab-Handoff: ${url}`));
+  const hand = subjects.find((b) => /Ship-Batch-Member: .*feat\/thing-90/.test(b) || b.includes(`Colab-Handoff: ${refOf(url)}`));
   assert.ok(hand, subjects.join('\n---\n'));
   assert.match(hand, /Closes #90/);
-  assert.match(hand, new RegExp(`Colab-Handoff: ${url.replace(/[.?/#]/g, '\\$&')} @ ${head.slice(0, 12)}`));
+  assert.match(hand, new RegExp(`Colab-Handoff: ${reEsc(refOf(url))} @ ${head.slice(0, 12)}`));
   const local = subjects.find((b) => /Closes #91/.test(b));
   assert.ok(local && !/Colab-Handoff/.test(local), 'the local member carries no hand-off trailer');
   assert.strictEqual(execFileSync('git', ['--git-dir', fx.origin, 'show', 'main:thing.txt'], { encoding: 'utf8' }), 'built on A\n');
@@ -570,7 +633,7 @@ test('#591 e2e: one local + one hand-off member land on ONE combined run — the
 
   // The single hand-off land's tail: 🚢 names the hand-off, the executor's branch is kept, no takeover.
   const comments = issueState(fx, 90).comments.map((c) => c.body);
-  assert.ok(comments.some((b) => /Shipped to main by colab ship/.test(b) && b.includes(url)), comments.join('\n---\n'));
+  assert.ok(comments.some((b) => /Shipped to main by colab ship/.test(b) && b.includes(refOf(url))), comments.join('\n---\n')); // #740: named as given — here, neutrally
   assert.ok(g(fx.workB, 'ls-remote', 'origin', `refs/heads/${BR}`), 'the executor\'s branch is not deleted');
   assert.ok(!callLog(fx).includes('--force'));
   const stB = JSON.parse(fs.readFileSync(path.join(fx.homeB, 'state.json'), 'utf8'));
@@ -600,7 +663,7 @@ test('#591: a bare --handoff beside --batch names no member and refuses, pointin
   const fx = fixture({ batch: true });
   const r = colab(fx, ['ship', '--batch', BR, '--handoff', URL, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
   assert.notStrictEqual(r.code, 0);
-  assert.match(r.err, /--batch <b1>,<b2>@<hand-off-url>/);
+  assert.match(r.err, /--batch <b1>,<b2>@<hand-off-ref>/);
 });
 
 // =================================================================================================

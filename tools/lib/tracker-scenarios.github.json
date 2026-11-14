@@ -6,6 +6,11 @@
       {"argv":["issue","view","7","--json","number,title,state,labels,assignees"],"json":{"assignees":[{"id":"U_bob","login":"bob","name":""}],"labels":[{"id":"LA_bug","name":"bug","description":"Something isn't working","color":"d73a4a"},{"id":"LA_in-progress","name":"in-progress","description":"Claimed by an active session","color":"FBCA04"}],"number":7,"state":"OPEN","title":"fix: the importer drops rows"}},
       {"argv":["issue","view","99","--json","number"],"ok":false,"code":1,"stderr":"GraphQL: Could not resolve to an issue or pull request with the number of 99. (repository.issue)"}
     ],
+    "comment-view": [
+      {"argv":["api","repos/{owner}/{repo}/issues/comments/555"],"json":{"url":"https://api.github.com/repos/OWNER/REPO/issues/comments/555","html_url":"https://github.com/OWNER/REPO/issues/90#issuecomment-555","issue_url":"https://api.github.com/repos/OWNER/REPO/issues/90","id":555,"node_id":"IC_555","user":{"login":"exec","id":1,"type":"User"},"created_at":"2026-10-08T12:00:00Z","updated_at":"2026-10-08T12:00:00Z","author_association":"MEMBER","body":"wrapped on feat/export-90 (head abcdef01).","reactions":{"total_count":0}}},
+      {"argv":["api","repos/{owner}/{repo}/issues/comments/999"],"ok":false,"code":1,"stdout":"{\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/issues/comments#get-an-issue-comment\",\"status\":\"404\"}","stderr":"gh: Not Found (HTTP 404)"},
+      {"argv":["issue","view","90","--json","state,closedAt,comments"],"json":{"closedAt":null,"comments":[{"id":"IC_555","author":{"login":"exec"},"authorAssociation":"MEMBER","body":"wrapped on feat/export-90 (head abcdef01).","createdAt":"2026-10-08T12:00:00Z","includesCreatedEdit":false,"isMinimized":false,"minimizedReason":"","reactionGroups":[],"url":"https://github.com/OWNER/REPO/issues/90#issuecomment-555","viewerDidAuthor":false}],"state":"OPEN"}}
+    ],
     "issue-create": [
       {"argv":["issue","create","--title","feat: export as CSV","--body","## Goal\nExport."],"stdout":"https://github.com/OWNER/REPO/issues/9\n"},
       {"argv":["issue","view","9","--json","title,body,state,labels,assignees,comments"],"json":{"assignees":[],"body":"## Goal\nExport.","comments":[],"labels":[],"state":"OPEN","title":"feat: export as CSV"}}

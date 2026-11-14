@@ -15,7 +15,7 @@
     "login": "the account the tracker is authenticated as (what currentLogin returns, and the author of anything this tracker writes).",
     "offline": "true = the tracker cannot be reached: reads return their `could not read` value (null, or `data: null`), writes return ok:false. Never a throw.",
     "labels": "the label names defined on the repo, in the order labelList returns them.",
-    "issues": "[{number, title, body, state: OPEN|CLOSED, stateReason, labels: [name], assignees: [login], comments: [{author, body}], events: [{event: \"labeled\", label, actor}]}] — `events` is the label timeline claimHolder reads; the claimer is the actor of the LATEST labeled in-progress event.",
+    "issues": "[{number, title, body, state: OPEN|CLOSED, stateReason, labels: [name], assignees: [login], comments: [{id, author, body, createdAt}] (`id` is the comment's repo-wide id, the one commentView reads by — #740), events: [{event: \"labeled\", label, actor}]}] — `events` is the label timeline claimHolder reads; the claimer is the actor of the LATEST labeled in-progress event.",
     "prs": "[{number, head, base, title, body, state: OPEN|CLOSED|MERGED, author}] — issues and pull requests share ONE number sequence, as on GitHub.",
     "runs": "[{headBranch, headSha, status, conclusion, event, workflowName, createdAt, databaseId}] — CI runs; runList returns them newest first by createdAt; ciVerdict (#678) summarizes the ones at one sha; runsAtRef (#742) returns the ones on one ref at one sha as rows, with `attempt` and `updatedAt` when seeded.",
     "releases": "[{tag, prerelease}]"
@@ -41,6 +41,22 @@
         { "call": "issueView", "args": [7, ["number", "title", "state", "labels", "assignees"]],
           "expect": { "number": 7, "title": "fix: the importer drops rows", "state": "OPEN", "labels": [{ "name": "bug" }, { "name": "in-progress" }], "assignees": [{ "login": "bob" }] } },
         { "call": "issueView", "args": [99, ["number"]], "expect": null }
+      ]
+    },
+    {
+      "id": "comment-view",
+      "description": "commentView (#740) reads one comment of this repo by its id alone — body, author login, createdAt and the forge's own web address for it, which names the issue it sits on; an id the repo does not have reads as null. issueView with `comments` returns each comment's author as an object and its createdAt — what the executor's-claim read of a hand-off land orders by.",
+      "given": {
+        "login": "alice",
+        "issues": [{ "number": 90, "title": "feat: export", "state": "OPEN",
+          "comments": [{ "id": 555, "author": "exec", "body": "wrapped on feat/export-90 (head abcdef01).", "createdAt": "2026-10-08T12:00:00Z" }] }]
+      },
+      "steps": [
+        { "call": "commentView", "args": ["555"],
+          "expect": { "body": "wrapped on feat/export-90 (head abcdef01).", "login": "exec", "createdAt": "2026-10-08T12:00:00Z", "htmlUrl": { "$re": "/issues/90#issuecomment-555$" } } },
+        { "call": "commentView", "args": ["999"], "expect": null },
+        { "call": "issueView", "args": [90, ["state", "closedAt", "comments"]],
+          "expect": { "state": "OPEN", "comments": [{ "author": { "login": "exec" }, "body": "wrapped on feat/export-90 (head abcdef01).", "createdAt": "2026-10-08T12:00:00Z" }] } }
       ]
     },
     {

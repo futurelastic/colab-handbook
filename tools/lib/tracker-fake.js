@@ -42,6 +42,13 @@ function create(repoAbs, given = {}) {
   const runs = clone(given.runs || []);
   const releases = new Map((given.releases || []).map((r) => [r.tag, clone(r)]));
   const base = `https://tracker.invalid/${String(repoAbs).replace(/^\/+/, '')}`;
+  // #740: comment ids are ONE sequence across the repo, as on a real forge — commentView reads by id alone.
+  let lastCommentId = 0;
+  const commentOf = (num, c) => {
+    const id = c.id === undefined ? ++lastCommentId : Number(c.id);
+    lastCommentId = Math.max(lastCommentId, id);
+    return { id, issue: num, author: c.author, body: c.body, createdAt: c.createdAt || null };
+  };
 
   for (const i of given.issues || []) {
     issues.set(i.number, {
@@ -49,7 +56,7 @@ function create(repoAbs, given = {}) {
       stateReason: i.stateReason || (i.state === 'CLOSED' ? 'COMPLETED' : ''),
       createdAt: i.createdAt || null, closedAt: i.closedAt || null,
       labels: clone(i.labels || []), assignees: clone(i.assignees || []),
-      comments: (i.comments || []).map((c) => ({ author: c.author, body: c.body })),
+      comments: (i.comments || []).map((c) => commentOf(i.number, c)),
       events: clone(i.events || []),
     });
   }
@@ -65,7 +72,7 @@ function create(repoAbs, given = {}) {
       createdAt: i.createdAt, closedAt: i.closedAt, url: `${base}/issues/${i.number}`,
       labels: i.labels.map((name) => ({ name })),
       assignees: i.assignees.map((l) => ({ login: l })),
-      comments: i.comments.map((c) => ({ author: { login: c.author }, body: c.body })),
+      comments: i.comments.map((c) => ({ author: { login: c.author }, body: c.body, createdAt: c.createdAt, url: `${base}/issues/${i.number}#issuecomment-${c.id}` })),
     };
   }
   function prShape(p) {
@@ -94,6 +101,14 @@ function create(repoAbs, given = {}) {
       const i = issues.get(Number(num));
       return offline || !i ? null : pick(issueShape(i), fields);
     },
+    commentView: (id) => {
+      if (offline) return null;
+      for (const i of issues.values()) {
+        const c = i.comments.find((x) => String(x.id) === String(id));
+        if (c) return { body: c.body, login: c.author, createdAt: c.createdAt || '', htmlUrl: `${base}/issues/${i.number}#issuecomment-${c.id}` };
+      }
+      return null;
+    },
     issueListAll: ({ limit, fields } = {}) => withList([...issues.values()]
       .sort((a, b) => b.number - a.number).slice(0, limit).map((i) => pick(issueShape(i), fields))),
     issueCreate: ({ title, body }) => {
@@ -108,8 +123,9 @@ function create(repoAbs, given = {}) {
       const i = issues.get(Number(num));
       if (offline) return result(false);
       if (!i) return fail(`issue #${num} not found`);
-      i.comments.push({ author: login, body });
-      return result(true, { stdout: `${base}/issues/${num}#issuecomment-${i.comments.length}` });
+      const c = commentOf(i.number, { author: login, body, createdAt: new Date().toISOString() });
+      i.comments.push(c);
+      return result(true, { stdout: `${base}/issues/${num}#issuecomment-${c.id}` });
     },
     issueClose: (num, { reason } = {}) => {
       const i = issues.get(Number(num));

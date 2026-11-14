@@ -249,3 +249,51 @@ test('#681 ciVerdict takes a rowsFilter — the rows it drops are not part of th
   const v = forgejo.withFetcher(() => ({ status: 200, body }), () => forgejo.create('/r', ENG).ciVerdict(SHA, { rowsFilter: (rows) => rows.filter((r) => !/^release-auto \//.test(r.workflowName)) }));
   assert.deepStrictEqual([v.status, v.conclusion, v.runCount], ['completed', 'success', 1]);
 });
+
+test('#740 commentView reads one comment by id; every failed read is null', () => {
+  const body = { id: 555, html_url: 'https://forge.example/acme/app/issues/90#issuecomment-555', user: { login: 'exec' }, body: 'wrapped', created_at: '2026-10-08T12:00:00Z' };
+  const c = forgejo.withFetcher((url) => {
+    assert.strictEqual(url, 'https://forge.example/api/v1/repos/acme/app/issues/comments/555');
+    return { status: 200, body: JSON.stringify(body) };
+  }, () => forgejo.create('/r', ENG).commentView('555'));
+  assert.deepStrictEqual(c, { body: 'wrapped', login: 'exec', createdAt: '2026-10-08T12:00:00Z', htmlUrl: body.html_url });
+  for (const reply of [{ status: 404, body: '' }, { status: 0, error: 'x' }, { status: 200, body: 'nope' }, { status: 200, body: '[]' }]) {
+    assert.strictEqual(forgejo.withFetcher(() => reply, () => forgejo.create('/r', ENG).commentView('555')), null, JSON.stringify(reply));
+  }
+  let called = false;
+  assert.strictEqual(forgejo.withFetcher(() => { called = true; return { status: 200, body: '{}' }; }, () => forgejo.create('/r', ENG).commentView('5/../x')), null);
+  assert.strictEqual(called, false, 'a non-numeric id is never requested');
+});
+
+test('#740 issueView: the GitHub shape; comments only when asked, every page read, a failed or capped page is null', () => {
+  const issue = { number: 90, title: 'feat', body: '', state: 'closed', closed_at: '2026-10-09T00:00:00Z', labels: [], assignees: [], created_at: '2026-10-01T00:00:00Z', html_url: 'https://forge.example/acme/app/issues/90' };
+  const cm = (i) => ({ id: i, user: { login: 'exec' }, body: `c${i}`, created_at: '2026-10-08T12:00:00Z', html_url: `https://forge.example/acme/app/issues/90#issuecomment-${i}` });
+  const calls = [];
+  const fetcher = (pages) => (url) => {
+    calls.push(url);
+    if (/\/issues\/90$/.test(url)) return { status: 200, body: JSON.stringify(issue) };
+    const m = /\/issues\/90\/comments\?page=(\d+)&limit=50$/.exec(url);
+    if (!m) return { status: 404, body: '' };
+    const p = pages[Number(m[1]) - 1];
+    return p === undefined ? { status: 200, body: '[]' } : p;
+  };
+  // no comments asked → one request
+  const bare = forgejo.withFetcher(fetcher([]), () => forgejo.create('/r', ENG).issueView(90, ['state', 'closedAt']));
+  assert.deepStrictEqual(bare, { state: 'CLOSED', closedAt: '2026-10-09T00:00:00Z' });
+  assert.strictEqual(calls.length, 1);
+  // two pages of comments → all of them, in order, GitHub's comment shape
+  const full = Array.from({ length: 50 }, (_, i) => cm(i + 1));
+  const v = forgejo.withFetcher(fetcher([{ status: 200, body: JSON.stringify(full) }, { status: 200, body: JSON.stringify([cm(51)]) }]),
+    () => forgejo.create('/r', ENG).issueView(90, ['state', 'comments']));
+  assert.strictEqual(v.comments.length, 51);
+  assert.deepStrictEqual(v.comments[50], { author: { login: 'exec' }, body: 'c51', createdAt: '2026-10-08T12:00:00Z', url: 'https://forge.example/acme/app/issues/90#issuecomment-51' });
+  // a failed comment page is null — never a short list a claim read would trust
+  assert.strictEqual(forgejo.withFetcher(fetcher([{ status: 200, body: JSON.stringify(full) }, { status: 502, body: '' }]),
+    () => forgejo.create('/r', ENG).issueView(90, ['comments'])), null);
+  // more comment pages than the cap is null too
+  assert.strictEqual(forgejo.withFetcher(fetcher(Array.from({ length: 11 }, () => ({ status: 200, body: JSON.stringify(full) }))),
+    () => forgejo.create('/r', ENG).issueView(90, ['comments'])), null);
+  // an issue the forge does not have is null
+  assert.strictEqual(forgejo.withFetcher(() => ({ status: 404, body: '' }), () => forgejo.create('/r', ENG).issueView(91, ['state'])), null);
+});
+

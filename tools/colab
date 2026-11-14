@@ -11403,8 +11403,8 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
   return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}${admittedSuffix}${progressSuffix}`;
 }
 
-const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt | --handoff <comment-url>] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
-       colab ship --batch <b1,b2[@<handoff-url>][,…]> [--split] [--onto ship-batch/<sha7>] [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry [--json]]
+const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt | --handoff <ref>] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
+       colab ship --batch <b1,b2[@<handoff-ref>][,…]> [--split] [--onto ship-batch/<sha7>] [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry [--json]]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
@@ -11516,19 +11516,23 @@ here, or pass --adopt if it genuinely has no issue — the squash then carries a
 still a legitimate zero. --adopt never bypasses a branch that names issues.
 
 A HAND-OFF (#578) is the non-force door for a branch whose claim lives on ANOTHER machine:
-\`colab ship --branch <br> --handoff <url>\`, where <url> is the executor's hand-off comment
-(…/issues/<N>#issuecomment-<id>). With zero claims here, ship takes the issue set from the branch
+\`colab ship --branch <br> --handoff <ref>\`, where <ref> names the executor's hand-off comment
+forge-neutrally — \`<forge-host>/<owner>/<repo>#<N>@comment:<id>\` (#740) — or by its URL
+(…/issues/<N>#issuecomment-<id>, kept as an alias). Either is resolved through the repo's tracker
+adapter: the GitHub tracker, or on a Forgejo remote the forge engine (reads only — colab writes no
+claim comment there, #678, so the claim below must come from the adopter's tracker layer). With zero claims here, ship takes the issue set from the branch
 name's trailing run once the hand-off proves all of: the comment is on one of THIS repo's issues,
 one the branch carries; it names the branch and a sha that is the remote branch's CURRENT head (a
 branch that moved after its hand-off needs a new one — except by base-sync merges, #579, below); and every issue the branch carries has a
 live \`🔒 Claimed\` comment on that branch, posted by the hand-off's author before it. Nothing is
 claimed or taken over here: the executor keeps its claim, worktree and branch until it confirms
-the land, the shipped branch is kept, the squash carries \`Colab-Handoff: <url> @ <sha>\`, and each
+the land, the shipped branch is kept, the squash carries \`Colab-Handoff: <ref> @ <sha>\` (always the
+neutral form, whichever one was given), and each
 🚢 comment names the hand-off. Any check failing refuses (exit 1); --force is never involved, and
 the human takeover (\`colab claim --force\`) stays the only other way in. Not with --adopt
 or --direct, and not when this machine already holds a claim on the branch.
 
-IN A BATCH (#591) the hand-off rides its member: \`--batch b1,b2@<url>\` (split on the first @).
+IN A BATCH (#591) the hand-off rides its member: \`--batch b1,b2@<ref>\` (split on the first @).
 That member is verified by this SAME door — same checks, same refusal text, which drops it from
 the batch while the rest build — then joins the combined run with no sync of its own; its squash
 carries the Colab-Handoff trailer, and the land reads the door back from that commit. Repeat the
@@ -11540,7 +11544,7 @@ the base in, push) — and the hand-off still verifies, because the commits betw
 sha and the new head are each a PURE base-sync merge: two parents, the second already on the base,
 and a tree equal to git's own conflict-free merge of the two. A fix-up, a rebase, or a merge whose
 conflict was resolved by hand is not one, and still needs a new hand-off from the executor. The
-trailer then reads \`Colab-Handoff: <url> @ <handed-off sha> (synced to <head> by N base merge(s))\`.
+trailer then reads \`Colab-Handoff: <ref> @ <handed-off sha> (synced to <head> by N base merge(s))\`.
 
 UNATTACHED CLAIMS (#319). A claim taken with no --worktree and no --branch (\`colab claim <N>
 --session <id>\`) is carried by a branch ship only when BOTH hold: its session equals this ship's
@@ -13638,7 +13642,7 @@ function cmdShipDryJson(opts) {
       // #591: the verified hand-off (or its refusal), so `ship --batch` puts this member's
       // Colab-Handoff trailer on its squash and words a refusal exactly as the single door does.
       ...(handoff ? { handoff: handoff.ok
-        ? { ok: true, url: handoff.url, sha: handoff.sha, handedOff: handoff.handedOff, syncMerges: handoff.syncMerges || 0 }
+        ? { ok: true, url: handoff.url, ref: handoff.ref, sha: handoff.sha, handedOff: handoff.handedOff, syncMerges: handoff.syncMerges || 0 }
         : { ok: false, reason: handoff.reason, detail: handoff.detail } } : {}),
     };
     // #373: `ship --batch` reads each member through this SAME function — handed the body, not stdout.
@@ -14735,7 +14739,7 @@ function autonomyGatePayload(gate) {
 
 /** The sha a branch name resolves to, local first, else origin's copy (#324's remote-only shape). */
 /**
- * #578 — `--handoff <comment-url>`: verify the executor's recorded hand-off and, when it holds, take
+ * #578 — `--handoff <ref>` (#740: neutral reference or comment URL): verify the executor's recorded hand-off and, when it holds, take
  * the session's issue set from it (tools/lib/ship-handoff.js says what it must prove). Returns null
  * without --handoff, the failing verdict on a refusal, the passing one after mutating `sess`.
  *
@@ -14749,17 +14753,12 @@ function applyShipHandoff(repoAbs, sess, opts, trunk) {
     throw new UserError(`--handoff is the door for a branch with NO claim on this machine, and this machine holds ${sess.issues.map((n) => '#' + n).join(' ')} ` +
       `for ${sess.branch} — ship it without --handoff`);
   }
-  const u = shipHandoff.parseHandoffUrl(opts.handoff);
-  let comment = null;
-  if (u) {
-    const r = git.ghApi(repoAbs, [`repos/{owner}/{repo}/issues/comments/${u.commentId}`]);
-    if (r.ok) {
-      try {
-        const j = JSON.parse(r.stdout);
-        comment = { body: j.body || '', login: (j.user && j.user.login) || '', createdAt: j.created_at || '', htmlUrl: j.html_url || '' };
-      } catch (_) { comment = null; }
-    }
-  }
+  // #740: a neutral reference (<forge-host>/<owner>/<repo>#<N>@comment:<id>) or the comment's URL, both
+  // resolved through the repo's tracker adapter — the Forgejo forge engine on a forge remote (#678), the
+  // GitHub tracker otherwise — so no read below reaches for one forge's API by hand.
+  const u = shipHandoff.parseHandoffRef(opts.handoff);
+  const reader = forgeCi(repoAbs) || tracker.forRepo(repoAbs);
+  const comment = u ? reader.commentView(u.commentId) : null;
   // The head check must read the remote as it is NOW, not a tracking ref from whenever this clone last fetched.
   const remote = git.remoteFor(repoAbs);
   if (u && comment) git.git(['fetch', '--quiet', remote, `+refs/heads/${sess.branch}:refs/remotes/${remote}/${sess.branch}`], repoAbs);
@@ -14775,13 +14774,18 @@ function applyShipHandoff(repoAbs, sess, opts, trunk) {
   const issueStates = {}; // #647: an issue closed before the hand-off needs no claim — read state too
   if (u && comment) {
     for (const n of shipguard.branchIssueNumbers(sess.branch)) {
-      const info = git.ghIssueView(repoAbs, n, ['comments', 'state', 'closedAt']);
+      const info = reader.issueView(n, ['comments', 'state', 'closedAt']);
       claimsByIssue[n] = info ? liveClaimComments(info.comments || []).map((c) => ({ ...c })) : null;
       if (info) issueStates[n] = { state: info.state || '', closedAt: info.closedAt || '' };
     }
   }
   const v = shipHandoff.handoffVerdict({ url: opts.handoff, comment, branch: sess.branch, refs, claimsByIssue, syncChain,
     issueStates, refNumbers: refsFlagNumbers(opts.refs) });
+  if (!v.ok && v.reason === 'no-executor-claim' && reader.kind === 'forgejo') {
+    // #740: reads only on a forge (#678) — colab posts no 🔒 claim comment there, so the claim this door
+    // checks exists only where the adopter's own tracker layer writes one in colab's claim format.
+    return { ...v, detail: `${v.detail}. On a ${reader.kind} remote colab writes no claim comment (#678): a hand-off verifies there only where the adopter's tracker layer posts the executor's 🔒 claim in colab's format` };
+  }
   if (!v.ok) return v;
   sess.issues = v.issues;
   sess.handoff = v;
@@ -14870,7 +14874,7 @@ function cmdShip(argv) {
   if (shippedBranch.conflictingFlags(opts)) throw new UserError('--delete-branch and --keep-branch contradict each other — pass one (see `colab ship --help`, #368)');
   // #578: a hand-off names ONE branch; trunk-direct has no branch for it to name. #591: in a batch the
   // hand-off rides its member (`--batch b1,b2@<url>`), so a bare --handoff beside --batch names no one.
-  if (opts.handoff && opts.batch) throw new UserError('--handoff names one --branch ship; in a batch, attach it to its member: --batch <b1>,<b2>@<hand-off-url> (#591, see `colab ship --help`)');
+  if (opts.handoff && opts.batch) throw new UserError('--handoff names one --branch ship; in a batch, attach it to its member: --batch <b1>,<b2>@<hand-off-ref> (#591, see `colab ship --help`)');
   if (opts.handoff && opts.direct) throw new UserError('--handoff applies to one --branch ship — not to --direct (see `colab ship --help`)');
   if (opts.split && !opts.batch) throw new UserError('--split applies to a red combined run of --batch only (#557) — run `colab ship --batch <b1,b2,…> --split` with the members the red batch carries');
   if (opts.onto && !opts.batch) throw new UserError('--onto applies to --batch only (#605) — run `colab ship --batch <b1,b2,…> --onto ship-batch/<sha7>`');
@@ -16331,7 +16335,7 @@ function cmdShipBatch(opts) {
   const batchRead = { verifying: verifyRuns.parsePolicy(doc) };
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
-  // #591: a member built on another machine names its hand-off inline — `<branch>@<hand-off-url>`.
+  // #591: a member built on another machine names its hand-off inline — `<branch>@<hand-off-ref>` (#740).
   const entries = shipHandoff.parseBatchEntries(opts.batch === true ? '' : opts.batch);
   if (entries.errors.length) throw new UserError(`--batch: ${entries.errors.join('; ')}`);
   const members = entries.members;

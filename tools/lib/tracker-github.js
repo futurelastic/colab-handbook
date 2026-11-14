@@ -123,6 +123,14 @@ function create(repoAbs) {
 
     // --- issues ------------------------------------------------------------------------------
     issueView: (num, fields) => git().ghIssueView(repoAbs, num, fields),
+    // #740: one comment by id — the read `colab ship --handoff` made with a raw `gh api`, same argv.
+    commentView: (id) => {
+      if (!/^\d+$/.test(String(id || ''))) return null;
+      const r = withData(exec(['api', `repos/{owner}/{repo}/issues/comments/${id}`], at));
+      const j = r.data;
+      if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+      return { body: j.body || '', login: (j.user && j.user.login) || '', createdAt: j.created_at || '', htmlUrl: j.html_url || '' };
+    },
     issueListAll: ({ limit, fields, maxBuffer } = {}) => withData(exec(
       ['issue', 'list', '--state', 'all', '--limit', String(limit), '--json', fields.join(',')],
       { ...at, ...(maxBuffer ? { maxBuffer } : {}) })),
