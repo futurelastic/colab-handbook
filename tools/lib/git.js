@@ -458,6 +458,12 @@ function parseClaimLockMessage(text) {
     if (k && out[k] === undefined) out[k] = m[2].trim();
   }
   out.colab = out.claimedBy === CLAIM_LOCK_WRITER;
+  // #746: the issues the subject names (`claim: #12 #13`) — both writers use this subject. A release
+  // that has no recorded lock sha to lease on checks the lock names its issue before deleting it.
+  // A `git cat-file commit` body carries headers first; the message starts after the first blank line.
+  const message = /^tree [0-9a-f]+$/m.test(s.split('\n')[0]) ? s.slice(s.indexOf('\n\n') + 2) : s;
+  const sm = (/^claim:\s*(.*)$/.exec(message.split('\n')[0].trim()) || [])[1];
+  out.issues = sm ? [...sm.matchAll(/#(\d+)/g)].map((m) => Number(m[1])).filter((n) => Number.isInteger(n) && n > 0) : [];
   return out;
 }
 
@@ -525,6 +531,17 @@ function releaseClaimLock(repo, remote, num, sha) {
   if (sha && !now.startsWith(sha) && !String(sha).startsWith(now)) return { ok: true, moved: true, now: now.slice(0, 7) };
   const r = git(['push', remote, `--force-with-lease=${ref}:${now}`, `:${ref}`], repo, { timeoutMs: 120_000 });
   return { ok: r.ok, stderr: r.stderr };
+}
+
+/**
+ * #746 — where `refs/heads/claim/<num>` points on `remote` right now. `{ ok, sha }` (full sha, or
+ * `null` when there is no lock) or `{ ok: false, stderr }` when the remote could not be asked.
+ */
+function remoteClaimLock(repo, remote, num) {
+  const ls = git(['ls-remote', remote, claimLockRef(num)], repo, { timeoutMs: 60_000 });
+  if (!ls.ok) return { ok: false, stderr: ls.stderr || (ls.timedOut ? 'ls-remote timed out' : `exit ${ls.code}`) };
+  const sha = (String(ls.stdout || '').split(/\s+/)[0] || '').trim();
+  return { ok: true, sha: sha || null };
 }
 
 /**
@@ -1881,7 +1898,7 @@ module.exports = {
   detectTrunk, branchExists, branchRefs, existingBranchRef,
   claimRemote, remoteHeads, parseRemoteHeads, CLAIM_REF_PREFIX, claimRef, pushClaimRef, deleteClaimRef,
   CLAIM_LOCK_PREFIX, claimLockRef, parseClaimLocks, claimLockMessage, parseClaimLockMessage, makeClaimLockCommit,
-  takeClaimLocks, releaseClaimLock, readClaimLock, remoteRefCommitTime,
+  takeClaimLocks, releaseClaimLock, readClaimLock, remoteClaimLock, remoteRefCommitTime,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghRunsAtShaUnfiltered, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,

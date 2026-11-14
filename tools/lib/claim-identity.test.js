@@ -246,3 +246,28 @@ test('#743 sameClaimant: one login, one host, two factories → two holders, und
   // The factory never makes two different logins one holder.
   assert.strictEqual(ci.sameClaimant(a, { ...a, login: 'other' }, ci.DEFAULT_COMPONENTS), false);
 });
+
+// --- #746: may a lock-less claim record release the lock found for its issue? ---------------------
+
+test('#746 lockReleasableBy: an orchestrator lock naming this machine is releasable; another machine\'s is not', () => {
+  const here = { num: 746, hostLabel: 'Box-A.local', machineTok: 'm:aaaaaaaaaaaa' };
+  const orch = { colab: false, author: 'orchestrator-claim', machine: 'box-a', intent: '1', issues: [746] };
+  assert.deepStrictEqual(ci.lockReleasableBy(orch, { session: 's1' }, here), { ok: true });
+  assert.deepStrictEqual(ci.lockReleasableBy(orch, {}, here), { ok: true }, 'a doctor --sync record (no session) still matches an orchestrator lock');
+  const elsewhere = ci.lockReleasableBy({ ...orch, machine: 'box-b' }, { session: 's1' }, here);
+  assert.strictEqual(elsewhere.ok, false);
+  assert.match(elsewhere.why, /orchestrator-claim wrote it for machine box-b, not this one/);
+  assert.strictEqual(ci.lockReleasableBy({ ...orch, session: 's2' }, { session: 's1' }, here).ok, false, 'a Session it carries must agree');
+  assert.strictEqual(ci.lockReleasableBy({ ...orch, branch: 'feat/y-746' }, { branch: 'feat/x-746' }, here).ok, false, 'a Branch it carries must agree');
+});
+
+test('#746 lockReleasableBy: a colab lock needs the same session AND this machine; the subject must name the issue', () => {
+  const here = { num: 7, hostLabel: 'box-a', machineTok: 'm:aaaaaaaaaaaa' };
+  const mine = { colab: true, machine: 'box-a', machineId: 'm:aaaaaaaaaaaa', session: 's1', issues: [7, 8] };
+  assert.deepStrictEqual(ci.lockReleasableBy(mine, { session: 's1' }, here), { ok: true });
+  assert.match(ci.lockReleasableBy(mine, { session: 's2' }, here).why, /colab wrote it for session s1, this claim is session s2/);
+  assert.strictEqual(ci.lockReleasableBy(mine, {}, here).ok, false, 'no session on the record proves nothing about a colab lock');
+  assert.strictEqual(ci.lockReleasableBy({ ...mine, machineId: 'm:bbbbbbbbbbbb' }, { session: 's1' }, here).ok, false, 'another colab home on another machine');
+  assert.match(ci.lockReleasableBy({ ...mine, issues: [99] }, { session: 's1' }, here).why, /names #99, not #7/);
+  assert.match(ci.lockReleasableBy({ ...mine, issues: [] }, { session: 's1' }, here).why, /names no issue/);
+});
