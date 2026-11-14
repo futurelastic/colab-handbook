@@ -1139,7 +1139,10 @@ through them, the landed check and its CI advisory — is documented with the CL
    A branch this machine never held — one that exists only on the remote, or a local copy created
    from it — lands only when it is adopted on the record, the squash naming the remote head and the
    machine that adopted it, or when its executor handed it off in a comment naming the branch and
-   the head that lands.
+   the head that lands. That comment is referenced forge-neutrally — by forge, repository, issue and
+   comment id, resolved through the tracker adapter — never by parsing one forge's web URL; a URL is
+   only an alias, and the landing records the neutral form (#740). Syntax and resolution:
+   [`tools/docs/branches.md`](tools/docs/branches.md#closing-issues-at-the-landing).
 8. A squash is titled by the branch's most significant Conventional Commit type; when no commit
    carries a recognised type, the subject is stated, never guessed.
 9. A squash on a public repository publishes no host or machine identity; where the visibility
