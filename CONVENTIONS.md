@@ -1345,6 +1345,9 @@ repository has one team and nothing here applies.
   their factory (#743), and a verdict marker carries its factory and that factory's signature, so one
   forge login under two factories is two holders. A verdict signature covers a fixed payload of the
   fields that carry its meaning, never the whole comment; a field outside it is never trusted.
+- Taking over another factory's claim needs a human (`COLAB_HUMAN=1` with `--answered-by`) and a
+  holder idle for 5 days; a holder not proven to be your own factory counts as another, and the
+  takeover removes its claim ref (#744, [mechanics](tools/docs/claims.md#cross-factory-takeover-744)).
 
 The payload bytes, the marker, how a signature is checked and the shared labels and status names:
 [`tools/docs/factories.md`](tools/docs/factories.md).

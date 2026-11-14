@@ -41,6 +41,27 @@ anywhere, naming the ref and how to continue it. Each machine sweeps its own wor
 - Only `refs/heads/claim/<digits>` is a lock; any other `claim/…` ref is some tool's own and is
   ignored. No reader treats a lock as a session branch.
 
+### Cross-factory takeover (#744)
+
+`--force` (on `colab claim` and on `colab worktree new --issues`) takes over a holder loudly. It
+overwrites the holder's lock under a lease on the sha it saw and removes the holder's legacy claim
+ref `refs/claims/<branch>`. A branch with commits is never deleted. Where trunk carries
+[`.github/factories.yml`](factories.md), taking over **another factory's** claim needs more:
+
+- **Who counts as another factory.** The holder's records are resolved against trunk's file: a
+  lock's `Machine:` trailer, a `<login>/<machine>/` branch prefix, a claim comment's host, an
+  assignee listed under a factory's `humans`. A record that names nothing defers to one that does.
+  The takeover is cross-factory unless every record that names a factory names this machine's.
+  A holder no record ties to any factory, a machine in no factory, and an invalid file all fail
+  closed. With no file there is one team, and `--force` behaves as above.
+- **Stale.** No activity on the claim for 5 days: the newest commit time across the holder's lock,
+  legacy claim ref and branch, together with its live claim comments. Activity that cannot be read
+  is never stale.
+- **A human.** `COLAB_HUMAN=1` together with `--answered-by "<name>"`. An agent never sets it on
+  its own say-so.
+- The refusal names every bar not met, and changes nothing. A takeover that passes prints who
+  answered for it and posts one `⚠️ Cross-factory takeover` note on the issue.
+
 - **[Hard — gate: colab claim refuses]** **Remote unreachable → no claim.** Fail closed: a claim checked against nothing is not a
   lock. A repo with **no remote at all** is the one exception — nothing else could ever share
   its branches, so the machine's own record is the whole truth.

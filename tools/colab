@@ -64,6 +64,8 @@ const axisAuthority = require('./lib/axis-authority');
 const writesAuthority = require('./lib/writes-authority');
 const claimIdentity = require('./lib/claim-identity');
 const claimComments = require('./lib/claim-comments');
+const factoriesLib = require('./lib/factories'); // #739
+const claimTakeover = require('./lib/claim-takeover'); // #744
 const codec = require('./lib/codec');
 const factories = require('./lib/factories');
 const machine = require('./lib/machine');
@@ -954,6 +956,110 @@ function printTakeover(localConf, ghConf, remoteConf = []) {
   }
 }
 
+/**
+ * #744 — `.github/factories.yml` as committed on trunk (`<remote>/<trunk>`, else local `<trunk>`),
+ * fetched first so a file landed since this clone's last fetch is not missed. Never the checkout's
+ * or a branch's copy: a branch that could edit the file could make itself the holder's factory.
+ * `{ present, ref, parsed? }`.
+ */
+function factoriesAtTrunk(repoAbs) {
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  if (!trunk) return { present: false, ref: null };
+  let remote = null;
+  try { remote = git.claimRemote(repoAbs); } catch (_) { remote = null; }
+  if (remote) git.git(['fetch', '--quiet', '--no-tags', remote, trunk], repoAbs, { timeoutMs: 60_000 });
+  for (const ref of [remote ? `${remote}/${trunk}` : null, trunk].filter(Boolean)) {
+    if (!git.git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], repoAbs).ok) continue;
+    const r = git.git(['show', `${ref}:${factoriesLib.PATH}`], repoAbs);
+    if (!r.ok) return { present: false, ref };
+    return { present: true, ref, parsed: factoriesLib.parseFactories(r.stdout) };
+  }
+  return { present: false, ref: null };
+}
+
+/**
+ * #744 — the cross-factory bar on a `--force` takeover, shared by `colab claim` and `colab worktree
+ * new --issues`. Runs only once `--force` was given over a refusal. For every issue whose holder is
+ * not proven to be this machine's factory (tools/lib/claim-takeover.js `isCrossFactory`), the
+ * takeover needs the holder STALE (no activity for claimTakeover.STALE_DAYS days) AND a human
+ * (`COLAB_HUMAN=1` with `--answered-by`). No factories file on trunk → `{ ok: true, cross: [] }`,
+ * exactly the behaviour before this. Prints its own refusal; the caller only returns 1.
+ */
+function crossFactoryGate(repoAbs, nums, { localConf = [], ghConf = [], remoteConf = [], answeredBy = null } = {}) {
+  const file = factoriesAtTrunk(repoAbs);
+  if (!file.present) return { ok: true, cross: [] };
+  const mine = claimTakeover.factoryOfMachineName(file.parsed, HOST);
+  const colabHuman = process.env.COLAB_HUMAN === '1';
+  const nowMs = Date.now();
+  const cross = [];
+  const refused = [];
+  for (const num of nums) {
+    const holders = [
+      ...remoteConf.filter((c) => c.num === num).map((c) => ({ kind: 'remote', c })),
+      ...ghConf.filter((c) => c.num === num).map((c) => ({ kind: 'gh', c })),
+    ];
+    if (!holders.length) continue; // only this machine's own state holds it (or nothing does)
+    const factoriesOf = holders.map((h) => claimTakeover.holderFactory(file.parsed, h.kind, h.c, mine));
+    if (!claimTakeover.isCrossFactory(file, mine, factoriesOf)) continue;
+    const times = [];
+    for (const { kind, c } of holders) {
+      if (kind === 'remote') {
+        const ref = c.lock ? git.claimLockRef(num) : c.claimRef ? git.claimRef(c.branch) : `refs/heads/${c.branch}`;
+        times.push(git.remoteRefCommitTime(repoAbs, c.remote, ref, c.fullSha || c.sha));
+      } else {
+        const cm = c.otherMachine || c.cotenant;
+        times.push(cm && cm.at ? Date.parse(cm.at) : null);
+      }
+    }
+    const last = claimTakeover.lastActivity(times);
+    const st = claimTakeover.staleness(last, nowMs);
+    const holderFactory = [...new Set(factoriesOf.filter(Boolean))].join(', ') || null;
+    const v = claimTakeover.takeoverVerdict({ colabHuman, answeredBy, stale: st.stale });
+    const row = { num, mine, holderFactory, last, idleDays: st.idleDays, missing: v.missing, valid: !!(file.parsed && file.parsed.valid) };
+    cross.push(row);
+    if (!v.ok) refused.push(row);
+  }
+  if (refused.length) {
+    process.stderr.write(`✗ Refusing --force — taking over another factory's claim (${factoriesLib.PATH} on ${file.ref}) needs both a stale holder and a human (#744):\n`);
+    for (const r of refused) {
+      const who = r.valid ? `factory ${r.holderFactory || '(unknown — no record ties the holder to a factory)'}` : `a holder (the factories file is INVALID, so nobody is proven your factory: ${file.parsed.findings[0]})`;
+      const since = r.last ? `last activity ${new Date(r.last).toISOString().slice(0, 10)} (${r.idleDays} day${r.idleDays === 1 ? '' : 's'} ago)` : 'last activity unreadable (never treated as stale)';
+      process.stderr.write(`  #${r.num} held by ${who}; this machine is ${r.mine ? `factory ${r.mine}` : 'in no factory'}; ${since}\n`);
+      if (r.missing.includes('stale')) process.stderr.write(`    not stale: a takeover needs no activity on the claim for ${claimTakeover.STALE_DAYS} days — ask its holder to release it instead\n`);
+      if (r.missing.includes('human')) process.stderr.write('    needs a human: COLAB_HUMAN=1 colab claim <N> --force --answered-by "<your name>" (no field, flag or project.yml value lowers this bar)\n');
+    }
+    return { ok: false, cross };
+  }
+  for (const r of cross) {
+    print(`  --force: #${r.num} is another factory's claim (${r.holderFactory || 'holder unproven'}), idle ${r.idleDays} days — taken over by ${r.mine ? `factory ${r.mine}` : 'this machine'}, answered by ${answeredBy} (COLAB_HUMAN=1, #744)`);
+  }
+  return { ok: true, cross };
+}
+
+/**
+ * #744 — after a `--force` takeover has taken the locks: remove the displaced holder's legacy claim
+ * refs (`refs/claims/<branch>`, #550). The lock itself was already overwritten under a lease on the
+ * holder's sha; a real branch is never deleted — it carries commits. A cross-factory takeover also
+ * leaves one comment on the issue naming who answered for it. Best effort, like every other
+ * release-side write: a failure warns with the command.
+ */
+function afterForcedTakeover(repoAbs, remoteConf, cross, answeredBy) {
+  const seen = new Set();
+  for (const c of remoteConf || []) {
+    if (!c.claimRef || seen.has(c.branch)) continue;
+    seen.add(c.branch);
+    const r = git.deleteClaimRef(repoAbs, c.remote, c.branch);
+    if (r.ok && !r.absent) print(`  removed the displaced holder's claim ref ${c.remote} ${git.claimRef(c.branch)} (#744)`);
+    else if (!r.ok) warnDeferred(`could not remove the displaced holder's claim ref ${c.remote} ${git.claimRef(c.branch)} (${String(r.stderr || '').split('\n')[0]}) — delete it by hand: git push ${c.remote} --delete ${git.claimRef(c.branch)}`);
+  }
+  for (const r of cross || []) {
+    const body = `⚠️ Cross-factory takeover (#744): this claim, held by ${r.holderFactory ? `factory \`${r.holderFactory}\`` : 'a holder no record ties to a factory'} ` +
+      `with no activity for ${r.idleDays} days, was taken over by ${r.mine ? `factory \`${r.mine}\`` : 'a machine in no factory'} — answered by ${answeredBy} (COLAB_HUMAN=1).`;
+    const c = git.ghIssueComment(repoAbs, r.num, body);
+    if (!c.ok) warn(`could not post the takeover note on #${r.num} (${String(c.stderr || '').split('\n')[0] || c.code})`);
+  }
+}
+
 /** Post the claim comment (best-effort: a failure warns but never fails the claim). */
 function postClaimComment(repoAbs, num, wtName, branch, session, sessionName) {
   const r = git.ghIssueComment(repoAbs, num, claimCommentBody(wtName, branch, session, sessionName, commentHost(repoAbs), myFactory(repoAbs)));
@@ -1161,12 +1267,20 @@ Options:
                       (never probed — a human lead only). Default: auto-detect (an agent session's
                       long-lived process, verified alive + a proven ancestor; else the parent shell,
                       exactly as before). Also settable via COLAB_PLACE_PID.
-  --force             take over a claim held by another worktree / GitHub user (logged, never silent)
+  --force             take over a claim held by another worktree / GitHub user (logged, never silent).
+                      The displaced holder's legacy claim ref (refs/claims/<branch>) is removed; its
+                      lock is overwritten; a branch with commits is never deleted (#744).
+                      ANOTHER FACTORY's claim (.github/factories.yml on trunk — any foreign holder not
+                      proven to be this machine's factory, and every holder when the file is invalid)
+                      needs BOTH: no activity on the claim for 5 days (the newest of the commits on
+                      its lock, claim ref or branch and its claim comments) AND a human — COLAB_HUMAN=1
+                      with --answered-by. No factories file → unchanged (#744).
+  --answered-by <n>   with COLAB_HUMAN=1 and --force: the human who answers for a cross-factory takeover
 `;
 
 function cmdClaim(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--session': 'session', '--session-name': 'sessionName', '--pid': 'pid' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--session': 'session', '--session-name': 'sessionName', '--pid': 'pid', '--answered-by': 'answeredBy' },
     flags: { '--force': 'force', '-h': 'help', '--help': 'help' },
   });
   if (opts.help || opts._.length === 0) return print(HELP_CLAIM);
@@ -1247,8 +1361,12 @@ function cmdClaim(argv) {
   const localConf = localClaimConflicts(st0, repoAbs, nums, wtName);
   const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin, HOST, session, comps, myMachineId(), myFactory(repoAbs)) : [];
   if (!gh && remoteCheck.mode === 'ok') warn(`gh not usable here (${ghUnusableWhy(repoAbs)}) — refusal checked the remote and this machine; the tracker half will be PENDING`);
+  let crossTakeover = [];
   if (remoteConf.length || localConf.length || ghConf.length) {
     if (!opts.force) { printRefusal(localConf, ghConf, remoteConf); return 1; }
+    const gate = crossFactoryGate(repoAbs, nums, { localConf, ghConf, remoteConf, answeredBy: opts.answeredBy || null });
+    if (!gate.ok) return 1;
+    crossTakeover = gate.cross;
     printTakeover(localConf, ghConf, remoteConf);
   }
 
@@ -1303,6 +1421,7 @@ function cmdClaim(argv) {
     if (lockTake.taken.includes(num)) print(`  took claim lock ${remoteCheck.remote} ${l.ref} (#741)`);
     else if (l.adopted) print(`  claim lock ${remoteCheck.remote} ${l.ref} was already taken on this machine for this work — adopted (#741)`);
   }
+  if (opts.force && (remoteConf.length || crossTakeover.length)) afterForcedTakeover(repoAbs, remoteConf, crossTakeover, opts.answeredBy || null);
 
   // #389: measured outside the lock (git, not state) — see the attach branch inside the mutation.
   const existingDir = wtName ? existingWorktreeFor(repoAbs, wtName, branch) : null;
@@ -6113,7 +6232,9 @@ dependency symlinking, dev-server restarts) live in OPTIONAL repo hooks, not her
         --session-name <s> short human label for tables/messages (env COLAB_SESSION_NAME)
         --pid <n|none>     the new worktree's place-claim liveness anchor (#288) — same meaning as
                            \`colab claim\`'s --pid; default: auto-detect (env COLAB_PLACE_PID too)
-        --force            take over issues already claimed by another worktree / GitHub user
+        --force            take over issues already claimed by another worktree / GitHub user —
+                           another factory's claim needs a 5-day-stale holder AND COLAB_HUMAN=1 with
+                           --answered-by <name>, exactly as 'colab claim --force' (see colab claim -h, #744)
       Claimed issues are ENFORCED: if --issues names an issue already held (locally on another
       worktree, or on GitHub by someone else) the command REFUSES before building anything,
       unless --force. On success each issue gets a "🔒 Claimed" comment + the tie-break runs;
@@ -6315,7 +6436,7 @@ function uncommittedWork(wtPath) {
 
 function cmdWorktreeNew(argv) {
   const opts = parseArgs(argv, {
-    values: { '--issues': 'issues', '--ports': 'ports', '--range': 'range', '--at': 'at', '--name': 'name', '--trunk': 'trunk', '--base': 'base', '--repo': 'repo', '--session': 'session', '--session-name': 'sessionName', '--pid': 'pid' },
+    values: { '--issues': 'issues', '--ports': 'ports', '--range': 'range', '--at': 'at', '--name': 'name', '--trunk': 'trunk', '--base': 'base', '--repo': 'repo', '--session': 'session', '--session-name': 'sessionName', '--pid': 'pid', '--answered-by': 'answeredBy' },
     aliases: { '--issue': '--issues' },
     flags: { '--force': 'force', '-h': 'help', '--help': 'help' },
   });
@@ -6361,6 +6482,7 @@ function cmdWorktreeNew(argv) {
 
   // ---- REFUSAL: don't build a worktree around issues someone else already holds ----
   let remoteCheck = null;
+  let crossTakeover = [];
   if (issues.length) {
     const st0 = state.loadState();
     // #325: the remote first — the branch on it is the claim record every machine reads.
@@ -6372,6 +6494,9 @@ function cmdWorktreeNew(argv) {
     if (!gh && remoteCheck.mode === 'ok') warn(`gh not usable here (${ghUnusableWhy(repoAbs)}) — refusal checked the remote and this machine; the tracker half will be PENDING`);
     if (remoteCheck.conflicts.length || localConf.length || ghConf.length) {
       if (!opts.force) { printRefusal(localConf, ghConf, remoteCheck.conflicts); return 1; }
+      const gate = crossFactoryGate(repoAbs, issues, { localConf, ghConf, remoteConf: remoteCheck.conflicts, answeredBy: opts.answeredBy || null });
+      if (!gate.ok) return 1;
+      crossTakeover = gate.cross;
       printTakeover(localConf, ghConf, remoteCheck.conflicts);
     }
   }
@@ -6475,6 +6600,7 @@ function cmdWorktreeNew(argv) {
     else if (l.adopted) print(`  claim lock ${remoteCheck.remote} ${l.ref} was already taken on this machine for this work — adopted (#741)`);
     else print(`  claim lock ${remoteCheck.remote} ${l.ref} is already this machine's — kept`);
   }
+  if (opts.force && remoteCheck && (remoteCheck.conflicts.length || crossTakeover.length)) afterForcedTakeover(repoAbs, remoteCheck.conflicts, crossTakeover, opts.answeredBy || null);
 
   // How far behind trunk the line is, as INFORMATION — never a threshold. A long-lived line is
   // expected to diverge; a refusal (or a warning with a number in it) would fire on every healthy
