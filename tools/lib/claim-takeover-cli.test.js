@@ -30,7 +30,7 @@ process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive
 const PROJECT_YML = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n';
 const KEY_A = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const KEY_B = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
-const FACTORIES_YML = `version: 1
+const factoriesYml = ({ coreHumans = false } = {}) => `version: 1
 steward: core
 forge: github.com
 factories:
@@ -38,7 +38,7 @@ factories:
     tier: steward
     machines: [${ME}, box-b]
     key: ${KEY_A}
-  mobile:
+${coreHumans ? '    humans: [me]\n' : ''}  mobile:
     tier: partner
     machines: [mobile-1]
     key: ${KEY_B}
@@ -46,7 +46,7 @@ factories:
 
 const g = (cwd, args, env) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: env ? { ...process.env, ...env } : process.env }).trim();
 
-function fixture({ factoriesFile = true } = {}) {
+function fixture({ factoriesFile = true, coreHumans = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-takeover-'));
   TMP.push(root);
   const origin = path.join(root, 'origin.git');
@@ -63,7 +63,7 @@ function fixture({ factoriesFile = true } = {}) {
   g(work, ['remote', 'add', 'origin', origin]);
   fs.mkdirSync(path.join(work, '.github'), { recursive: true });
   fs.writeFileSync(path.join(work, '.github', 'project.yml'), PROJECT_YML);
-  if (factoriesFile) fs.writeFileSync(path.join(work, '.github', 'factories.yml'), FACTORIES_YML);
+  if (factoriesFile) fs.writeFileSync(path.join(work, '.github', 'factories.yml'), factoriesYml({ coreHumans }));
   g(work, ['add', '-A']);
   g(work, ['commit', '-q', '-m', 'chore: fixture']);
   g(work, ['push', '-q', 'origin', 'main']);
@@ -117,6 +117,20 @@ function seedForeignClaim(fx, num, { holder, ageDays, branch = `feat/thing-${num
   const cut = execFileSync('git', ['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', `wip #${num}`], { cwd: fx.work, encoding: 'utf8', env: { ...process.env, ...env } }).trim();
   g(fx.work, ['push', '-q', 'origin', `${lock}:refs/heads/claim/${num}`, `${cut}:refs/claims/${branch}`]);
   return { lock, branch };
+}
+
+/**
+ * #743's case: OUR OWN login (`me`) already holds #num — assignee + label + a live claim comment —
+ * but the comment names factory `factory`. Posted from this machine's own hostname, so the host
+ * alone would say "core": only the comment's factory field tells the two teams apart.
+ */
+function seedSameLoginOtherFactory(fx, num, { factory, ageDays }) {
+  const { encodeClaim } = require('./codec/claim');
+  const at = new Date(Date.now() - ageDays * DAY * 1000).toISOString();
+  const body = encodeClaim({ worktree: `thing-${num}`, branch: `feat/thing-${num}`, host: os.hostname(), at, factory });
+  fs.writeFileSync(path.join(fx.ghState, `issue-${num}.json`), JSON.stringify({
+    comments: [{ createdAt: at, author: { login: 'me' }, body }], assignees: ['me'], labels: ['in-progress'],
+  }));
 }
 
 function colab(fx, args, { human = false } = {}) {
@@ -213,4 +227,27 @@ test('#744: worktree new --issues --force clears the same bar', () => {
   assert.match(r.err, /another factory's claim/);
   assert.strictEqual(lsRemote(fx, 'refs/heads/claim/7'), lock);
   assert.ok(!fs.existsSync(path.join(fx.work, '.claude', 'worktrees', 'other-7')), 'refused before any worktree is cut');
+});
+
+test('#744 + #743: our own login held under ANOTHER factory — an agent cannot force it', () => {
+  // The assignee `me` is a declared human of core and the comment's host is this machine: both say
+  // "core". Only the comment's `factory mobile` says another team holds it. Reading the assignee
+  // (the pre-fix fallback) let this --force straight through.
+  const fx = fixture({ coreHumans: true });
+  seedSameLoginOtherFactory(fx, 7, { factory: 'mobile', ageDays: 1 });
+  const r = colab(fx, ['claim', '7', '--worktree', 'w', '--session', 's1', '--force']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /#7 held by factory mobile; this machine is factory core/);
+  assert.match(r.err, /not stale/);
+  assert.match(r.err, /needs a human/);
+  assert.strictEqual(lsRemote(fx, 'refs/heads/claim/7'), '', 'no lock taken on a refusal');
+  assert.strictEqual(comments(fx, 7).length, 1, 'no tracker write on a refusal');
+});
+
+test('#744 + #743: a human takes over a STALE same-login claim — the idle time is read from that comment', () => {
+  const fx = fixture({ coreHumans: true });
+  seedSameLoginOtherFactory(fx, 7, { factory: 'mobile', ageDays: 9 });
+  const r = colab(fx, ['claim', '7', '--worktree', 'w', '--session', 's1', '--force', '--answered-by', 'Ada'], { human: true });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /another factory's claim \(mobile\), idle 9 days — taken over by factory core, answered by Ada/);
 });

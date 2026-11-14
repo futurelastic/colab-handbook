@@ -49,8 +49,11 @@ ref `refs/claims/<branch>`. A branch with commits is never deleted. Where trunk 
 [`.github/factories.yml`](factories.md), taking over **another factory's** claim needs more:
 
 - **Who counts as another factory.** The holder's records are resolved against trunk's file: a
-  lock's `Machine:` trailer, a `<login>/<machine>/` branch prefix, a claim comment's host, an
-  assignee listed under a factory's `humans`. A record that names nothing defers to one that does.
+  lock's `Machine:` trailer, a `<login>/<machine>/` branch prefix, a claim comment's `factory`
+  field (#743; its host for an older comment), an assignee listed under a factory's `humans`. An
+  assignee is read only when there is no live claim comment: under one login held by two
+  factories it is your own login, so it would name your factory. A record that names nothing
+  defers to one that does.
   The takeover is cross-factory unless every record that names a factory names this machine's.
   A holder no record ties to any factory, a machine in no factory, and an invalid file all fail
   closed. With no file there is one team, and `--force` behaves as above.

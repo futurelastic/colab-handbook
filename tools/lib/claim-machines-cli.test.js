@@ -127,14 +127,15 @@ function machineB(fx) {
   return { work, home };
 }
 
-function colab(fx, args, { work = fx.work, home = fx.home } = {}) {
+function colab(fx, args, { work = fx.work, home = fx.home, human = false } = {}) {
   // `claims` and `doctor` read machine-local state for every repo and take no --repo; run them in
   // the clone instead so cwd-based repo resolution (doctor --sync) sees the same repo.
   const repoScoped = args[0] === 'claim' || args[0] === 'worktree' || args[0] === 'release';
   const r = spawnSync('node', [COLAB, ...args, ...(repoScoped ? ['--repo', work] : [])], {
     cwd: work,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: home, COLAB_SESSION: '', COLAB_SESSION_NAME: '' },
+    // COLAB_HUMAN never leaks in from the caller's shell: #744's cross-factory bar reads it.
+    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', COLAB_HUMAN: human ? '1' : '' },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
@@ -572,7 +573,7 @@ test('#743: no factories file → the claim comment is byte-for-byte the pre-#74
   assert.ok(!/factory/.test(issueState(fx, 9).comments[0].body));
 });
 
-test('#743: this login\'s live claim under ANOTHER factory refuses a claim here, even from the same host; --force takes it over', () => {
+test('#743: this login\'s live claim under ANOTHER factory refuses a claim here, even from the same host; only a human --force takes it over (#744)', () => {
   const fx = fixture();
   withFactories(fx);
   // Same login, same hostname, same machine digest (two teams' machines can collide on both): only the factory differs.
@@ -582,6 +583,12 @@ test('#743: this login\'s live claim under ANOTHER factory refuses a claim here,
   const r = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1']);
   assert.strictEqual(r.code, 1, r.out + r.err);
   assert.match(r.err, /live claim comment by factory partner .* same account, another factory \(#743\)/);
-  const rf = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1', '--force']);
+  // #744: another factory's claim — an agent's --force is refused even on a stale holder (2020)…
+  const ra = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1', '--force']);
+  assert.strictEqual(ra.code, 1, ra.out + ra.err);
+  assert.match(ra.err, /#9 held by factory partner; this machine is factory core/);
+  // …and a human answering for it takes it over.
+  const rf = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1', '--force', '--answered-by', 'Ada'], { human: true });
+  assert.strictEqual(rf.code, 0, rf.out + rf.err);
   assert.match(rf.out, /--force: taking over #9 from factory partner's claim under this account/, rf.out + rf.err);
 });

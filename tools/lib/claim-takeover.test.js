@@ -56,6 +56,18 @@ test('holderFactory reads each record kind', () => {
   assert.strictEqual(ct.holderFactory(parsed, 'local', {}, 'core'), 'core');
 });
 
+test('holderFactory on #743\'s otherFactory: the comment\'s own factory wins over host and assignee', () => {
+  // One login (a declared human of core) holding the issue under factory mobile, from a machine whose
+  // hostname core also lists — the case #743 exists for. Assignee and host both say core; only the
+  // comment's factory field says who holds it.
+  const c = { assignees: ['operator-a'], otherFactory: { login: 'operator-a', host: 'box-a', factory: 'mobile' } };
+  assert.strictEqual(ct.holderFactory(parsed, 'gh', c), 'mobile');
+  assert.strictEqual(ct.isCrossFactory(present, 'core', [ct.holderFactory(parsed, 'gh', c)]), true);
+  assert.strictEqual(ct.holderComment(c), c.otherFactory, 'otherFactory is the comment the stale time is read from');
+  // A pre-#743 comment names no factory → the host decides, as before.
+  assert.strictEqual(ct.holderFactory(parsed, 'gh', { assignees: ['operator-a'], otherMachine: { login: 'operator-a', host: 'mobile-1', factory: '' } }), 'mobile');
+});
+
 test('isCrossFactory: no file → never; invalid file → always; unproven → yes; all mine → no', () => {
   assert.strictEqual(ct.isCrossFactory({ present: false }, null, [null]), false);
   assert.strictEqual(ct.isCrossFactory({ present: true, parsed: factories.parseFactories('version: 1') }, 'core', ['core']), true);

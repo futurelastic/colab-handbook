@@ -74,8 +74,9 @@ function factoryOfLogins(parsed, logins) {
  * conflict lists `colab claim` builds:
  *   kind 'remote'  — `{ lock, machine, branch, claimRef }`: a lock names its machine; a branch (or a
  *                    legacy claim ref) names one only through a `<login>/<machine>/` prefix.
- *   kind 'gh'      — `{ assignees, otherMachine?, cotenant? }`: a claim comment names its host; an
- *                    assignee is resolved through the file's `humans`.
+ *   kind 'gh'      — `{ assignees, otherFactory?, otherMachine?, cotenant? }`: a claim comment names
+ *                    its factory (#743) or, before that, its host; an assignee with no comment is
+ *                    resolved through the file's `humans`.
  *   kind 'local'   — this machine's own state, so this machine's factory.
  */
 function holderFactory(parsed, kind, c, mine = null) {
@@ -86,11 +87,25 @@ function holderFactory(parsed, kind, c, mine = null) {
     return prefixFactory(parsed, c.branch);
   }
   if (kind === 'gh') {
-    const comment = c.otherMachine || c.cotenant || null;
-    if (comment) return factoryOfHost(parsed, comment.host) || factoryOfLogins(parsed, [comment.login]);
+    const comment = holderComment(c);
+    // #743: a live claim comment names its factory outright; the host is the fallback for a comment
+    // written before #743. Never the assignee once a comment exists: on `otherFactory` the assignee
+    // is OUR OWN login (one login, two teams), and resolving it would name this factory — fail open.
+    if (comment) {
+      return String(comment.factory || '').trim()
+        || factoryOfHost(parsed, comment.host) || factoryOfLogins(parsed, [comment.login]);
+    }
     return factoryOfLogins(parsed, c.assignees || []);
   }
   return null;
+}
+
+/**
+ * The live claim comment a `gh` conflict carries, or null: `otherFactory` (#743 — our own login under
+ * another factory, the more specific finding, so first), `otherMachine` (#325), `cotenant` (#327).
+ */
+function holderComment(c) {
+  return (c && (c.otherFactory || c.otherMachine || c.cotenant)) || null;
 }
 
 function prefixFactory(parsed, branch) {
@@ -147,6 +162,6 @@ function takeoverVerdict({ colabHuman, answeredBy, stale }) {
 
 module.exports = {
   STALE_DAYS, DAY_MS,
-  factoryOfMachineName, factoryOfHost, factoryOfLogins, holderFactory, isCrossFactory,
+  factoryOfMachineName, factoryOfHost, factoryOfLogins, holderComment, holderFactory, isCrossFactory,
   lastActivity, staleness, takeoverVerdict,
 };

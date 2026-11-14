@@ -1007,7 +1007,7 @@ function crossFactoryGate(repoAbs, nums, { localConf = [], ghConf = [], remoteCo
         const ref = c.lock ? git.claimLockRef(num) : c.claimRef ? git.claimRef(c.branch) : `refs/heads/${c.branch}`;
         times.push(git.remoteRefCommitTime(repoAbs, c.remote, ref, c.fullSha || c.sha));
       } else {
-        const cm = c.otherMachine || c.cotenant;
+        const cm = claimTakeover.holderComment(c);
         times.push(cm && cm.at ? Date.parse(cm.at) : null);
       }
     }
