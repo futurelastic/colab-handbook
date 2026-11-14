@@ -2675,6 +2675,7 @@ function cmdReleaseFinalize(argv) {
     const cutRunOpts = {
       tag: cand.tag, cutAt: cand.cutAt, ownRunId: process.env.GITHUB_ACTIONS === 'true' ? process.env.GITHUB_RUN_ID || null : null,
       jobCount: forge ? null : (id) => git.ghRunJobCount(repoAbs, id), // #681: a commit status has no jobs to count
+      jobsOf: forge ? null : (id) => git.ghRunJobs(repoAbs, id), // #749: a skipped run whose every job skipped is gated off
     };
     const cutRun = releaseFinalize.cutRunVerdict(rawRows, cutRunOpts);
     // #565: a run that failed only in its deploy jobs (staging) — the three run-reading conditions
