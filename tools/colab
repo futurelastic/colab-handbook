@@ -11720,7 +11720,13 @@ is pending, or green within ${shipBatch.LANE_GRACE_SEC / 60}m of settling (the s
 combined run red — is deleted and the batch you asked for is built in its place, so the survivors of a
 decline can batch without landing serially first (#391). A green one still unlanded past that grace lost
 its lander and is deleted and rebuilt the same way; a green one whose settle time cannot be read is
-still waited on — only a provably abandoned batch is deleted (#659).
+still waited on — only a provably abandoned batch is deleted (#659). One whose combined run never
+started — no run ${shipBatch.LANE_GRACE_SEC / 60}m after it was built — is abandoned too; an unreadable build time waits (#742).
+The ref is the turn (#742): a build pushes it create-only, a split replaces it and a delete removes it
+only while it still holds the head this call read (--force-with-lease). Of two landers at one base
+exactly one push lands; the other prints "another lander took the turn" and exits 3 — run it again,
+it waits on the winner. The combined run is read through the forge engine (GitHub runs; on a Forgejo
+remote the commit statuses, where a re-run is not counted, so a red batch asks to be classified again).
 A call that goes serial on trunk CI not green gives up on its members, so it deletes every batch at
 trunk's tip whose members it ALL names (its run cancelled if still going) — nobody would ever land
 it, and it would hold this base for every later call; a batch also carrying another member stays (#656).
@@ -16142,6 +16148,15 @@ function workflowsFiringAt(repoAbs, treeish, branch) {
 }
 
 /**
+ * #742: every run on batch `ref` at `sha`, WITH its attempt and updatedAt — read through the forge
+ * contract's `runsAtRef` (GitHub: `gh run list --branch`; Forgejo: the commit's statuses), so the batch
+ * turn reads the same facts on every engine. null = could not read, never "no runs".
+ */
+function batchRunsAt(repoAbs, ref, sha) {
+  return (forgeCi(repoAbs) || tracker.forRepo(repoAbs)).runsAtRef(ref, sha);
+}
+
+/**
  * #373: may a green run on a `ship-batch/**` ref stand in for trunk's OWN run at the same sha? Only
  * on a repo that declared `ship-batch` > 1, only for a head commit a batch landed (its Ship-Batch:
  * trailer names the ref), and only when the same workflows ran there — lib/ship-batch.js
@@ -16153,8 +16168,9 @@ function shipBatchTrunkSubstitute(repoAbs, trunk, sha) {
   if (!msg.ok) return null;
   const tr = shipBatch.parseMemberTrailers([msg.stdout])[0];
   if (!tr || !shipBatch.parseBatchRef(tr.ref)) return null;
-  const trunkRows = git.ghRunsForCommit(repoAbs, trunk, sha, 20);
-  const batchRows = git.ghRunsForRef(repoAbs, tr.ref, sha);
+  const fc = forgeCi(repoAbs);
+  const trunkRows = fc ? fc.ciRunsAt(sha) : git.ghRunsForCommit(repoAbs, trunk, sha, 20);
+  const batchRows = batchRunsAt(repoAbs, tr.ref, sha);
   if (trunkRows === null || batchRows === null) return null;
   const covers = shipBatch.batchGreenCoversTrunk({
     trunkRows, batchRows,
@@ -16181,10 +16197,11 @@ function shipDryJsonReport(opts) {
  * lib/ship-batch.js laneHold; this only reads the remote.
  *
  * Inert (null, no git or gh call) unless project.yml declares ship-batch > 1, the merge target is
- * trunk, and gh is usable. Out: null, or `{ held, ref, why, released, detail }`.
+ * trunk, and gh is usable — or the remote is a forge the engine map names (#742: its runs are read
+ * through the engine). Out: null, or `{ held, ref, why, released, detail }`.
  */
 function shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciResult = null) {
-  if (target !== trunk || !gh || shipBatch.parseShipBatch(doc).n <= 1) return null;
+  if (target !== trunk || shipBatch.parseShipBatch(doc).n <= 1 || (!gh && !forgeCi(repoAbs))) return null;
   // #605: a TRUNK RED: cure is never held by a batch (or a chain) — trunk is red, and the cure is the
   // way out; no batch can land on a red trunk anyway.
   if (ciResult && ciResult.cureVerdict && ciResult.cureVerdict.ok) {
@@ -16201,7 +16218,7 @@ function shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciResult = null) {
   const chains = shipBatch.batchChains({ refs: refs.map((x) => ({ ref: x.parsed.ref, base7: x.parsed.base7, sha: x.sha })), trunkNow });
   const atTip = refs.filter((x) => chains.get(x.parsed.ref).rooted);
   const batches = atTip.map((x) => {
-    const runs = git.ghRunsForRef(repoAbs, x.parsed.ref, x.sha);
+    const runs = batchRunsAt(repoAbs, x.parsed.ref, x.sha);
     let t = git.git(['log', '-1', '--format=%cI', x.sha], repoAbs);
     if (!t.ok) { git.git(['fetch', '-q', remote, `refs/heads/${x.parsed.ref}`], repoAbs); t = git.git(['log', '-1', '--format=%cI', x.sha], repoAbs); }
     const built = t.ok ? Date.parse(t.stdout.trim()) : NaN;
@@ -16369,18 +16386,45 @@ function cmdShipBatch(opts) {
   }
 
   const gh = isGhUsable(repoAbs);
-  if (!gh) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — a batch cannot read its combined run`);
+  // #742: on a forge the engine map names, the combined run is read through its engine (runsAtRef).
+  const fc = forgeCi(repoAbs);
+  if (!gh && !fc) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — a batch cannot read its combined run`);
 
   // #415: every write on the resume path goes through here or shipBatchLand — under --dry, neither writes.
-  const deleteRef = (ref) => {
+  // #742: every delete is leased on the head this call read (`sha`), so a ref another lander rebuilt in
+  // between is never deleted from under it.
+  const remoteRefSha = (ref) => {
+    const r = git.git(['ls-remote', remote, `refs/heads/${ref}`], repoAbs);
+    return r.ok ? (r.stdout.split('\t')[0] || '').trim() : null;
+  };
+  const deleteRef = (ref, sha) => {
     if (opts.dry) { print(`  [dry] would delete ${remote}/${ref}`); return true; }
-    const d = git.git(['push', remote, '--delete', ref], repoAbs);
-    if (!d.ok) warn(`could not delete ${remote}/${ref}: ${git.gitFailureLine(d.stderr)} — delete it by hand`);
+    const d = git.git(shipBatch.batchDeleteArgs({ remote, ref, expect: sha }), repoAbs);
+    if (!d.ok) {
+      const now = remoteRefSha(ref);
+      warn(now !== null && now !== sha
+        ? `did not delete ${remote}/${ref}: it ${now ? `moved to ${shortSha(now)}` : 'is already gone'} since this call read it at ${shortSha(sha)} — another lander's turn; left as it is (#742)`
+        : `could not delete ${remote}/${ref}: ${git.gitFailureLine(d.stderr)} — delete it by hand`);
+    }
     return d.ok;
+  };
+  // #742: a delete the next step depends on (the ref's base is then free for this call's build).
+  // 'deleted' · 'moved' — another lander rewrote or removed it since it was read: the turn is not ours
+  // to take on this call · 'failed' — any other refusal.
+  const clearRef = (ref, sha) => {
+    if (deleteRef(ref, sha)) return 'deleted';
+    const now = remoteRefSha(ref);
+    return now !== null && now !== sha ? 'moved' : 'failed';
+  };
+  const turnMoved = (ref) => {
+    J.step = 'turn-lost';
+    print(`⏸ ship-batch: ${ref} changed on ${remote} since this call read it — another lander took the turn at this base (#742). Nothing landed.`);
+    print('  Run this command again: it reads the batch now there and waits on it, or builds once it lands or is declined.');
+    return 3;
   };
   // A ref nothing can land any more may still have its run going: cancel it rather than let it finish.
   const cancelRuns = (ref, sha) => {
-    for (const r of (git.ghRunsForRef(repoAbs, ref, sha) || []).filter((x) => x.status !== 'completed' && x.databaseId)) {
+    for (const r of (batchRunsAt(repoAbs, ref, sha) || []).filter((x) => x.status !== 'completed' && x.databaseId)) {
       if (opts.dry) { print(`  [dry] would cancel run ${r.databaseId} on ${ref}`); continue; }
       const cx = git.ghRunCancel(repoAbs, r.databaseId);
       if (!cx.ok) warn(`could not cancel run ${r.databaseId} on ${ref} — it will finish on a ref that is gone`);
@@ -16417,7 +16461,7 @@ function cmdShipBatch(opts) {
       const b = rooted.find((x) => x.ref === ref);
       print(`  ${ref} carries ${b.members.join(', ')} — every one going serial now, so nothing would ever land it; ${opts.dry ? 'would delete it [DRY RUN]' : 'deleting it'} (#656)`);
       cancelRuns(ref, b.sha);
-      deleteRef(ref);
+      deleteRef(ref, b.sha);
     }
   }
   if (trunkCi === 'pending') {
@@ -16457,7 +16501,7 @@ function cmdShipBatch(opts) {
       print(`  trunk moved since ${b.parsed.ref} was built (${b.parsed.base7} → ${shortSha(trunkNow)}) — nothing landed; rebuilding`);
     }
     swept.push({ ref: b.parsed.ref, members: offTrunk ? carriedBy(b.parsed.ref, trunkNow, b.sha) : [] });
-    deleteRef(b.parsed.ref);
+    deleteRef(b.parsed.ref, b.sha);
   }
   const rooted = batchRefs.filter((x) => chains.get(x.parsed.ref).rooted);
   // Every member the chain up to `sha` carries (branch → the ref carrying it), read from its trailers.
@@ -16499,13 +16543,13 @@ function cmdShipBatch(opts) {
       print(`  ${want} is gone and ${atTip.parsed.ref} at ${trunk}'s tip carries this batch — its parent landed; resuming on ${trunk}'s tip`);
     } else {
       const pc = chains.get(want);
-      const verdict = shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, want, p.sha), batchRead);
+      const verdict = shipBatch.combinedVerdict(batchRunsAt(repoAbs, want, p.sha), batchRead);
       const child = rooted.find((x) => x !== p && p.sha.startsWith(x.parsed.base7)) || null;
       if (verdict.state === 'red') {
         if (child) {
           const carried = carriedBy(child.parsed.ref, p.sha, child.sha);
           print(`✗ ship-batch: ${want} is red (${verdict.why}) — it will not land at ${shortSha(p.sha)}, so ${child.parsed.ref} built on it cannot land in order. Nothing landed; ${child.parsed.ref} ${opts.dry ? 'would be deleted [DRY RUN]' : 'deleted'}. Rebuild with the same command without --onto once ${want} is settled.`);
-          deleteRef(child.parsed.ref);
+          deleteRef(child.parsed.ref, child.sha);
           J.step = 'chained-decline';
           return serial(`its parent ${want} was declined — rebuild on ${trunk} once it is settled`, carried.length ? carried.map((m) => m.branch) : members);
         }
@@ -16532,8 +16576,12 @@ function cmdShipBatch(opts) {
     // #659: nor is a green one past the lane grace (laneHold's rule) — its lander is gone.
     let foreignStep = null;
     if (foreign.length) {
-      const runs = git.ghRunsForRef(repoAbs, atBase.parsed.ref, atBase.sha);
-      foreignStep = shipBatch.foreignBatchStep(shipBatch.combinedVerdict(runs, batchRead), { settledAtMs: shipBatch.settledAt(runs), nowMs: Date.now() });
+      const runs = batchRunsAt(repoAbs, atBase.parsed.ref, atBase.sha);
+      // #742: its build time ages a batch whose combined run never started (the build commits its head).
+      const bt = git.git(['log', '-1', '--format=%cI', atBase.sha], repoAbs);
+      const builtAtMs = bt.ok ? Date.parse(bt.stdout.trim()) : NaN;
+      foreignStep = shipBatch.foreignBatchStep(shipBatch.combinedVerdict(runs, batchRead), {
+        settledAtMs: shipBatch.settledAt(runs), builtAtMs: Number.isFinite(builtAtMs) ? builtAtMs : null, nowMs: Date.now() });
     }
     if (foreignStep && foreignStep.step === 'wait') {
       print(`⏸ ship-batch: another batch is in flight at this base — ${atBase.parsed.ref} carries ${inBatch.map((m) => m.branch).join(', ')}${foreignStep.why ? ` (${foreignStep.why})` : ''}.`);
@@ -16542,10 +16590,13 @@ function cmdShipBatch(opts) {
     }
     if (foreignStep) {
       const carried = inBatch.map((m) => m.branch).join(', ');
-      print(foreignStep.reason === 'abandoned'
-        ? `  ${atBase.parsed.ref} (${carried}) was abandoned — its ${foreignStep.why}; nothing landed from it. Deleting it and building the requested batch.`
-        : `  ${atBase.parsed.ref} (${carried}) was declined — its combined run is red (${foreignStep.why}); nothing landed from it. Deleting it and building the requested batch.`);
-      if (!opts.dry && !deleteRef(atBase.parsed.ref)) throw new UserError(`could not clear the ${foreignStep.reason === 'abandoned' ? 'abandoned' : 'declined'} ${atBase.parsed.ref} — delete it by hand (\`git push ${remote} --delete ${atBase.parsed.ref}\`), then run this command again`);
+      print({
+        abandoned: `  ${atBase.parsed.ref} (${carried}) was abandoned — its ${foreignStep.why}; nothing landed from it. Deleting it and building the requested batch.`,
+        'never-started': `  ${atBase.parsed.ref} (${carried}) was abandoned — ${foreignStep.why}; nothing landed from it. Deleting it and building the requested batch (#742).`,
+      }[foreignStep.reason] || `  ${atBase.parsed.ref} (${carried}) was declined — its combined run is red (${foreignStep.why}); nothing landed from it. Deleting it and building the requested batch.`);
+      const cleared = opts.dry ? 'deleted' : clearRef(atBase.parsed.ref, atBase.sha);
+      if (cleared === 'moved') return turnMoved(atBase.parsed.ref);
+      if (cleared !== 'deleted') throw new UserError(`could not clear the ${foreignStep.reason === 'red' ? 'declined' : 'abandoned'} ${atBase.parsed.ref} — delete it by hand (\`git push ${remote} --delete ${atBase.parsed.ref}\`), then run this command again`);
     }
     if (!foreignStep) {
       const heads = inBatch.map((m) => ({ ...m, now: git.branchRefs(repoAbs, m.branch, remote).remoteSha }));
@@ -16562,7 +16613,7 @@ function cmdShipBatch(opts) {
       }
     }
   }
-  let verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha), batchRead) : null;
+  let verdict = existing && existing.matches ? shipBatch.combinedVerdict(batchRunsAt(repoAbs, existing.ref, existing.sha), batchRead) : null;
   // #610: integration-profile: gated — a wave lands only on a green heavy run at its head too. The
   // heavy verdict joins the combined one (integration-profile.js waveVerdict), so a heavy red takes
   // the same re-run / split path a light red does, and the split walks toward the culprit.
@@ -16586,7 +16637,9 @@ function cmdShipBatch(opts) {
 
   if (step.step === 'rebuild') {
     print(`  ${existing.ref} no longer carries the requested members at their current heads — rebuilding`);
-    deleteRef(existing.ref);
+    const cleared = clearRef(existing.ref, existing.sha);
+    if (cleared === 'moved') return turnMoved(existing.ref);
+    if (cleared !== 'deleted') throw new UserError(`could not delete ${existing.ref} to rebuild it — delete it by hand (\`git push ${remote} --delete ${existing.ref}\`), then run this command again`);
     existing = null;
     step = { step: 'build' };
   }
@@ -16625,7 +16678,7 @@ function cmdShipBatch(opts) {
   }
   if (step.step === 'red-serial') {
     print(`✗ ship-batch: the combined run is red again after its one re-run (${verdict.why}) — nothing landed; ${existing.ref} ${opts.dry ? 'would be deleted [DRY RUN]' : 'deleted'}.`);
-    deleteRef(existing.ref);
+    deleteRef(existing.ref, existing.sha);
     print(shipBatch.serialLine(existing.members.map((m) => m.branch)));
     return 4;
   }
@@ -16641,7 +16694,7 @@ function cmdShipBatch(opts) {
       return 3;
     }
     print(`✗ ship-batch: ${existing.ref} cannot land in order — ${ls.why}. Nothing landed; ${existing.ref} ${opts.dry ? 'would be deleted [DRY RUN]' : 'deleted'}. Rebuild with the same command without --onto.`);
-    deleteRef(existing.ref);
+    deleteRef(existing.ref, existing.sha);
     return serial('its parent batch was discarded', existing.members.map((m) => m.branch));
   }
   if (step.step === 'land') return shipBatchLand(repoAbs, doc, trunk, remote, trunkNow, existing, verdict, opts);
@@ -16664,7 +16717,7 @@ function cmdShipBatch(opts) {
         ...(handoffs[b] ? { handoff: handoffs[b] } : {}) });
       report = rep.body;
       files = branchChangedFiles(repoAbs, trunkRef, refs.remoteSha);
-      ciClass = shipBatch.branchCiClass(git.ghRunForSha(repoAbs, b), workflowsFiringAt(repoAbs, refs.remoteSha, b).length > 0);
+      ciClass = shipBatch.branchCiClass(fc ? fc.ciVerdict(refs.remoteSha, { branch: b }) : git.ghRunForSha(repoAbs, b), workflowsFiringAt(repoAbs, refs.remoteSha, b).length > 0);
       const el = rep.error ? { ok: false, why: rep.error }
         // #591: a refused hand-off is worded as the single door words it — the same reason, the same detail.
         : (report && report.handoff && !report.handoff.ok) ? { ok: false, why: `Refusing --handoff: ${report.handoff.detail}` }
@@ -16699,7 +16752,7 @@ function cmdShipBatch(opts) {
     // member is ready. Wait for a partner until the repo's window, counted from when it became ready.
     const lone = selected[0];
     const commitIso = git.git(['log', '-1', '--format=%cI', lone.sha], repoAbs);
-    const since = shipBatch.readySince(git.ghRunsForCommit(repoAbs, lone.branch, lone.sha), commitIso.ok ? commitIso.stdout.trim() : null);
+    const since = shipBatch.readySince(fc ? fc.ciRunsAt(lone.sha) : git.ghRunsForCommit(repoAbs, lone.branch, lone.sha), commitIso.ok ? commitIso.stdout.trim() : null);
     const pw = shipBatch.partnerWait({ n: cfg.n, waitSec: waitCfg.sec, eligibleCount: 1, readySinceMs: since, nowMs: Date.now() });
     if (pw.wait) {
       print(`⏸ PARTNER-WAIT ${lone.branch} — the only ready member; ${waitCfg.reason}, ready since ${new Date(since).toISOString()}, ${ciWait.fmtDuration(pw.leftSec * 1000)} left. Nothing landed.`);
@@ -16819,10 +16872,17 @@ function cmdShipBatch(opts) {
     if (notJoining.length || dropped.length) print(`  not in this batch: ${[...new Set([...notJoining, ...dropped.map((d) => d.branch)])].join(', ')}`);
     return 0;
   }
-  // --force only ever inside our own namespace: a rebuild on the same base replaces its own ref.
-  const push = git.run('git', ['push', '--force', remote, `${head}:refs/heads/${ref}`], { cwd: repoAbs });
+  // #742: the push IS the turn, so it is leased: create-only when no batch is live at this base (a
+  // fresh build, or one whose old ref this call just deleted), or — a split rebuilding its own ref in
+  // place — only while the remote still holds the head this call read. Of two landers at one base,
+  // exactly one push lands; the other reads the remote again and waits on the winner.
+  const expect = existing && existing.ref === ref ? existing.sha : '';
+  const push = git.run('git', shipBatch.batchPushArgs({ remote, head, ref, expect }), { cwd: repoAbs });
   cleanup();
-  if (!push.ok) throw new UserError(`could not push ${ref}: ${git.gitFailureLine(push.stderr)} — nothing landed`);
+  if (!push.ok) {
+    if (shipBatch.pushRefusal({ remoteSha: remoteRefSha(ref), head }) === 'turn-lost') return turnMoved(ref);
+    throw new UserError(`could not push ${ref}: ${git.gitFailureLine(push.stderr)} — nothing landed`);
+  }
   print(`  pushed ${ref} = ${shortSha(base)} + ${built.length} commit(s) @ ${shortSha(head)} (${built.map((b) => b.branch).join(', ')})${parent ? ` — chained onto ${parent.ref}; it lands after it` : ''}`);
   if (overflow.length) print(`  eligible but ${splitHalf ? 'held by the split' : 'over the cap'} (next batch): ${overflow.map((o) => o.branch).join(', ')}`);
   print(`⏸ BATCH-PENDING ${ref}@${shortSha(head)} — wait on the combined run (bounded, B1a), then run this command again. Nothing landed yet.`);
@@ -16918,7 +16978,7 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
   }
   print('  pushed.');
   deferredCollector = [];
-  if (!git.git(['push', remote, '--delete', existing.ref], repoAbs).ok) warnDeferred(`could not delete ${remote}/${existing.ref} — delete it by hand (it has landed)`);
+  if (!git.git(shipBatch.batchDeleteArgs({ remote, ref: existing.ref, expect: existing.sha }), repoAbs).ok) warnDeferred(`could not delete ${remote}/${existing.ref} — delete it by hand (it has landed)`);
 
   // The post-ship hook runs ONCE, over the whole batch — it is a trunk-checkout event, not a member one.
   const changed = git.git(['diff', '--name-only', `${base}..${head}`], repoAbs);

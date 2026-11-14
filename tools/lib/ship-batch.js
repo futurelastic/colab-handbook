@@ -213,6 +213,42 @@ function batchRefName(baseSha) {
   return `${REF_PREFIX}${String(baseSha || '').slice(0, 7)}`;
 }
 
+/**
+ * #742: every write to a batch ref is LEASED on the value the caller read. The ref is the turn: two
+ * landers at one base used to push it with `--force`, the second silently replacing the first, and
+ * both then believed they held the turn. Now
+ *   - a build pushes create-only (`expect` empty: the ref must not exist on the remote);
+ *   - a split replaces its own ref only while the remote still holds the head it read (`expect` sha);
+ *   - a delete removes only the head it read, so a ref another lander rebuilt in between survives.
+ * git checks the lease against the advertised value and the remote re-checks the old value on update,
+ * so of two concurrent pushes exactly one wins. A refusal is classified by re-reading the remote,
+ * never by git's wording (a racer seen late is `remote rejected`, not `stale info`).
+ */
+const bareRef = (ref) => String(ref || '').replace(/^refs\/heads\//, '');
+const leaseArg = (ref, expect) => `--force-with-lease=refs/heads/${bareRef(ref)}:${expect || ''}`;
+
+/** `git push` argv putting `head` on batch `ref`, leased on `expect` ('' or null = create-only). Pure. */
+function batchPushArgs({ remote, head, ref, expect = null }) {
+  return ['push', leaseArg(ref, expect), remote, `${head}:refs/heads/${bareRef(ref)}`];
+}
+
+/** `git push` argv deleting batch `ref` only while it still points at `expect` (a sha). Pure. */
+function batchDeleteArgs({ remote, ref, expect }) {
+  if (!expect) throw new Error('batchDeleteArgs: a delete is leased on the sha that was read — none given');
+  return ['push', leaseArg(ref, expect), remote, '--delete', bareRef(ref)];
+}
+
+/**
+ * #742: a leased push of batch `ref` was refused. Did another lander take the turn? `remoteSha` is the
+ * ref on the remote re-read after the refusal ('' when absent), `head` what we pushed.
+ *   'turn-lost'  the ref now holds someone else's head — wait for it (exit 3), never an error;
+ *   'refused'    anything else (no access, a hook, a network failure) — today's refusal.
+ */
+function pushRefusal({ remoteSha, head }) {
+  const r = String(remoteSha || '').trim();
+  return r && r !== String(head || '').trim() ? 'turn-lost' : 'refused';
+}
+
 /** `ship-batch/<hex7>` (with or without `refs/heads/`) → `{ ref, base7 }`, else null. */
 function parseBatchRef(ref) {
   const m = /^(?:refs\/heads\/)?(ship-batch\/([0-9a-f]{7}))$/.exec(String(ref || ''));
@@ -516,10 +552,25 @@ function nextStep({ enabled, wired, trunkCi, eligibleCount = 0, existing = null,
  *          time could not be read. That last one deliberately differs from laneHold, which releases
  *          it: deleting another caller's green run is not undoable, so the batch door clears only a
  *          provably abandoned ref (#391's pinned case, kept on purpose — recorded on #659).
- * `settledAtMs` is settledAt() of the ref's runs; `nowMs` the clock.
+ * #742: a batch whose combined run NEVER STARTED (no run at its head) is in flight only for the same
+ * grace, counted from when it was built: a workflow that should have fired and did not (a runner
+ * outage, a disabled workflow, a lander that died between push and run) would otherwise pause every
+ * batch at this base until trunk moved — laneHold already releases it on the serial doors.
+ *   clear  no run, built ≥ graceSec ago → `reason: 'never-started'`
+ *   wait   no run inside the grace, or no run and a build time that could not be read (as for green:
+ *          only a provably abandoned ref is deleted).
+ * `settledAtMs` is settledAt() of the ref's runs; `builtAtMs` the batch head's commit time (the build
+ * commits it); `nowMs` the clock.
  */
-function foreignBatchStep(verdict, { settledAtMs = null, nowMs = null, graceSec = LANE_GRACE_SEC } = {}) {
+function foreignBatchStep(verdict, { settledAtMs = null, builtAtMs = null, nowMs = null, graceSec = LANE_GRACE_SEC } = {}) {
   if (verdict && verdict.state === 'red') return { step: 'clear', reason: 'red', why: verdict.why };
+  if (verdict && verdict.state === 'none' && Number.isFinite(builtAtMs) && Number.isFinite(nowMs)) {
+    const mins = Math.max(0, Math.round((nowMs - builtAtMs) / 60000));
+    if ((nowMs - builtAtMs) >= graceSec * 1000) {
+      return { step: 'clear', reason: 'never-started', why: `no combined run ${mins}m after it was built (grace ${graceSec}s) — treated as abandoned` };
+    }
+    return { step: 'wait', why: `built ${mins}m ago, its combined run has not appeared yet; past ${Math.round(graceSec / 60)}m with no run it is cleared` };
+  }
   if (verdict && verdict.state === 'green' && Number.isFinite(settledAtMs) && Number.isFinite(nowMs)) {
     const mins = Math.max(0, Math.round((nowMs - settledAtMs) / 60000));
     if ((nowMs - settledAtMs) >= graceSec * 1000) {
@@ -767,6 +818,7 @@ module.exports = {
   parseShipBatch, parseShipBatchWait, parseShipBatchSteps, sizeTrailer, parseSizeTrailer, adaptiveSize, splitHalves, partnerWait, readySince, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
   droppedTrailer, parseDroppedTrailers, appendTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep, givenUpRefs,
+  batchPushArgs, batchDeleteArgs, pushRefusal,
   batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,
   LANE_GRACE_SEC, laneHold, settledAt, MAX_CHAIN_DEPTH, batchChains, chainedLandStep,
 };

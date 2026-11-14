@@ -184,6 +184,12 @@ function create(repoAbs, given = {}) {
       return require('./git').summarizeRunsForCommit(clone(runs.filter((r) => r.headSha === sha && (!branch || r.headBranch === branch))), sha);
     },
 
+    // #742: the seeded runs on `ref` at `sha`, with attempt (default 1) — the GitHub adapter's row shape.
+    runsAtRef: (ref, sha) => {
+      if (offline || !sha) return null;
+      return clone(runs.filter((r) => r.headBranch === ref && r.headSha === sha)).map((r) => ({ attempt: 1, ...r }));
+    },
+
     releaseView: (tag) => {
       if (offline) return result(false);
       return releases.has(tag) ? result(true, { stdout: JSON.stringify({ tagName: tag }) }) : fail('release not found');

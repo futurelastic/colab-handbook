@@ -23,6 +23,14 @@
       {"url":"https://forge.example/api/v1/repos/OWNER/REPO/releases/tags/v1.1.0-rc.1","status":200,"json":{"id":2,"tag_name":"v1.1.0-rc.1","name":"v1.1.0-rc.1","body":"","draft":false,"prerelease":true,"html_url":"https://forge.example/OWNER/REPO/releases/tag/v1.1.0-rc.1","created_at":"2026-11-01T10:00:00Z","published_at":"2026-11-01T10:00:00Z"}},
       {"url":"https://forge.example/api/v1/repos/OWNER/REPO/releases/tags/v1.0.0","status":200,"json":{"id":1,"tag_name":"v1.0.0","name":"v1.0.0","body":"","draft":false,"prerelease":false,"html_url":"https://forge.example/OWNER/REPO/releases/tag/v1.0.0","created_at":"2026-11-01T10:00:00Z","published_at":"2026-11-01T10:00:00Z"}},
       {"method":"POST","url":"https://forge.example/api/v1/repos/OWNER/REPO/releases","body":{"tag_name":"v1.1.0-rc.1","name":"v1.1.0-rc.1","body":"","draft":false,"prerelease":true},"status":409,"json":{"message":"release tag already exist","url":"https://forge.example/api/swagger"}}
+    ],
+    "runs-at-ref": [
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?page=1&limit=50","status":200,"json":{"state":"success","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","total_count":1,"statuses":[{"id":21,"status":"success","target_url":"https://forge.example/OWNER/REPO/actions/runs/21","description":"","context":"CI / test (push)","creator":{"login":"forgejo-actions"},"created_at":"2026-11-01T10:05:00Z","updated_at":"2026-11-01T10:05:00Z"}]}},
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/status?page=1&limit=50","status":200,"json":{"state":"failure","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","total_count":1,"statuses":[{"id":22,"status":"failure","target_url":"https://forge.example/OWNER/REPO/actions/runs/22","description":"","context":"CI / test (push)","creator":{"login":"forgejo-actions"},"created_at":"2026-11-01T11:04:00Z","updated_at":"2026-11-01T11:04:00Z"}]}},
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/cccccccccccccccccccccccccccccccccccccccc/status?page=1&limit=50","status":200,"json":{"state":"","sha":"cccccccccccccccccccccccccccccccccccccccc","total_count":0,"statuses":[]}}
+    ],
+    "runs-at-ref-unreadable": [
+      {"url":"https://forge.example/api/v1/repos/OWNER/REPO/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?page=1&limit=50","status":0,"error":"connect ECONNREFUSED"}
     ]
   }
 }

@@ -112,12 +112,12 @@ function fixture({ yml = YML(), ci = CI_WIRED } = {}) {
   return fx;
 }
 
-function colab(fx, args) {
+function colab(fx, args, env = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
     env: {
       ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, HOME: fx.home, COLAB_HOME: fx.home,
-      COLAB_SESSION: SESSION, COLAB_SESSION_NAME: '', COLAB_HUMAN: '',
+      COLAB_SESSION: SESSION, COLAB_SESSION_NAME: '', COLAB_HUMAN: '', ...env,
     },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
@@ -137,7 +137,7 @@ function member(fx, branch, { file, content } = {}) {
   assert.strictEqual(c.code, 0, c.out + c.err);
   fx.g(fx.work, 'push', '-q', 'origin', branch);
 }
-const batch = (fx, list = MEMBERS, extra = []) => colab(fx, ['ship', '--batch', list.join(','), '--repo', fx.work, ...extra]);
+const batch = (fx, list = MEMBERS, extra = [], env = {}) => colab(fx, ['ship', '--batch', list.join(','), '--repo', fx.work, ...extra], env);
 
 test('#373 oracle 1: three green disjoint members → one combined run, one fast-forward, three squashes', () => {
   const fx = fixture();
@@ -1011,6 +1011,62 @@ test('#659: a green foreign batch past the lane grace is cleared and the request
   assert.match(carried, /c-13/);
   assert.doesNotMatch(carried, /a-11/);
   assert.strictEqual(fx.originSha('main'), T, 'nothing landed');
+});
+
+test('#742 oracle: two landers at one base — the one whose create-only push loses waits on the winner, never replaces it', () => {
+  const fx = fixture();
+  member(fx, 'fix/a-11');
+  member(fx, 'fix/b-12');
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  // The rival: another lander's real batch of fix/b-12 at this base, taken off the remote again so
+  // it can land between this lander's read of the remote and its own push — the pre-push hook runs
+  // after the refs were advertised, so this push still believes the ref is absent.
+  assert.strictEqual(batch(fx, ['fix/b-12']).code, 3);
+  const rival = fx.originSha(ref);
+  fx.g(fx.origin, 'update-ref', '-d', `refs/heads/${ref}`);
+  fx.setStatus(ref, 'in_progress x 1');
+  prePush(fx, `git --git-dir="${fx.origin}" rev-parse --verify -q refs/heads/${ref} >/dev/null || git --git-dir="${fx.origin}" update-ref refs/heads/${ref} ${rival}`);
+  const r = batch(fx, ['fix/a-11']);
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  assert.match(r.out, /another lander took the turn at this base/);
+  assert.doesNotMatch(r.out, /BATCH-PENDING/);
+  assert.strictEqual(fx.originSha(ref), rival, "the winner's ref is untouched — no lander replaces another's");
+  assert.strictEqual(fx.originSha('main'), T, 'nothing landed');
+  // the next call reads the winner's batch and waits on it as in flight
+  fs.unlinkSync(path.join(fx.root, '.nohooks', 'pre-push'));
+  const again = batch(fx, ['fix/a-11']);
+  assert.strictEqual(again.code, 3, again.out + again.err);
+  assert.match(again.out, /another batch is in flight at this base/);
+  assert.strictEqual(fx.originSha(ref), rival);
+});
+
+test('#742: a foreign batch whose combined run never started is cleared past the grace from its build; inside it, waited on', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  // built 20 minutes ago (the build commits the head, so its commit time is the build time)
+  const old = new Date(Date.now() - 20 * 60000).toISOString();
+  assert.strictEqual(batch(fx, MEMBERS, [], { GIT_COMMITTER_DATE: old, GIT_AUTHOR_DATE: old }).code, 3);
+  const staleSha = fx.originSha(ref);
+  fx.setStatus(ref, 'none');
+  const r = batch(fx, ['fix/b-12', 'fix/c-13']);
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  assert.doesNotMatch(r.out, /in flight at this base/);
+  assert.match(r.out, /was abandoned — no combined run 20m after it was built .*abandoned/);
+  assert.match(r.out, /BATCH-PENDING/);
+  assert.notStrictEqual(fx.originSha(ref), staleSha, 'the ref now holds the requested batch');
+  const carried = fx.g(fx.origin, 'log', '--format=%s', `${T}..${ref}`);
+  assert.match(carried, /b-12/);
+  assert.doesNotMatch(carried, /a-11/);
+  assert.strictEqual(fx.originSha('main'), T, 'nothing landed');
+
+  // a run-less batch built moments ago is in flight: the other lander waits
+  const fresh = batch(fx, ['fix/a-11']);
+  assert.strictEqual(fresh.code, 3, fresh.out + fresh.err);
+  assert.match(fresh.out, /another batch is in flight at this base .*its combined run has not appeared yet/);
+  assert.match(fx.g(fx.origin, 'log', '--format=%s', `${T}..${ref}`), /b-12/, 'left alone inside the grace');
 });
 
 test('#581: inert where ship-batch is not enabled — no row, and no batch ref is even read', () => {
