@@ -1330,6 +1330,24 @@ the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), it
 records it, what it refuses and the planner hold:
 [`tools/docs/claims.md`](tools/docs/claims.md#record-of-a-claim--the-branch-on-the-remote).
 
+#### Factories — several teams on one repository (#739)
+
+Teams that share a repository and nothing else but its forge ("factories") are declared in one
+[trust file on trunk](project.schema.md#sibling-file-githubfactoriesyml), `.github/factories.yml`:
+each factory's machines, signing key, human logins and slices, plus the steward's areas. Absent, the
+repository has one team and nothing here applies.
+
+- The file is read from trunk's committed copy only, never from the branch being judged: a branch
+  cannot grant itself a factory, a machine, a key or a human. Changing it is a human act.
+- Each machine and each slice belongs to exactly one factory. An invalid file trusts nobody.
+- Identity is by key, not by login: a claim is an SSH-signed commit and a verdict marker carries its
+  factory and a signature by that factory's key, so two factories on one forge login are still told
+  apart. A verdict signature covers a fixed payload of the fields that carry its meaning, never the
+  whole comment, and a field outside that payload is never trusted.
+
+The payload bytes, the marker, how a signature is checked and the shared labels and status names:
+[`tools/docs/factories.md`](tools/docs/factories.md).
+
 #### Mirror for people — GitHub
 
 What a person reads on the tracker names both the holder and that work is in progress; either half

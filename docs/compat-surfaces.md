@@ -76,6 +76,7 @@ has-it-landed--the-one-rule-because-the-obvious-one-is-wrong
 5-claiming-work--how-to-say-im-on-this
 who-holds-this
 record-of-a-claim--the-branch-on-the-remote
+factories--several-teams-on-one-repository-739
 mirror-for-people--github
 fast-path--local-cache
 rules

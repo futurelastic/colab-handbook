@@ -1016,6 +1016,20 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.record.08 | default |  | Name the machine in a claim by canonical id (not hostname), and carry only a digest of it in the comment. | A claim names the machine by a canonical id, not its hostname | tools/docs/claims.md | #327 |
 | C5a.record.09 | default |  | A planner may hold an issue before its session exists (--session intent:<id>); the session's own claim upgrades it, and an unused planner claim is released after a short window. | A planner may hold an issue before the session that will work it exists | tools/docs/claims.md | #326 |
 
+### §5 Factories — several teams on one repository (#739)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C5a.factories.01 | default |  | Teams sharing one repository and only its forge are declared in `.github/factories.yml`; absent, nothing here applies. | Absent, the repository has one team and nothing here applies. | CONVENTIONS.md | #739 |
+| C5a.factories.02 | default |  | The factories file is read from trunk's committed copy only, never from the branch being judged, and changing it is a human act. | read from trunk's committed copy only, never from the branch being judged | CONVENTIONS.md | #739 |
+| C5a.factories.03 | default |  | Each machine and each slice belongs to exactly one factory; an invalid factories file trusts nobody. | Each machine and each slice belongs to exactly one factory. An invalid file trusts nobody. | CONVENTIONS.md | #739 |
+| C5a.factories.04 | default |  | Identity is by key, not login: a claim is an SSH-signed commit and a verdict marker carries its factory and a signature by that factory's key. | Identity is by key, not by login | CONVENTIONS.md | #739 |
+| C5a.factories.05 | default |  | A verdict signature covers a fixed payload of its meaningful fields, never the whole comment; a field outside the payload is never trusted. | never the whole comment, and a field outside that payload is never trusted | CONVENTIONS.md | #739 |
+| C5a.factories.06 | default |  | The payload's forge, repo and issue come from the verifier's context, so a marker copied elsewhere fails. | come from the verifier,** not from the comment | tools/docs/factories.md | #739 |
+| C5a.factories.07 | default |  | A signed verdict binds the full 40-hex head; a signer refuses a short sha. | **`head` is the full sha.** | tools/docs/factories.md | #739 |
+| C5a.factories.08 | default |  | A marker without `factory` and `sig` is nobody's verdict across factories. | It is nobody's verdict across factories. | tools/docs/factories.md | #739 |
+| C5a.factories.09 | explanation |  | Rationale moved to the ADR: why a payload and not the comment body, why the verifier supplies forge/repo, principal = factory id. | Sign a payload, not the comment body. | docs/adr/739-factories-signature-format.md | #739 |
+
 ### §5 Mirror for people — GitHub
 
 | id | class | gate | rule | key | dest | source |
@@ -2888,6 +2902,16 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.cigrant.05 | hard | tools/lib/ci-grant.js::function parseGrantPolicy | An invalid `ci-grant` value falls back to `human`, and the audit fails it. | An invalid value falls back to `human`. That is the stricter reading, and the audit | project.schema.md | — |
 | S1.cigrant.06 | default |  | Declaring `ci-grant` is a human act, like lowering exposure; the agent it lets through does not add it. | Declaring it is a human act, like lowering exposure | project.schema.md | — |
 | S1.cigrant.07 | default |  | The audit always reports the value in `--json` as `ciGrant`. | It appears in `--json` as `ciGrant`. | project.schema.md | — |
+
+### `.github/factories.yml` (sibling file)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S1.factories.01 | default |  | `.github/factories.yml` is a separate file, not a `project.yml` key, read from trunk only. | It is a separate file, not a `project.yml` key, and it is read from trunk only | project.schema.md | #739 |
+| S1.factories.02 | default |  | `factories` is a map keyed by factory id, never a list of factory objects; an id is declared once. | a map keyed by factory id, never a list of factory objects | project.schema.md | #739 |
+| S1.factories.03 | default |  | `steward` names the one factory whose tier is steward. | `steward` names the one factory whose `tier` is `steward` | project.schema.md | #739 |
+| S1.factories.04 | default |  | Each machine id and each slice is in exactly one factory; no two factories share a key. | each machine id in exactly one factory | project.schema.md | #739 |
+| S1.factories.05 | default |  | An invalid factories file trusts nobody, and the audit fails each finding. | An invalid file trusts nobody. | project.schema.md | #739 |
 
 ### `trust-humans`
 

@@ -1662,6 +1662,45 @@ which Python it runs on, so it must set `python:` here or add a `.python-version
 When a pin here contradicts the manifest, the audit tool reports it. That is
 intentional: a disagreement is a finding to surface, not to auto-resolve.
 
+## Sibling file: `.github/factories.yml`
+
+Optional. It declares the teams ("factories") that share one repository with nothing but its forge
+([CONVENTIONS.md §5, *Factories*](CONVENTIONS.md#factories--several-teams-on-one-repository-739)).
+It is a separate file, not a `project.yml` key, and it is read from trunk only, like `trust-humans`.
+The one reading is `tools/lib/factories.js` `parseFactories`; the audit runs it.
+
+```yaml
+version: 1
+steward: core                      # the factory that owns intake, trunk health and release
+forge: github.com                  # the repository's one home forge, a host name
+factories:                         # a map keyed by factory id, never a list of factory objects
+  core:
+    tier: steward                  # steward · partner · outside
+    machines: [box-a, box-b]
+    key: ssh-ed25519 AAAAC3Nza…     # one SSH public key line
+    humans: [operator-a]           # logins that count as a human for grants
+    slices: [slice:core]
+  mobile:
+    tier: partner
+    machines: [mobile-1]
+    key: ssh-ed25519 AAAAC3Nza…
+    slices: [slice:mobile]
+steward-areas: [CONVENTIONS.md, .github/**]   # path globs whose change needs one steward verdict
+```
+
+| Rule | Failure it prevents |
+|---|---|
+| `version: 1`; no key outside the ones above, at either level | a file written for a format the reader does not know |
+| `factories` a map; a factory id is lowercase letters, digits and hyphens, declared once | two factories merged silently under one id |
+| `steward` names the one factory whose `tier` is `steward` | intake and release with no owner, or two |
+| `machines` non-empty; each machine id in exactly one factory | one machine's claim read as two teams' |
+| `key` one SSH public key line; no two factories share a key | a signature that proves no single factory |
+| `slices` are `slice:<name>` labels; each in exactly one factory | two teams both owning the same issues |
+| `humans` logins (may be empty); `steward-areas` path globs | — |
+
+**An invalid file trusts nobody.** Every lookup answers "no factory, no human", and the audit fails
+each finding: a reader that fell back to "no file" would drop every rule the file turns on.
+
 ## Examples
 
 Tier B (no production yet):
