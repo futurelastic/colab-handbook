@@ -35,6 +35,7 @@
  */
 
 const machine = require('./machine');
+const { machineLabel } = require('./branch-name');
 
 const DEFAULT_COMPONENTS = Object.freeze(['login', 'host']);
 const FINE_COMPONENTS = Object.freeze(['login', 'host', 'session']);
@@ -239,11 +240,52 @@ function mergeClaimRecord(existing, incoming, { sameHolder } = {}) {
  * False for '' / null: absence is `warnWeakIdentity`'s and `requirePlaceIdentity`'s subject
  * (#11/#242), never this predicate's — callers test blankness first.
  */
+/**
+ * #746 — may a claim record that carries NO `lock` field release the claim lock found on the remote
+ * for its issue? Pure. `trailers` is `git.parseClaimLockMessage` of the lock commit, `rec` the claim
+ * record being released, `here` = `{ num, hostLabel, machineTok }` (this machine's `machineLabel` and
+ * public machine token). `{ ok: true }` or `{ ok: false, why }` — a refusal leaves the lock in place
+ * and the caller prints the delete command, so this errs toward "not provably ours".
+ *
+ * A record is lock-less when the lock was written by something other than the colab that wrote the
+ * record: an orchestrator takes the lock at spawn and the session's claim is then recorded by a colab
+ * that predates #741 (measured on #746 itself — the served CLI lagged trunk), or `doctor --sync`
+ * re-creates the record from the tracker. So the rule mirrors adoption in `remoteClaimConflicts`:
+ *   - the lock must name this issue in its subject (`claim: #N …`);
+ *   - a lock colab wrote (`Claimed-By: colab`) is this claim's only when its `Session:` equals the
+ *     record's (both non-empty) AND it names this machine — two colab homes on one host share the
+ *     hardware, so the machine alone never proves it;
+ *   - a lock another tool wrote is this claim's when it names this machine — the same test that let
+ *     the session adopt it — unless a `Session:`/`Branch:` it does carry contradicts the record.
+ */
+function lockReleasableBy(trailers, rec, { num, hostLabel = '', machineTok = '' } = {}) {
+  const tr = trailers || {};
+  const r = rec || {};
+  const issues = Array.isArray(tr.issues) ? tr.issues : [];
+  if (!issues.includes(Number(num))) {
+    return { ok: false, why: issues.length ? `the lock commit names ${issues.map((n) => `#${n}`).join(' ')}, not #${num}` : `the lock commit names no issue` };
+  }
+  const trMachine = tr.machine ? machineLabel(tr.machine) : '';
+  const onThisMachine = (tr.machineId && machineTok) ? tr.machineId === machineTok : (!!trMachine && trMachine === machineLabel(hostLabel));
+  if (tr.colab) {
+    if (!r.session || !tr.session || r.session !== tr.session) {
+      return { ok: false, why: `colab wrote it for session ${tr.session || '(none)'}, this claim is session ${r.session || '(none)'}` };
+    }
+    if (!onThisMachine) return { ok: false, why: `colab wrote it on machine ${tr.machine || tr.machineId || '(none)'}` };
+    return { ok: true };
+  }
+  const writer = tr.author || 'another tool';
+  if (!onThisMachine) return { ok: false, why: `${writer} wrote it for machine ${tr.machine || '(none)'}, not this one` };
+  if (tr.session && r.session && tr.session !== r.session) return { ok: false, why: `${writer} wrote it for session ${tr.session}, this claim is session ${r.session}` };
+  if (tr.branch && r.branch && tr.branch !== r.branch) return { ok: false, why: `${writer} wrote it for branch ${tr.branch}, this claim is on ${r.branch}` };
+  return { ok: true };
+}
+
 const { looksLikeSessionId } = require('./codec/claim'); // one copy of the rule, in the codec (#497)
 
 module.exports = {
   DEFAULT_COMPONENTS, FINE_COMPONENTS,
   claimIdentityProblem, components, identityString, sameClaimant, mergeClaimRecord,
   looksLikeSessionId, isIntentSession, sameHost, sameFactory,
-  shouldDerivePersonSession, derivePersonSession, isPersonSession,
+  shouldDerivePersonSession, derivePersonSession, isPersonSession, lockReleasableBy,
 };

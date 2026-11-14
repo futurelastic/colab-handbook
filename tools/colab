@@ -738,21 +738,62 @@ function takeClaimLocksFor(repoAbs, check, nums, { branch = null, session = '', 
  * a failure warns with the command and undoes nothing. An adopted lock (an orchestrator's) is
  * released too — release is unconditional (CONVENTIONS.md §5), and a lock left behind would refuse
  * every other machine on that issue.
+ *
+ * #746 — a record with NO `lock` field is not skipped: its issue's lock is looked up on the remote and
+ * released, leased on the sha just read, when `claimIdentity.lockReleasableBy` proves it is this
+ * claim's; otherwise it is left and the exact delete command is printed. Such a record is written
+ * when the lock came from somewhere else: an orchestrator takes the lock at spawn and the session's
+ * claim is then recorded by a colab older than #741 (the served CLI lagging trunk — measured on #746
+ * itself), or `doctor --sync` re-creates the record from the tracker. Callers pass every released
+ * record — `{ issue, lock?, session?, branch? }` — not only the ones with a lock.
  */
 function releaseClaimLocksOf(repoAbs, claims) {
-  const held = (claims || []).filter((c) => c && c.lock && c.lock.sha);
-  if (!held.length) return;
+  const list = (claims || []).filter((c) => c && c.issue);
+  if (!list.length) return;
   let remote = null;
   try { remote = git.claimRemote(repoAbs); } catch { remote = null; }
   if (!remote) return;
-  for (const c of held) {
+  for (const c of list) {
     const num = normIssueNum(c.issue);
     const ref = git.claimLockRef(num);
-    const r = git.releaseClaimLock(repoAbs, remote, num, c.lock.sha);
+    let sha = c.lock && c.lock.sha ? String(c.lock.sha) : '';
+    if (!sha) {
+      sha = locklessClaimLockSha(repoAbs, remote, num, c);
+      if (!sha) continue;
+    }
+    const r = git.releaseClaimLock(repoAbs, remote, num, sha);
     if (r.ok && r.moved) print(`  claim lock ${remote} ${ref} now points at ${r.now} — someone else's; left in place`);
-    else if (r.ok && !r.absent) print(`  released claim lock ${remote} ${ref}`);
+    else if (r.ok && !r.absent) print(`  released claim lock ${remote} ${ref}${c.lock && c.lock.sha ? '' : ' (the claim record named no lock; this one names #' + num + ' and this claimer)'}`);
     else if (!r.ok) warnDeferred(`could not release claim lock ${remote} ${ref} (${String(r.stderr || '').split('\n')[0]}) — delete it by hand: git push ${remote} --delete ${ref}`);
   }
+}
+
+/**
+ * #746 — the sha to lease the release on for a claim record carrying no `lock`: the lock on the remote
+ * for `num`, when it names that issue and this claimer. '' when there is none, or when it is not
+ * provably this claim's (then the delete command is printed, never run).
+ */
+function locklessClaimLockSha(repoAbs, remote, num, rec) {
+  const ref = git.claimLockRef(num);
+  const at = git.remoteClaimLock(repoAbs, remote, num);
+  if (!at.ok) {
+    warnDeferred(`could not look up claim lock ${remote} ${ref} for #${num} (${String(at.stderr || '').split('\n')[0]}) — if it is still there and yours, delete it: git push ${remote} --delete ${ref}`);
+    return '';
+  }
+  if (!at.sha) return '';
+  const del = `git push ${remote} --force-with-lease=${ref}:${at.sha} --delete ${ref}`;
+  const read = git.readClaimLock(repoAbs, remote, num, at.sha);
+  if (!read.ok) {
+    warnDeferred(`claim lock ${remote} ${ref} @ ${at.sha.slice(0, 7)} could not be read (${String(read.stderr || '').split('\n')[0]}) — left in place; if it is this claim's, delete it: ${del}`);
+    return '';
+  }
+  const verdict = claimIdentity.lockReleasableBy(read.trailers, rec,
+    { num, hostLabel: HOST, machineTok: machine.machineToken(myMachineId()) || '' });
+  if (!verdict.ok) {
+    warnDeferred(`claim lock ${remote} ${ref} @ ${at.sha.slice(0, 7)} is not provably this claim's (${verdict.why}) — left in place; if it is stale, delete it: ${del}`);
+    return '';
+  }
+  return at.sha;
 }
 
 /** The refusal/stale lines for a foreign lock (#741). */
@@ -2962,7 +3003,8 @@ function releaseFoundClaim(num, found, opts = {}) {
       c.releasePending = true;
       c.releaseNote = `GitHub release failed (${nowISO()}) — retry with: colab release ${num}`;
     } else {
-      if (c.lock) releasedLock = { issue: c.issue, lock: c.lock };
+      // #746: released with or without a recorded lock — a lock-less record's lock is looked up.
+      releasedLock = { issue: c.issue, lock: c.lock || null, session: c.session || null, branch: c.branch || null };
       delete st.claims[found.key];
       if (wtName) remaining = Object.values(st.claims).filter((cl) => cl.worktree === wtName).length;
       // #305: a claim with NO worktree took a checkout place-claim at `cmdClaim` (`takingPlace`),
@@ -6856,7 +6898,8 @@ function cmdWorktreeRm(argv) {
         c.releaseNote = `GitHub release failed at worktree rm (${nowISO()}) — retry with: colab release ${normIssueNum(c.issue)}`;
         continue;
       }
-      if (c.lock) releasedLocks.push({ issue: c.issue, lock: c.lock });
+      // #746: every released claim, not only one recording a lock — a lock-less record's lock is looked up.
+      releasedLocks.push({ issue: c.issue, lock: c.lock || null, session: c.session || null, branch: c.branch || null });
       delete st.claims[k];
       deleted++;
     }

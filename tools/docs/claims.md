@@ -36,6 +36,11 @@ anywhere, naming the ref and how to continue it. Each machine sweeps its own wor
   of being refused, and releases it like its own. A lock whose commit cannot be read is foreign.
 - **Release** deletes a lock only while it still points at the recorded commit, so a lock someone
   else took since is never removed. A stale lock is named in the refusal with its delete command.
+  A claim record that names **no** lock (written by a colab older than #741 after an orchestrator
+  took the lock at spawn, or rebuilt by `doctor --sync`) still releases its issue's lock: the lock is
+  read off the remote and deleted, leased on that sha, when its subject names the issue and it is
+  this claimer's by the rule above (for a colab lock, the same `Session:` too). Otherwise it is left
+  and the leased delete command is printed (#746).
 - **Legacy.** `refs/claims/<branch>` (#550, before #741) is no longer written. One left by an
   older claim still refuses and is still deleted at `colab worktree rm`, until none is left.
 - Only `refs/heads/claim/<digits>` is a lock; any other `claim/…` ref is some tool's own and is

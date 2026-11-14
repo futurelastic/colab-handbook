@@ -1384,6 +1384,15 @@ test('#741: the lock message carries its holder and [skip ci]; another writer\'s
   assert.strictEqual(claimLockMessage({ nums: [1], branch: 'a\nb', claimedAt: 'x' }).includes('Branch: a b'), true, 'a value never breaks a line');
 });
 
+test('#746: the lock subject\'s issues are parsed — from a bare message and from a cat-file commit body', () => {
+  const { claimLockMessage, parseClaimLockMessage } = require('./git');
+  assert.deepStrictEqual(parseClaimLockMessage(claimLockMessage({ nums: [115, 114], claimedAt: 'x' })).issues, [115, 114]);
+  const body = 'tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor orchestrator-claim <claim@orchestrator.invalid> 1 +0900\ncommitter orchestrator-claim <claim@orchestrator.invalid> 1 +0900\n\nclaim: #746\n\nMachine: box-b\n[skip ci]\n';
+  assert.deepStrictEqual(parseClaimLockMessage(body).issues, [746]);
+  assert.deepStrictEqual(parseClaimLockMessage('chore: not a lock\n\nclaim: #9\n').issues, [], 'only the subject counts');
+  assert.deepStrictEqual(parseClaimLockMessage('claim: _triage\n').issues, []);
+});
+
 test('#741: takeClaimLocks is create-only and atomic; releaseClaimLock leaves a lock someone else re-took', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-lock-'));
   try {
