@@ -117,7 +117,8 @@ test('colab template ci-node --roundtrip: the job is live in the copy, MIGRATION
     assert.match(copy, /^# colab-handbook: ci-node @ /, 'still stamped');
     assert.deepStrictEqual(mg.roundtripJobWorkflows({ readFile: () => copy, workflows: ['ci.yml'] }), ['ci.yml']);
     assert.match(copy, /^      MIGRATIONS_PATHS: 'db\/migrations\/'$/m);
-    assert.strictEqual(yaml.parse(copy).env.ROUNDTRIP_APPLY, '');
+    // In the roundtrip-config job's env since #724 (template-roundtrip.js), not a top-level env (#745).
+    assert.strictEqual(yaml.parse(copy).jobs['roundtrip-config'].env.ROUNDTRIP_APPLY, '');
   } finally { s.done(); }
 });
 
@@ -127,7 +128,9 @@ test('colab template ci-python --roundtrip-apply: implies --roundtrip and writes
     const r = s.run('ci-python', '--dest', '.github/workflows/ci.yml', '--roundtrip-apply', 'alembic upgrade head');
     assert.strictEqual(r.status, 0, r.stderr + r.stdout);
     assert.doesNotMatch(r.stdout, /SKIPPED/);
-    assert.match(s.read('.github/workflows/ci.yml'), /^  ROUNDTRIP_APPLY: 'alembic upgrade head'$/m);
+    const copy = s.read('.github/workflows/ci.yml');
+    assert.match(copy, /^ +ROUNDTRIP_APPLY: 'alembic upgrade head'$/m);
+    assert.strictEqual(yaml.parse(copy).jobs['roundtrip-config'].env.ROUNDTRIP_APPLY, 'alembic upgrade head');
   } finally { s.done(); }
 });
 

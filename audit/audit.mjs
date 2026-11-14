@@ -141,6 +141,8 @@ const migrationGrant = require("../tools/lib/migration-grant.js");
 const ciGrantLib = require("../tools/lib/ci-grant.js");
 // #407: the optional `trust-humans` list — read through the same module every grant reader uses.
 const trustHumansLib = require("../tools/lib/trust-humans.js");
+// #739: `.github/factories.yml` — the trust file for several teams on one repository.
+const factoriesLib = require("../tools/lib/factories.js");
 // #403: the `live-env:` key — read through the same module `colab gate-hermetic` uses.
 const hermeticLib = require("../tools/lib/hermetic.js");
 // #493: the `tree-reuse:` opt-out — read through the same module `colab ship` reads citations with.
@@ -1549,6 +1551,21 @@ function auditRepoInner(target, ctx) {
       const tr = trustHumansLib.parseTrustHumans(cfg);
       info.trustHumans = tr.declared && tr.valid ? [...tr.humans] : null;
       if (!tr.valid) fail(tr.reason);
+    }
+
+    // ---- .github/factories.yml (#739) -----------------------------------------
+    // The trust file several teams ("factories") share one repository through. Absent = nothing
+    // (one team, no cross-factory rule). tools/lib/factories.js parseFactories is the one reading.
+    // An invalid file fails: every reader then answers "nobody" (fail closed), so each cross-factory
+    // rule the file was meant to turn on stops matching anyone — loud here, not at the next claim.
+    {
+      const text = src.readFile(factoriesLib.PATH);
+      if (text === null || text === undefined) info.factories = null;
+      else {
+        const fr = factoriesLib.parseFactories(text);
+        info.factories = fr.valid ? Object.keys(fr.doc.factories) : null;
+        for (const why of fr.findings) fail(`${factoriesLib.PATH}: ${why}`);
+      }
     }
 
     // ---- live-env (#403) ------------------------------------------------------
