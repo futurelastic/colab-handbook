@@ -211,6 +211,7 @@ test('a claim commit signed with a factory\'s key verifies under allowedSigners(
   const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', HOME: dir, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' };
   const git = (...args) => spawnSync('git', ['-C', repo, ...args], { env, encoding: 'utf8' });
   execFileSync('git', ['init', '-q', repo], { env });
+  git('config', 'core.hooksPath', path.join(dir, '.nohooks'));
   git('config', 'gpg.format', 'ssh');
   git('config', 'gpg.ssh.allowedSignersFile', signers);
   const claim = (keyName) => {
