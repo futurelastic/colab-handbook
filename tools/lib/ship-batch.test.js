@@ -325,7 +325,7 @@ test('foreignBatchStep (#659): a green batch past the lane grace is abandoned an
   // an unreadable settle time (or clock) never clears a green batch — #391's case, kept deliberately
   assert.strictEqual(sb.foreignBatchStep(green, { settledAtMs: null, nowMs: now }).step, 'wait');
   assert.strictEqual(sb.foreignBatchStep(green, { settledAtMs: ago(9999), nowMs: null }).step, 'wait');
-  // only green is aged: pending/none stay in flight however old their timestamps
+  // only green is aged by its settle time: pending/none stay in flight however old it is (none ages by builtAtMs, #742)
   for (const state of ['pending', 'none']) assert.strictEqual(sb.foreignBatchStep({ state }, { settledAtMs: ago(9999), nowMs: now }).step, 'wait');
   const red = sb.foreignBatchStep({ state: 'red', why: 'x' }, { settledAtMs: ago(1), nowMs: now });
   assert.deepStrictEqual([red.step, red.reason], ['clear', 'red']);
@@ -570,4 +570,96 @@ test('laneHold: a rooted chained batch holds the lane even though its base is no
     { ref: 'ship-batch/bbbbbbb', base7: 'bbbbbbb', rooted: false, verdict: { state: 'pending', why: 'running' } },
   ] });
   assert.strictEqual(orphan.held, false);
+});
+
+test('foreignBatchStep (#742): a batch whose combined run never started is cleared past the grace from its build', () => {
+  const now = Date.parse('2026-11-14T12:00:00Z');
+  const none = sb.combinedVerdict([]);
+  assert.strictEqual(none.state, 'none');
+  const ago = (s) => now - s * 1000;
+  const old = sb.foreignBatchStep(none, { builtAtMs: ago(sb.LANE_GRACE_SEC + 60), nowMs: now });
+  assert.strictEqual(old.step, 'clear');
+  assert.strictEqual(old.reason, 'never-started');
+  assert.match(old.why, /no combined run 16m after it was built .*abandoned/);
+  assert.strictEqual(sb.foreignBatchStep(none, { builtAtMs: ago(sb.LANE_GRACE_SEC), nowMs: now }).step, 'clear', 'the boundary releases, as laneHold does');
+  const fresh = sb.foreignBatchStep(none, { builtAtMs: ago(sb.LANE_GRACE_SEC - 1), nowMs: now });
+  assert.strictEqual(fresh.step, 'wait');
+  assert.match(fresh.why, /has not appeared yet/);
+  assert.strictEqual(sb.foreignBatchStep(none, { builtAtMs: ago(120), nowMs: now, graceSec: 60 }).step, 'clear', 'graceSec is honoured');
+  // an unreadable build time (or clock) never clears: only a provably abandoned ref is deleted
+  assert.strictEqual(sb.foreignBatchStep(none, { builtAtMs: null, nowMs: now }).step, 'wait');
+  assert.strictEqual(sb.foreignBatchStep(none, { builtAtMs: ago(9999), nowMs: null }).step, 'wait');
+  // the build time ages only a run-less batch: a pending one stays in flight, an unreadable list too
+  assert.strictEqual(sb.foreignBatchStep({ state: 'pending' }, { builtAtMs: ago(9999), nowMs: now }).step, 'wait');
+  assert.strictEqual(sb.foreignBatchStep(sb.combinedVerdict(null), { builtAtMs: ago(9999), nowMs: now }).step, 'wait');
+});
+
+test('batchPushArgs / batchDeleteArgs (#742): every batch-ref write is leased on what was read', () => {
+  assert.deepStrictEqual(sb.batchPushArgs({ remote: 'origin', head: 'abc', ref: 'ship-batch/1234567' }),
+    ['push', '--force-with-lease=refs/heads/ship-batch/1234567:', 'origin', 'abc:refs/heads/ship-batch/1234567'], 'no expect = create-only');
+  assert.deepStrictEqual(sb.batchPushArgs({ remote: 'origin', head: 'abc', ref: 'refs/heads/ship-batch/1234567', expect: 'def' }),
+    ['push', '--force-with-lease=refs/heads/ship-batch/1234567:def', 'origin', 'abc:refs/heads/ship-batch/1234567']);
+  assert.deepStrictEqual(sb.batchDeleteArgs({ remote: 'o', ref: 'ship-batch/1234567', expect: 'def' }),
+    ['push', '--force-with-lease=refs/heads/ship-batch/1234567:def', 'o', '--delete', 'ship-batch/1234567']);
+  assert.throws(() => sb.batchDeleteArgs({ remote: 'o', ref: 'ship-batch/1234567' }), /leased on the sha/);
+  assert.ok(!sb.batchPushArgs({ remote: 'o', head: 'a', ref: 'ship-batch/1234567' }).includes('--force'), 'never a bare --force');
+});
+
+test('pushRefusal (#742): a refused push is a lost turn only when the ref now holds another head', () => {
+  assert.strictEqual(sb.pushRefusal({ remoteSha: 'bbb', head: 'aaa' }), 'turn-lost');
+  assert.strictEqual(sb.pushRefusal({ remoteSha: '', head: 'aaa' }), 'refused', 'absent: the refusal was something else');
+  assert.strictEqual(sb.pushRefusal({ remoteSha: 'aaa\n', head: 'aaa' }), 'refused', 'our own head: not a lost turn');
+  assert.strictEqual(sb.pushRefusal({ remoteSha: null, head: 'aaa' }), 'refused');
+});
+
+test('batchPushArgs (#742): two landers pushing the same batch ref at once — exactly one gets the turn', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { execFileSync, spawn } = require('child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-batch-turn-'));
+  try {
+    const g = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const origin = path.join(root, 'o.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+    const clone = (name) => {
+      const d = path.join(root, name);
+      execFileSync('git', ['init', '-q', '-b', 'main', d]);
+      g(d, 'config', 'user.email', 't@example.invalid'); g(d, 'config', 'user.name', name);
+      g(d, 'config', 'core.hooksPath', path.join(root, '.nohooks'));
+      g(d, 'remote', 'add', 'origin', origin);
+      return d;
+    };
+    const a = clone('a');
+    g(a, 'commit', '-q', '--allow-empty', '-m', 'base');
+    g(a, 'push', '-q', 'origin', 'main');
+    const b = clone('b');
+    g(b, 'fetch', '-q', 'origin');
+    g(b, 'reset', '-q', '--hard', 'origin/main');
+    const ref = sb.batchRefName(g(a, 'rev-parse', 'HEAD'));
+    g(a, 'commit', '-q', '--allow-empty', '-m', 'lander A');
+    g(b, 'commit', '-q', '--allow-empty', '-m', 'lander B');
+    const heads = { a: g(a, 'rev-parse', 'HEAD'), b: g(b, 'rev-parse', 'HEAD') };
+    const push = (cwd, head) => new Promise((resolve) => {
+      const p = spawn('git', sb.batchPushArgs({ remote: 'origin', head, ref }), { cwd, stdio: 'ignore' });
+      p.on('close', (code) => resolve(code));
+    });
+    const codes = await Promise.all([push(a, heads.a), push(b, heads.b)]);
+    assert.strictEqual(codes.filter((c) => c === 0).length, 1, `exactly one push wins (exit codes ${codes})`);
+    const onRemote = execFileSync('git', ['rev-parse', `refs/heads/${ref}`], { cwd: origin, encoding: 'utf8' }).trim();
+    const winner = codes[0] === 0 ? 'a' : 'b';
+    const loser = winner === 'a' ? 'b' : 'a';
+    assert.strictEqual(onRemote, heads[winner], 'the remote holds the winner\'s head, untouched by the loser');
+    assert.strictEqual(sb.pushRefusal({ remoteSha: onRemote, head: heads[loser] }), 'turn-lost', 'the loser reads it as a lost turn');
+    // the winner may replace its own ref (a split) while it still holds the head it read …
+    g(a, 'commit', '-q', '--allow-empty', '-m', 'split');
+    const split = g(a, 'rev-parse', 'HEAD');
+    const stale = heads[loser];
+    assert.throws(() => g(a, ...sb.batchPushArgs({ remote: 'origin', head: split, ref, expect: stale })), 'a lease on a head the remote does not hold is refused');
+    assert.throws(() => g(a, ...sb.batchDeleteArgs({ remote: 'origin', ref, expect: stale })), 'so is a delete');
+    g(a, ...sb.batchDeleteArgs({ remote: 'origin', ref, expect: onRemote }));
+    assert.throws(() => execFileSync('git', ['rev-parse', '--verify', '-q', `refs/heads/${ref}`], { cwd: origin, stdio: 'ignore' }), 'deleted under the right lease');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

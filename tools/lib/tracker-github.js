@@ -161,6 +161,10 @@ function create(repoAbs) {
       return branch ? git().ghRunForCommit(repoAbs, branch, sha, undefined, opts) : git().ghRunForCommitAnyRef(repoAbs, sha, undefined, opts);
     },
 
+    // #742: every run on batch `ref` at `sha`, with attempt and updatedAt — the read ship --batch made
+    // before the contract had it (ghRunsForRef, same argv).
+    runsAtRef: (ref, sha) => git().ghRunsForRef(repoAbs, ref, sha),
+
     // --- releases ----------------------------------------------------------------------------
     releaseView: (tag) => exec(['release', 'view', tag, '--json', 'tagName'], at),
     releaseCreate: (tag, { notesFile, final = false }) => {

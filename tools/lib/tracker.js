@@ -24,6 +24,12 @@
  * tools/lib/ci-forgejo.js, Forgejo commit statuses and `/releases`. `CI_METHODS` stays the subset
  * the landing path (#678) needs. Which engine a repo gets is `engineFor` below.
  *
+ * Batch turn (#742): `runsAtRef(ref, sha)` — every CI run on one ref at one sha, as rows
+ * `{ headSha, status, conclusion, createdAt, updatedAt, databaseId, workflowName, attempt? }`, or null
+ * when the read failed ([] is "no run yet"). `colab ship --batch` judges its combined run from these
+ * (the attempt caps the one re-run; updatedAt dates a green settle). A forge whose CI is a commit
+ * status reads the commit and ignores the ref, and may omit `attempt` (read as 1).
+ *
  * Deliberately NOT in the contract yet (#501 left it so: no scenario needs them, and each would
  * pin a GitHub-only shape into a spec other trackers must satisfy): the raw CI-run lists and REST
  * probes behind `ciVerdict`, label create/delete/edit, raw `issue edit` flags and raw `api`
@@ -48,6 +54,7 @@ const METHODS = Object.freeze([
   { name: 'prEdit', kind: 'write', returns: 'result' },
   { name: 'runList', kind: 'read', returns: 'result + data: run[] | null' },
   { name: 'ciVerdict', kind: 'read', returns: 'run summary | null' },
+  { name: 'runsAtRef', kind: 'read', returns: 'run[] | null' },
   { name: 'releaseView', kind: 'read', returns: 'result' },
   { name: 'releaseCreate', kind: 'write', returns: 'result' },
 ].map(Object.freeze));
@@ -56,11 +63,12 @@ const METHODS = Object.freeze([
 const CI_METHODS = Object.freeze(['ciVerdict']);
 
 /**
- * The methods a forge engine implements (#681): landing (`CI_METHODS`) plus what a release needs —
+ * The methods a forge engine implements (#681): landing (`CI_METHODS`), the batch turn's run read
+ * (#742, `runsAtRef`), plus what a release needs —
  * the issue list READ (switch markers, the release hold, an existing tracking record) and the release
  * object. No issue write is here on purpose: #678's ruling keeps the forge's tracker the adopter's.
  */
-const FORGE_METHODS = Object.freeze([...CI_METHODS, 'issueListAll', 'releaseView', 'releaseCreate']);
+const FORGE_METHODS = Object.freeze([...CI_METHODS, 'runsAtRef', 'issueListAll', 'releaseView', 'releaseCreate']);
 
 /**
  * Throw, naming every contract method `impl` lacks. Returns `impl` when it is complete.

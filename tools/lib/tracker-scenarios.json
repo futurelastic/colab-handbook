@@ -17,7 +17,7 @@
     "labels": "the label names defined on the repo, in the order labelList returns them.",
     "issues": "[{number, title, body, state: OPEN|CLOSED, stateReason, labels: [name], assignees: [login], comments: [{author, body}], events: [{event: \"labeled\", label, actor}]}] — `events` is the label timeline claimHolder reads; the claimer is the actor of the LATEST labeled in-progress event.",
     "prs": "[{number, head, base, title, body, state: OPEN|CLOSED|MERGED, author}] — issues and pull requests share ONE number sequence, as on GitHub.",
-    "runs": "[{headBranch, headSha, status, conclusion, event, workflowName, createdAt, databaseId}] — CI runs; runList returns them newest first by createdAt; ciVerdict (#678) summarizes the ones at one sha.",
+    "runs": "[{headBranch, headSha, status, conclusion, event, workflowName, createdAt, databaseId}] — CI runs; runList returns them newest first by createdAt; ciVerdict (#678) summarizes the ones at one sha; runsAtRef (#742) returns the ones on one ref at one sha as rows, with `attempt` and `updatedAt` when seeded.",
     "releases": "[{tag, prerelease}]"
   },
   "scenarios": [
@@ -254,6 +254,32 @@
       "given": { "login": "alice", "offline": true },
       "steps": [
         { "call": "ciVerdict", "args": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", { "branch": "main" }], "expect": null }
+      ]
+    },
+    {
+      "id": "runs-at-ref",
+      "description": "runsAtRef returns every CI run on one ref at one sha as rows (#742) — the facts ship --batch judges its combined run from, including when a finished run settled (updatedAt). A sha with no run on the ref is an empty list, never null.",
+      "given": {
+        "login": "alice",
+        "runs": [
+          {"headBranch": "ship-batch/1111111", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "event": "push", "workflowName": "CI", "createdAt": "2026-11-01T10:00:00Z", "updatedAt": "2026-11-01T10:05:00Z", "databaseId": 201, "attempt": 1},
+          {"headBranch": "ship-batch/1111111", "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "completed", "conclusion": "failure", "event": "push", "workflowName": "CI", "createdAt": "2026-11-01T11:00:00Z", "updatedAt": "2026-11-01T11:04:00Z", "databaseId": 202, "attempt": 1}
+        ]
+      },
+      "steps": [
+        { "call": "runsAtRef", "args": ["ship-batch/1111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+          "expect": [{"headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "updatedAt": "2026-11-01T10:05:00Z"}] },
+        { "call": "runsAtRef", "args": ["ship-batch/1111111", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+          "expect": [{"headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "completed", "conclusion": "failure"}] },
+        { "call": "runsAtRef", "args": ["ship-batch/1111111", "cccccccccccccccccccccccccccccccccccccccc"], "expect": [] }
+      ]
+    },
+    {
+      "id": "runs-at-ref-unreadable",
+      "description": "A run read that cannot reach the tracker returns null — could not read, never an empty list a batch would take for a run that never started.",
+      "given": { "login": "alice", "offline": true },
+      "steps": [
+        { "call": "runsAtRef", "args": ["ship-batch/1111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "expect": null }
       ]
     }
   ]

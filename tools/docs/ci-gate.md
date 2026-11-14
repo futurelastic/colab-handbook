@@ -487,7 +487,13 @@ the heavy lane must also be green at the batch head; a heavy red re-runs or spli
    base by the same bound — pending, or green within that grace. A red one is declined (#391),
    and a green one still unlanded past the grace has lost its lander; either is deleted and the
    requested batch built in its place. Green with an unreadable settle time still waits: only a
-   provably abandoned batch is deleted (#659).
+   provably abandoned batch is deleted (#659). So does one whose combined run **never started**:
+   no run within the grace of its build is abandoned too, an unreadable build time waits (#742).
+   **The ref is the turn** (#742): a build pushes it create-only, a split replaces it and a delete
+   removes it only while it still holds the head that call read (`--force-with-lease`). Of two
+   landers at one base exactly one push lands; the other exits `3` and waits on the winner. The
+   combined run is read through the forge contract (`runsAtRef`), so the turn reads the same on
+   GitHub and Forgejo (commit statuses there; no attempt count, so a re-run red asks again).
 5. **A green batch run stands in for trunk's own run at that same sha** — while trunk's
    run is still in flight — only when **the same workflows** ran there: the workflow files
    firing on a trunk push and on a `ship-batch/**` push must be the same set. Otherwise

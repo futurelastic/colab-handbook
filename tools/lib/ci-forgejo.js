@@ -7,6 +7,7 @@
  * #681 adds the release half: `colab release cut` / `release finalize` (human bar) / `promote` read CI
  * here and publish the release object here. So this module implements `tracker.FORGE_METHODS`:
  *   ciVerdict     — the CI verdict at a commit (below);
+ *   runsAtRef     — the rows at a batch head (#742): the same status read, ignoring the ref;
  *   issueListAll  — a READ of every issue (switch markers, the release hold, an existing tracking
  *                   record), in the GitHub adapter's shape; nothing here writes an issue;
  *   releaseView / releaseCreate — the release object for a tag (`/releases`).
@@ -197,6 +198,16 @@ function create(repoAbs, eng) {
       const aside = new Set((summary.skippedOnly || []).map((x) => x.workflowName));
       const ng = notGreen(rows).filter((x) => !aside.has(x.name));
       return ng.length ? { ...summary, notGreen: ng } : summary;
+    },
+
+    /**
+     * #742, tracker contract: the runs on batch `ref` at `sha`. A commit status belongs to the commit,
+     * so the ref is accepted and ignored (a batch head is a commit no other ref carries). No `attempt`:
+     * a re-run replaces the context's newest status, and nothing counts how often — the batch reads 1.
+     */
+    runsAtRef: (ref, sha) => {
+      const full = fullOf(sha);
+      return full ? rowsAt(full) : null;
     },
 
     /** #681, not contract: the status rows at `sha` (statusRow's shape), or null when the read failed. */

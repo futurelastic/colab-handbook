@@ -91,6 +91,14 @@
     "ci-verdict-unreadable": [
       {"argv":["api","-i","repos/{owner}/{repo}/actions/runs?head_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&branch=main&per_page=100"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
       {"argv":["run","list","--branch","main","-L","10","--json","headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event,headBranch,attempt"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"}
+    ],
+    "runs-at-ref": [
+      {"argv":["run","list","--branch","ship-batch/1111111","-L","20","--json","headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,attempt"],"json":[{"attempt":1,"conclusion":"failure","createdAt":"2026-11-01T11:00:00Z","databaseId":202,"headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","updatedAt":"2026-11-01T11:04:00Z","workflowName":"CI"},{"attempt":1,"conclusion":"success","createdAt":"2026-11-01T10:00:00Z","databaseId":201,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"completed","updatedAt":"2026-11-01T10:05:00Z","workflowName":"CI"}]},
+      {"argv":["run","list","--branch","ship-batch/1111111","-L","20","--json","headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,attempt"],"json":[{"attempt":1,"conclusion":"failure","createdAt":"2026-11-01T11:00:00Z","databaseId":202,"headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","updatedAt":"2026-11-01T11:04:00Z","workflowName":"CI"},{"attempt":1,"conclusion":"success","createdAt":"2026-11-01T10:00:00Z","databaseId":201,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"completed","updatedAt":"2026-11-01T10:05:00Z","workflowName":"CI"}]},
+      {"argv":["run","list","--branch","ship-batch/1111111","-L","20","--json","headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,attempt"],"json":[{"attempt":1,"conclusion":"failure","createdAt":"2026-11-01T11:00:00Z","databaseId":202,"headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","updatedAt":"2026-11-01T11:04:00Z","workflowName":"CI"},{"attempt":1,"conclusion":"success","createdAt":"2026-11-01T10:00:00Z","databaseId":201,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"completed","updatedAt":"2026-11-01T10:05:00Z","workflowName":"CI"}]}
+    ],
+    "runs-at-ref-unreadable": [
+      {"argv":["run","list","--branch","ship-batch/1111111","-L","20","--json","headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,attempt"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"}
     ]
   }
 }
