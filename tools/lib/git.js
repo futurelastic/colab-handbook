@@ -313,21 +313,24 @@ function claimRemote(repo) {
 }
 
 /**
- * Every branch head on `remoteName` — plus every claim ref (`refs/claims/<branch>`, #550) — asked
- * of the remote directly (`ls-remote`, no fetch, no local cache): the claim record another machine
- * can read (#325). Unlike `existingBranchRef`, a failed ask is NOT "no branches": it returns
- * `{ ok: false, stderr }` so the caller can refuse (fail closed) instead of reading an unreachable
- * remote as clear ground. `{ ok: true, heads: [{ branch, sha, claimRef? }] }` otherwise, `sha` short
- * (7) — `parseRemoteHeads`.
+ * Every branch head on `remoteName` — plus every legacy claim ref (`refs/claims/<branch>`, #550) and
+ * every claim LOCK (`refs/heads/claim/<N>`, #741) — asked of the remote directly (`ls-remote`, no
+ * fetch, no local cache): the claim record another machine can read (#325). Unlike
+ * `existingBranchRef`, a failed ask is NOT "no branches": it returns `{ ok: false, stderr }` so the
+ * caller can refuse (fail closed) instead of reading an unreachable remote as clear ground.
+ * `{ ok: true, heads: [{ branch, sha, claimRef? }], locks: [{ issue, sha, fullSha }] }` otherwise,
+ * `sha` short (7) — `parseRemoteHeads` / `parseClaimLocks`. A lock is never a head.
  */
 function remoteHeads(repo, remoteName) {
   const r = git(['ls-remote', remoteName, 'refs/heads/*', `${CLAIM_REF_PREFIX}*`], repo, { timeoutMs: 60_000 });
   if (!r.ok) return { ok: false, stderr: r.stderr || (r.timedOut ? 'ls-remote timed out' : `exit ${r.code}`) };
-  return { ok: true, heads: parseRemoteHeads(r.stdout) };
+  return { ok: true, heads: parseRemoteHeads(r.stdout), locks: parseClaimLocks(r.stdout) };
 }
 
 /**
- * #550 — where `colab worktree new` records a claim at cut: `refs/claims/<branch>`, NOT the branch.
+ * #550 — where `colab worktree new` recorded a claim at cut until #741: `refs/claims/<branch>`, NOT
+ * the branch. Since #741 nothing writes it; it is still READ as a holder (and deleted at
+ * `worktree rm`) until no checkout carries one. The lock that replaced it is below.
  * A push to `refs/heads/<branch>` fires every CI `push` trigger, and at cut the branch is identical
  * to trunk, so each claim re-ran the full suite on a commit trunk had already tested (measured: ~209
  * of 230 duplicate runs in one org over 3 days, one sha run 8 times). GitHub fires `push` workflows
@@ -349,6 +352,9 @@ function parseRemoteHeads(stdout) {
   for (const line of String(stdout || '').split('\n')) {
     const m = line.match(/^([0-9a-f]{7,})\s+refs\/(heads|claims)\/(.+)$/);
     if (!m) continue;
+    // #741: `refs/heads/claim/*` is the lock namespace, not a session's branch — `parseClaimLocks`
+    // reads it, and no head reader (claim conflicts, sweep, landed) ever sees it as a branch.
+    if (m[2] === 'heads' && m[3].startsWith(CLAIM_LOCK_BRANCH_PREFIX)) continue;
     if (m[2] === 'heads') heads.set(m[3], { branch: m[3], sha: m[1].slice(0, 7) });
     else claims.set(m[3], { branch: m[3], sha: m[1].slice(0, 7), claimRef: true });
   }
@@ -377,6 +383,164 @@ function deleteClaimRef(repo, remote, branch) {
   if (!String(ls.stdout || '').trim()) return { ok: true, absent: true };
   const r = git(['push', remote, '--delete', ref], repo, { timeoutMs: 120_000 });
   return { ok: r.ok, stderr: r.stderr };
+}
+
+/**
+ * #741 — THE claim lock: one create-only ref per issue in the branch namespace,
+ * `refs/heads/claim/<N>`. Custom ref namespaces (`refs/claims/*`) are not safe to assume on every
+ * forge; the branch namespace is. Issue grain, so two claimants cutting DIFFERENT branch names for
+ * one issue race on the same ref and exactly one wins — `refs/claims/<branch>` was branch grain and
+ * let both through.
+ *
+ * The ref points at a parentless commit on the empty tree: it needs no trunk object locally (a
+ * `colab claim` has fetched nothing), it is a tiny push, and it changes no path, so `holders` and
+ * `landed` never list it. The `[skip ci]` line keeps the #550 promise — a claim starts no CI run —
+ * now that the ref sits where every `push: branches: ['**']` trigger looks (measured 2026-11-14: an
+ * orchestrator's `[skip ci]` lock commits on this namespace started no run).
+ *
+ * Only digit suffixes are locks; `claim/<anything else>` is some tool's own ref and is ignored.
+ */
+const CLAIM_LOCK_BRANCH_PREFIX = 'claim/';
+const CLAIM_LOCK_PREFIX = `refs/heads/${CLAIM_LOCK_BRANCH_PREFIX}`;
+const CLAIM_LOCK_AUTHOR = { name: 'colab-claim', email: 'claim@colab.invalid' };
+const CLAIM_LOCK_WRITER = 'colab';
+function claimLockRef(num) { return `${CLAIM_LOCK_PREFIX}${num}`; }
+
+/** `ls-remote` output → `[{ issue, sha, fullSha }]` for every `refs/heads/claim/<digits>`. Pure. */
+function parseClaimLocks(stdout) {
+  const out = [];
+  for (const line of String(stdout || '').split('\n')) {
+    const m = line.match(/^([0-9a-f]{7,})\s+refs\/heads\/claim\/(\d+)$/);
+    if (!m) continue;
+    const issue = Number(m[2]);
+    if (Number.isInteger(issue) && issue > 0) out.push({ issue, sha: m[1].slice(0, 7), fullSha: m[1] });
+  }
+  return out;
+}
+
+/** One trailer value: a single line, trimmed. */
+function trailerValue(v) { return String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').trim(); }
+
+/**
+ * The lock commit's message. Pure. The subject names every issue the push takes; the trailers say
+ * who holds them, readable from the ref alone by any machine. `Claimed-By: colab` marks a lock this
+ * tool wrote — the one kind whose ownership is decided by colab's own state, never by its
+ * `Machine:` line (see `remoteClaimConflicts`).
+ */
+function claimLockMessage({ nums, branch = null, machine = '', machineId = '', session = '', claimedAt }) {
+  const lines = [`claim: ${nums.map((n) => `#${n}`).join(' ')}`, ''];
+  if (branch) lines.push(`Branch: ${trailerValue(branch)}`);
+  if (machine) lines.push(`Machine: ${trailerValue(machine)}`);
+  if (machineId) lines.push(`Machine-Id: ${trailerValue(machineId)}`);
+  if (session) lines.push(`Session: ${trailerValue(session)}`);
+  lines.push(`Claimed-At: ${trailerValue(claimedAt || new Date().toISOString())}`);
+  lines.push(`Claimed-By: ${CLAIM_LOCK_WRITER}`);
+  lines.push('[skip ci]');
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * A lock commit's message (or a whole `git cat-file commit` body) → its trailers, lower-cased keys:
+ * `{ branch, machine, machineId, session, claimedAt, claimedBy, intent, claimId, author }`, and
+ * `colab: true` when this tool wrote it. Pure. Reads the other writer's format too (an
+ * orchestrator's `Machine:` / `Intent:` / `Claim-Id:`).
+ */
+function parseClaimLockMessage(text) {
+  const s = String(text || '');
+  const out = { colab: false };
+  const am = s.match(/^author (.+?) <[^>]*>/m);
+  if (am) out.author = am[1];
+  const keys = { branch: 'branch', machine: 'machine', 'machine-id': 'machineId', session: 'session', 'claimed-at': 'claimedAt', 'claimed-by': 'claimedBy', intent: 'intent', 'claim-id': 'claimId' };
+  for (const line of s.split('\n')) {
+    const m = line.match(/^([A-Za-z][A-Za-z-]*):\s*(.*)$/);
+    if (!m) continue;
+    const k = keys[m[1].toLowerCase()];
+    if (k && out[k] === undefined) out[k] = m[2].trim();
+  }
+  out.colab = out.claimedBy === CLAIM_LOCK_WRITER;
+  return out;
+}
+
+/**
+ * Write the lock commit (not pushed): the empty tree, no parent, a fixed author so no `user.name`
+ * is needed, and `--no-gpg-sign` — signing a claim is #743's, and an unattended session must never
+ * stall on a key passphrase here. `{ ok, sha, stderr }`.
+ */
+function makeClaimLockCommit(repo, message, at = new Date()) {
+  const tree = run('git', ['mktree'], { cwd: repo, input: '' });
+  if (!tree.ok) return { ok: false, stderr: tree.stderr || 'git mktree failed' };
+  const date = `${Math.floor(at.getTime() / 1000)} +0000`;
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: CLAIM_LOCK_AUTHOR.name, GIT_AUTHOR_EMAIL: CLAIM_LOCK_AUTHOR.email, GIT_AUTHOR_DATE: date,
+    GIT_COMMITTER_NAME: CLAIM_LOCK_AUTHOR.name, GIT_COMMITTER_EMAIL: CLAIM_LOCK_AUTHOR.email, GIT_COMMITTER_DATE: date,
+  };
+  const c = run('git', ['commit-tree', '--no-gpg-sign', tree.stdout, '-F', '-'], { cwd: repo, input: message, env });
+  if (!c.ok) return { ok: false, stderr: c.stderr || 'git commit-tree failed' };
+  return { ok: true, sha: c.stdout };
+}
+
+/**
+ * Take the locks for `nums` on `remote`, pointing every one at `sha` — ONE atomic push, each ref
+ * create-only (`--force-with-lease=<ref>:` with an empty expect), so a branch carrying several
+ * issues takes all of them or none, and two claimants for one issue race on a real compare-and-swap
+ * whose loser is rejected. `expect` (issue → full sha) turns one ref's lease into "overwrite exactly
+ * this holder" — the `--force` takeover, never a blind overwrite.
+ *
+ * A remote that refuses `--atomic` gets the refs one by one; the first rejection rolls back the ones
+ * this call already took (lease-deleted on `sha`), so the outcome is still all or none.
+ * `{ ok, taken: [N], rejected: [N], atomic, stderr }`.
+ */
+function takeClaimLocks(repo, remote, nums, sha, { expect = {} } = {}) {
+  if (!nums.length) return { ok: true, taken: [], rejected: [], atomic: true };
+  const lease = (n) => `--force-with-lease=${claimLockRef(n)}:${expect[n] || ''}`;
+  const spec = (n) => `${sha}:${claimLockRef(n)}`;
+  const r = git(['push', '--atomic', remote, ...nums.map(lease), ...nums.map(spec)], repo, { timeoutMs: 120_000 });
+  if (r.ok) return { ok: true, taken: [...nums], rejected: [], atomic: true };
+  if (!/atomic/i.test(r.stderr || '') || !/support/i.test(r.stderr || '')) {
+    return { ok: false, taken: [], rejected: [...nums], atomic: true, stderr: r.stderr || `exit ${r.code}` };
+  }
+  const taken = [];
+  for (const n of nums) {
+    const one = git(['push', remote, lease(n), spec(n)], repo, { timeoutMs: 120_000 });
+    if (one.ok) { taken.push(n); continue; }
+    for (const t of taken) releaseClaimLock(repo, remote, t, sha);
+    return { ok: false, taken: [], rejected: [n], atomic: false, stderr: one.stderr || `exit ${one.code}` };
+  }
+  return { ok: true, taken, rejected: [], atomic: false };
+}
+
+/**
+ * Release one lock — but only while it still points at `sha`, the lock this claim holds
+ * (`--force-with-lease=<ref>:<sha>`): a lock someone else has taken since is theirs and is never
+ * deleted from under them. `{ ok, absent? , moved?, stderr? }`; absent and moved are both success
+ * (there is nothing of ours left to release).
+ */
+function releaseClaimLock(repo, remote, num, sha) {
+  const ref = claimLockRef(num);
+  const ls = git(['ls-remote', remote, ref], repo, { timeoutMs: 60_000 });
+  if (!ls.ok) return { ok: false, stderr: ls.stderr || `exit ${ls.code}` };
+  const now = (String(ls.stdout || '').split(/\s+/)[0] || '').trim();
+  if (!now) return { ok: true, absent: true };
+  if (sha && !now.startsWith(sha) && !String(sha).startsWith(now)) return { ok: true, moved: true, now: now.slice(0, 7) };
+  const r = git(['push', remote, `--force-with-lease=${ref}:${now}`, `:${ref}`], repo, { timeoutMs: 120_000 });
+  return { ok: r.ok, stderr: r.stderr };
+}
+
+/**
+ * Read who holds a lock: the commit at `fullSha`, fetched from `remote` when this clone lacks it.
+ * `{ ok, trailers }` (`parseClaimLockMessage`) or `{ ok: false, stderr }` — a failed read is the
+ * caller's to treat as foreign (fail closed).
+ */
+function readClaimLock(repo, remote, num, fullSha) {
+  let body = fullSha ? git(['cat-file', 'commit', fullSha], repo) : { ok: false };
+  if (!body.ok) {
+    const f = git(['fetch', '--quiet', remote, claimLockRef(num)], repo, { timeoutMs: 60_000 });
+    if (!f.ok) return { ok: false, stderr: f.stderr || `exit ${f.code}` };
+    body = git(['cat-file', 'commit', fullSha || 'FETCH_HEAD'], repo);
+    if (!body.ok) return { ok: false, stderr: body.stderr || 'cat-file failed' };
+  }
+  return { ok: true, trailers: parseClaimLockMessage(body.stdout) };
 }
 
 /** List worktree paths registered in a repo (porcelain). */
@@ -1694,6 +1858,8 @@ module.exports = {
   run, spawnErrorLine, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
   detectTrunk, branchExists, branchRefs, existingBranchRef,
   claimRemote, remoteHeads, parseRemoteHeads, CLAIM_REF_PREFIX, claimRef, pushClaimRef, deleteClaimRef,
+  CLAIM_LOCK_PREFIX, claimLockRef, parseClaimLocks, claimLockMessage, parseClaimLockMessage, makeClaimLockCommit,
+  takeClaimLocks, releaseClaimLock, readClaimLock,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghRunsAtShaUnfiltered, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,

@@ -1355,6 +1355,71 @@ test('#550: parseRemoteHeads lists claim refs as branches, and a real branch of 
   assert.strictEqual(claimRef('feat/x-9'), 'refs/claims/feat/x-9');
 });
 
+test('#741: claim locks are read apart from heads — refs/heads/claim/<N> is never a branch, claim/<non-number> is nothing', () => {
+  const { parseRemoteHeads, parseClaimLocks, claimLockRef } = require('./git');
+  const out = [
+    'aaaaaaa1111111111111111111111111111111111\trefs/heads/main',
+    'bbbbbbb2222222222222222222222222222222222\trefs/heads/claim/741',
+    'ccccccc3333333333333333333333333333333333\trefs/heads/claim/_triage',
+    'ddddddd4444444444444444444444444444444444\trefs/heads/feat/x-741',
+    'eeeeeee5555555555555555555555555555555555\trefs/claims/feat/y-9',
+  ].join('\n');
+  assert.deepStrictEqual(parseRemoteHeads(out).map((h) => h.branch).sort(), ['feat/x-741', 'feat/y-9', 'main']);
+  assert.deepStrictEqual(parseClaimLocks(out), [{ issue: 741, sha: 'bbbbbbb', fullSha: 'bbbbbbb2222222222222222222222222222222222' }]);
+  assert.strictEqual(claimLockRef(741), 'refs/heads/claim/741');
+});
+
+test('#741: the lock message carries its holder and [skip ci]; another writer\'s format reads too', () => {
+  const { claimLockMessage, parseClaimLockMessage } = require('./git');
+  const msg = claimLockMessage({ nums: [115, 114], branch: 'feat/x-115-114', machine: 'box-a', machineId: 'm:1', session: 's1', claimedAt: '2026-11-14T00:00:00Z' });
+  assert.match(msg, /^claim: #115 #114\n\n/);
+  assert.match(msg, /^\[skip ci\]$/m);
+  const tr = parseClaimLockMessage(msg);
+  assert.strictEqual(tr.colab, true);
+  assert.strictEqual(tr.branch, 'feat/x-115-114');
+  assert.strictEqual(tr.machine, 'box-a');
+  assert.strictEqual(tr.session, 's1');
+  const other = parseClaimLockMessage('tree 0\nauthor orchestrator-claim <claim@orchestrator.invalid> 1 +0900\n\nclaim: #741\n\nMachine: box-b\nIntent: 24355\nClaim-Id: 33fb\n[skip ci]\n');
+  assert.deepStrictEqual([other.colab, other.machine, other.intent, other.claimId, other.author], [false, 'box-b', '24355', '33fb', 'orchestrator-claim']);
+  assert.strictEqual(claimLockMessage({ nums: [1], branch: 'a\nb', claimedAt: 'x' }).includes('Branch: a b'), true, 'a value never breaks a line');
+});
+
+test('#741: takeClaimLocks is create-only and atomic; releaseClaimLock leaves a lock someone else re-took', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-lock-'));
+  try {
+    const origin = path.join(root, 'o.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+    const clone = (n) => {
+      const d = path.join(root, n);
+      execFileSync('git', ['init', '-q', '-b', 'main', d]);
+      execFileSync('git', ['remote', 'add', 'origin', origin], { cwd: d });
+      return d;
+    };
+    const a = clone('a'), b = clone('b');
+    const ca = git.makeClaimLockCommit(a, git.claimLockMessage({ nums: [5], claimedAt: 'x' }));
+    const cb = git.makeClaimLockCommit(b, git.claimLockMessage({ nums: [4, 5], claimedAt: 'y' }));
+    assert.ok(ca.ok && cb.ok, ca.stderr || cb.stderr);
+    assert.strictEqual(execFileSync('git', ['cat-file', '-p', ca.sha], { cwd: a, encoding: 'utf8' }).includes('parent '), false, 'parentless');
+    assert.strictEqual(git.takeClaimLocks(a, 'origin', [5], ca.sha).ok, true);
+    const lost = git.takeClaimLocks(b, 'origin', [4, 5], cb.sha);
+    assert.strictEqual(lost.ok, false, 'claim/5 exists — B loses');
+    const ls = () => execFileSync('git', ['ls-remote', origin, 'refs/heads/claim/*'], { encoding: 'utf8' });
+    assert.doesNotMatch(ls(), /claim\/4/, 'atomic: claim/4 was not taken either');
+    assert.strictEqual(git.takeClaimLocks(b, 'origin', [4], cb.sha).ok, true);
+    // A forced takeover leases on the holder it saw; B now holds 5, and A's release must not touch it.
+    assert.strictEqual(git.takeClaimLocks(b, 'origin', [5], cb.sha, { expect: { 5: ca.sha } }).ok, true);
+    const r = git.releaseClaimLock(a, 'origin', 5, ca.sha);
+    assert.deepStrictEqual([r.ok, r.moved], [true, true]);
+    assert.match(ls(), /claim\/5/);
+    assert.strictEqual(git.releaseClaimLock(b, 'origin', 5, cb.sha).ok, true);
+    assert.doesNotMatch(ls(), /claim\/5/);
+    assert.deepStrictEqual(git.releaseClaimLock(b, 'origin', 5, cb.sha), { ok: true, absent: true });
+    const read = git.readClaimLock(a, 'origin', 4, null);
+    assert.strictEqual(read.ok, true, read.stderr);
+    assert.strictEqual(read.trailers.colab, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('#585: a spawn error with no stderr becomes the detail — ENOBUFS names its buffer', () => {
   const r = git.run(process.execPath, ['-e', 'process.stdout.write("x".repeat(4096))'], { maxBuffer: 1024 });
   assert.strictEqual(r.ok, false);

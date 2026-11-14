@@ -398,8 +398,10 @@ divergence.
 **The record of a claim is its branch on the git remote; the tracker is its mirror for
 people** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), *Record of a claim*, #325). What that means here:
 
-- `colab worktree new` (step 4) **pushes the claim ref `refs/claims/<branch>` at cut** — the record
-  refused against; not the branch, so no CI runs (#550). Plain git: `git push origin <b>:refs/claims/<b>`.
+- `colab worktree new` (step 4) **takes the claim lock `refs/heads/claim/<N>` at cut**, one per issue —
+  the record refused against; not the branch, and its commit says `[skip ci]`, so no CI runs (#550,
+  #741). `colab claim` takes it too. Plain git: a create-only push of a `[skip ci]` commit,
+  `git push origin --force-with-lease=refs/heads/claim/<N>: <commit>:refs/heads/claim/<N>`.
 - `colab claim` / `colab worktree new` **refuse** when a branch or claim ref on the remote carries `#N` and
   is not this machine's, and name it with the commands to continue it. That is not an obstacle
   to route around — it is step 3's "Found one → continue it" arriving before you branched. Only
@@ -455,7 +457,7 @@ already exists on that issue:
 ```sh
 git fetch --prune origin                   # ← without this the check is blind (see below)
 git branch -a --list '*<issue-number>*'    # a previous session's branch may still exist
-git ls-remote origin 'refs/claims/*' | grep -- '-<issue-number>'   # … or only its claim ref (#550, never fetched)
+git ls-remote origin 'refs/heads/claim/<issue-number>' 'refs/claims/*-<issue-number>'   # … or only its lock (#741) / legacy claim ref (#550)
 colab worktrees                            # if colab is installed — is a worktree holding it?
 gh issue view $N --json labels -q '.labels[].name|select(startswith("group:"))'
 ```
@@ -581,7 +583,9 @@ colab worktree new <type>/<slug>-$N --issues $N --ports 1 \
 #   spell the prefix yourself here: <login>/<machine>/<type>/<slug>-$N.
 git fetch --prune origin                     # the cut below must be origin's tip NOW, not a cache
 git worktree add -b <type>/<slug>-$N ../<slug>-$N origin/<trunk>
-git push origin <type>/<slug>-$N:refs/claims/<type>/<slug>-$N   # the claim record (#325) — a ref, so no CI run (#550)
+C=$(git commit-tree --no-gpg-sign "$(git mktree </dev/null)" -m "claim: #$N" -m "Branch: <type>/<slug>-$N
+[skip ci]")
+git push origin --force-with-lease=refs/heads/claim/$N: "$C:refs/heads/claim/$N"   # the lock (#325, #741) — [skip ci], so no CI run (#550)
 ```
 
 **Cut from a freshly fetched `origin/<trunk>`, never from local trunk (#349).** Local trunk
@@ -596,10 +600,10 @@ plain-git fallback, compare against `git ls-remote origin <trunk>` yourself.
 this path. Pass **every** issue the branch will carry (`--issues 115,114,113`) — that
 set and the branch name are the two places code-wrap's harvest reads.
 
-**It also pushes the claim ref at cut (#325, #550)** — `pushed refs/claims/<branch> → origin`;
+**It also takes the claim lock at cut (#325, #550, #741)** — `took claim lock origin refs/heads/claim/<N>`;
 `colab worktree rm` deletes it. That push *is* the claim record, so a failed push takes nothing:
 with `--issues`, the worktree and branch are removed again and it exits 1 (`claim NOT taken`).
-Fix the push (access, network, or a same-named claim ref another machine just created) and
+Fix the push (access, network — or the lock another claimant just took, which means the issue is theirs) and
 re-run; do not recreate the worktree by hand around it. **Opened by a planner?** If a
 `--session intent:<id>` claim already holds the issue on this machine, this command upgrades
 that record in place with your real session — expected, and nothing is re-posted.

@@ -7,8 +7,8 @@ behind them — moved here verbatim (#524).
 **A3's green gate does not answer for this branch's CI, and nobody downstream asks.**
 A3 runs the suite *locally*, on this machine; CI runs it on the runner.
 
-This push is usually the branch's **first**: `colab worktree new` recorded the claim as the ref
-`refs/claims/<branch>`, which runs no CI (#550), so this is where branch CI starts.
+This push is usually the branch's **first**: `colab worktree new` recorded the claim as the lock
+`refs/heads/claim/<N>`, whose `[skip ci]` commit runs no CI (#550, #741), so this is where branch CI starts.
 
 **Backed up mid-session? Do it without a run, and clean it up here (#734).** A backup *before*
 hand-off goes to `git push origin HEAD:refs/backup/<branch>` — outside `refs/heads`, so no push

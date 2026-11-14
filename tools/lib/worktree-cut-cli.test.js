@@ -131,8 +131,15 @@ function readState(home) {
 }
 const sha = (cwd, ref) => g(cwd, 'rev-parse', ref).trim();
 const remoteHeads = (fx) => g(fx.work, 'ls-remote', '--heads', 'origin').split('\n').filter(Boolean).map((l) => l.split('\t')[1].replace('refs/heads/', ''));
-// #550: the cut pushes the claim ref refs/claims/<branch>, not the branch.
+// #550: the cut used to push the claim ref refs/claims/<branch>; nothing writes it since #741.
 const remoteClaims = (fx, remote = 'origin') => g(fx.work, 'ls-remote', remote, 'refs/claims/*').split('\n').filter(Boolean).map((l) => l.split('\t')[1].replace('refs/claims/', ''));
+// #741: the cut takes the claim LOCK refs/heads/claim/<N> — one per issue, never the branch.
+const remoteLocks = (fx, remote = 'origin', cwd = fx.work) => g(cwd, 'ls-remote', remote, 'refs/heads/claim/*').split('\n').filter(Boolean).map((l) => l.split('\t')[1].replace('refs/heads/claim/', ''));
+/** The lock commit's message for issue `n` on `remote`, read the way another machine would. */
+function lockMessage(fx, n, remote = 'origin', cwd = fx.work) {
+  g(cwd, 'fetch', '-q', remote, `refs/heads/claim/${n}`);
+  return g(cwd, 'log', '-1', '--format=%B', 'FETCH_HEAD');
+}
 
 /** Advance origin/main from ANOTHER clone, so this clone's local main AND its origin/main cache lag. */
 function advanceOrigin(fx) {
@@ -185,7 +192,10 @@ test('#348: without branchPrefix the branch is exactly the name given', () => {
   const fx = fixture();
   const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
   assert.strictEqual(r.code, 0, r.out + r.err);
-  assert.ok(remoteClaims(fx).includes('feat/x-9'), remoteClaims(fx).join(','));
+  assert.deepStrictEqual(remoteLocks(fx), ['9']);
+  assert.match(lockMessage(fx, 9), /^Branch: feat\/x-9$/m);
+  assert.ok(!remoteHeads(fx).includes('feat/x-9'), 'the branch itself is not pushed at cut');
+  assert.deepStrictEqual(remoteClaims(fx), [], 'no legacy claim ref is written (#741)');
   assert.ok(fs.existsSync(path.join(fx.work, '.worktrees', 'x-9')));
 });
 
@@ -196,7 +206,8 @@ test('#348: under branchPrefix: machine, worktree new cuts and pushes <login>/<m
   const want = `me/${LABEL}/feat/x-9`;
   const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
   assert.strictEqual(r.code, 0, r.out + r.err);
-  assert.ok(remoteClaims(fx).includes(want), remoteClaims(fx).join(','));
+  assert.deepStrictEqual(remoteLocks(fx), ['9']);
+  assert.match(lockMessage(fx, 9), new RegExp(`^Branch: ${want.replace(/[/.]/g, '\\$&')}$`, 'm'));
   assert.ok(fs.existsSync(path.join(fx.work, '.worktrees', 'x-9')), 'worktree dir is the slug, not a nested path');
   const wt = Object.values(readState(fx.home).worktrees)[0];
   assert.strictEqual(wt.branch, want);
@@ -235,8 +246,8 @@ test('#301: the only remote is `upstream` — worktree new fetches, cuts from an
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.strictEqual(sha(fx.work, 'feat/x-9'), tip);
   assert.ok(r.out.includes(`base upstream/main @ ${tip.slice(0, 7)}`), r.out);
-  assert.ok(r.out.includes('pushed refs/claims/feat/x-9 → upstream'), r.out);
-  assert.ok(remoteClaims(fx, 'upstream').includes('feat/x-9'));
+  assert.ok(r.out.includes('took claim lock upstream refs/heads/claim/9'), r.out);
+  assert.deepStrictEqual(remoteLocks(fx, 'upstream'), ['9']);
   assert.ok(fs.existsSync(path.join(fx.work, '.worktrees', 'x-9')));
   assert.ok(Object.values(readState(fx.home).claims || {}).some((c) => c.issue === '#9'), 'claim recorded');
 });
@@ -269,6 +280,113 @@ test('#301: two remotes resolved by `git config colab.remote` — the cut and th
   const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.ok(r.out.includes('base a/main @'), r.out);
-  assert.ok(remoteClaims(fx, 'a').includes('feat/x-9'));
+  assert.deepStrictEqual(remoteLocks(fx, 'a'), ['9']);
   assert.strictEqual(g(fx.work, 'ls-remote', 'b').trim(), '', 'nothing pushed to the other remote');
+});
+
+// ---------------------------------------------------------------------------
+// #741 — the claim lock lives in the branch namespace: refs/heads/claim/<N>, issue grain
+// ---------------------------------------------------------------------------
+
+/** Plant a lock commit on origin the way another writer would (an orchestrator, or another machine). */
+function plantLock(fx, num, { author = 'orchestrator-claim', message }) {
+  const env = { ...process.env, GIT_AUTHOR_NAME: author, GIT_AUTHOR_EMAIL: 'claim@x.invalid', GIT_COMMITTER_NAME: author, GIT_COMMITTER_EMAIL: 'claim@x.invalid' };
+  const c = execFileSync('git', ['commit-tree', 'main^{tree}', '-p', 'main', '-m', message], { cwd: fx.work, env, encoding: 'utf8' }).trim();
+  g(fx.work, 'push', '-q', 'origin', `${c}:refs/heads/claim/${num}`);
+  return c;
+}
+const lockSha = (fx, num) => g(fx.work, 'ls-remote', 'origin', `refs/heads/claim/${num}`).split('\t')[0].trim();
+
+test('#741: two machines racing for one issue under different branch names — exactly one wins', () => {
+  const fx = fixture();
+  const b = machineB(fx);
+  const ra = colab(fx, ['worktree', 'new', 'feat/a-7', '--issues', '7', '--session', 'sA']);
+  assert.strictEqual(ra.code, 0, ra.out + ra.err);
+  // refs/claims/<branch> was branch grain: feat/b-7 would have been a second, separate ref.
+  const rb = colab(fx, ['worktree', 'new', 'feat/b-7', '--issues', '7', '--session', 'sB'], b);
+  assert.strictEqual(rb.code, 1, rb.out + rb.err);
+  assert.match(rb.err, /refs\/heads\/claim\/7/);
+  assert.ok(!fs.existsSync(path.join(b.work, '.worktrees', 'b-7')), 'nothing created on B');
+  assert.deepStrictEqual(remoteLocks(fx), ['7']);
+  assert.match(lockMessage(fx, 7), /^Branch: feat\/a-7$/m);
+});
+
+test('#741: the push decides — both read clear ground, the lock is created once, and the loser holds nothing', () => {
+  const fx = fixture();
+  const b = machineB(fx);
+  // A's lock lands AFTER B has read the remote (clear) and before B's push reaches it: B's pre-push
+  // hook runs once the connection is open, so the server sees a create for a ref that now exists.
+  const hooks = path.join(fx.root, 'hooks-b');
+  fs.mkdirSync(hooks);
+  fs.writeFileSync(path.join(hooks, 'pre-push'),
+    `#!/bin/sh\n[ -f "${hooks}/fired" ] && exit 0\ntouch "${hooks}/fired"\ngit -C "${fx.work}" push -q origin main:refs/heads/claim/7\n`, { mode: 0o755 });
+  g(b.work, 'config', 'core.hooksPath', hooks);
+  const rb = colab(fx, ['worktree', 'new', 'feat/b-7', '--issues', '7', '--session', 'sB'], b);
+  assert.ok(fs.existsSync(path.join(hooks, 'fired')), 'the race was staged');
+  assert.strictEqual(rb.code, 1, rb.out + rb.err);
+  assert.match(rb.err, /claim NOT taken/);
+  assert.deepStrictEqual(remoteLocks(fx), ['7']);
+  assert.strictEqual(lockSha(fx, 7), sha(fx.work, 'main'), 'the lock is the one that got there first');
+  assert.ok(!fs.existsSync(path.join(b.work, '.worktrees', 'b-7')));
+  assert.strictEqual(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/feat/b-7'], { cwd: b.work }).status, 1);
+  const st = readState(b.home);
+  assert.ok(!st || !Object.keys(st.claims || {}).length, 'no claim recorded on B');
+});
+
+test('#741: a legacy refs/claims/<branch> for #N still refuses a second claim', () => {
+  const fx = fixture();
+  const b = machineB(fx);
+  g(fx.work, 'push', '-q', 'origin', 'main:refs/claims/feat/old-7');
+  const rc = colab(fx, ['claim', '7', '--session', 'sB'], b);
+  assert.strictEqual(rc.code, 1, rc.out + rc.err);
+  assert.match(rc.err, /claim ref origin refs\/claims\/feat\/old-7/);
+  const rw = colab(fx, ['worktree', 'new', 'feat/new-7', '--issues', '7', '--session', 'sB'], b);
+  assert.strictEqual(rw.code, 1, rw.out + rw.err);
+  assert.deepStrictEqual(remoteLocks(fx), [], 'a refused claim takes no lock');
+});
+
+test('#741: an orchestrator\'s lock naming this machine is adopted, not refused, and released at worktree rm', (t) => {
+  if (!LABEL) return t.skip('no machine label derivable from this host name');
+  const fx = fixture();
+  const planted = plantLock(fx, 7, { message: `claim: #7\n\nMachine: ${os.hostname()}\nIntent: 1\nClaim-Id: abc\n[skip ci]` });
+  const r = colab(fx, ['worktree', 'new', 'feat/x-7', '--issues', '7', '--session', 's1']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /claim lock origin refs\/heads\/claim\/7 was already taken on this machine for this work — adopted/);
+  assert.strictEqual(lockSha(fx, 7), planted, 'adopted, not re-pushed');
+  const c = Object.values(readState(fx.home).claims).find((x) => x.issue === '#7');
+  assert.deepStrictEqual(c.lock, { ref: 'refs/heads/claim/7', sha: planted, adopted: true });
+  const rm = colab(fx, ['worktree', 'rm', 'x-7']);
+  assert.strictEqual(rm.code, 0, rm.out + rm.err);
+  assert.match(rm.out, /released claim lock origin refs\/heads\/claim\/7/);
+  assert.deepStrictEqual(remoteLocks(fx), []);
+});
+
+test('#741: a lock written for ANOTHER machine refuses, naming its writer; claim/<not a number> is no lock', () => {
+  const fx = fixture();
+  plantLock(fx, 7, { message: 'claim: #7\n\nMachine: other-box-zz\n[skip ci]' });
+  plantLock(fx, '_triage', { message: 'claim: _triage\n\nMachine: other-box-zz\n[skip ci]' });
+  const r = colab(fx, ['worktree', 'new', 'feat/x-7', '--issues', '7', '--session', 's1']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /claim lock origin refs\/heads\/claim\/7 @ [0-9a-f]{7} \(machine other-box-zz · written by orchestrator-claim\)/);
+  assert.match(r.err, /git push origin --delete refs\/heads\/claim\/7/);
+  const r8 = colab(fx, ['worktree', 'new', 'feat/y-8', '--issues', '8', '--session', 's1']);
+  assert.strictEqual(r8.code, 0, r8.out + r8.err);
+});
+
+test('#741: colab claim takes the lock, worktree new keeps it, and colab release frees a trunk claim\'s lock', () => {
+  const fx = fixture();
+  const rc = colab(fx, ['claim', '7', '--worktree', 'x-7', '--session', 's1']);
+  assert.strictEqual(rc.code, 0, rc.out + rc.err);
+  assert.match(rc.out, /took claim lock origin refs\/heads\/claim\/7/);
+  const first = lockSha(fx, 7);
+  const rw = colab(fx, ['worktree', 'new', 'feat/x-7', '--issues', '7', '--session', 's1']);
+  assert.strictEqual(rw.code, 0, rw.out + rw.err);
+  assert.strictEqual(lockSha(fx, 7), first, 'the same lock, not a second take');
+  const rt = colab(fx, ['claim', '8', '--session', 's1']);
+  assert.strictEqual(rt.code, 0, rt.out + rt.err);
+  assert.deepStrictEqual(remoteLocks(fx).sort(), ['7', '8']);
+  const rr = colab(fx, ['release', '8']);
+  assert.strictEqual(rr.code, 0, rr.out + rr.err);
+  assert.match(rr.out, /released claim lock origin refs\/heads\/claim\/8/);
+  assert.deepStrictEqual(remoteLocks(fx), ['7']);
 });
