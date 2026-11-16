@@ -57,8 +57,10 @@ storage, set `backend: github`. The step then runs the official action with the 
 ## Inputs
 
 Both actions take `endpoint`, `bucket`, `access-key`, `secret-key` and `region` (default
-`us-east-1`; a self-hosted store's region is whatever constant it was configured with). They
-also take:
+`us-east-1`; a self-hosted store's region is whatever constant it was configured with). A
+self-hosted store configured with any other region therefore needs `region:` on every call site:
+requests are signed for the region, and the store answers 400 to a GET or HEAD signed for the
+wrong one. They also take:
 
 | input | default | meaning |
 |---|---|---|
@@ -193,4 +195,4 @@ when re-running a release job that failed after its publish step).
 - **Local check.** `scripts/smoke.sh` runs the hermetic round-trip.
   `.github/actions/artifact-store/test/roundtrip.sh` runs the same checks against any real
   store when `AS_ENDPOINT`, `AS_BUCKET`, `AS_ACCESS_KEY`, `AS_SECRET_KEY` and `AS_CLIENT` are
-  set.
+  set, plus `AS_REGION` when the store's region is not `us-east-1`.
