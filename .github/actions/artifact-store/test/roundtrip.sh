@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Round-trip of artifact-store.sh in one process (#601). Hermetic by default — through the fake
-# `aws` beside this file, run by scripts/smoke.sh. With AS_ENDPOINT + AS_BUCKET (+ keys, AS_CLIENT)
-# set, the same checks run against that real store instead. The round-trip BETWEEN TWO JOBS is
-# .github/workflows/artifact-store.yml.
+# `aws` beside this file, run by scripts/smoke.sh. With AS_ENDPOINT + AS_BUCKET (+ keys, AS_CLIENT,
+# AS_REGION) set, the same checks run against that real store instead. The test's own read-back of
+# published objects signs for AS_REGION too, as the action does (lib/artifact-store.sh): a store
+# configured with another region answers 400 to a GET/HEAD signed for us-east-1 (#752). The
+# round-trip BETWEEN TWO JOBS is .github/workflows/artifact-store.yml.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; lib="$here/../lib/artifact-store.sh"
 t="$(mktemp -d "${TMPDIR:-/tmp}/as-roundtrip.XXXXXX")"; trap 'rm -rf "$t"' EXIT
@@ -60,7 +62,7 @@ APP=app; [ "$real" = 0 ] || APP="app-$GITHUB_RUN_ID"   # a shared real bucket ke
 pub() { AS_APP="$APP" AS_VERSION="$1" AS_PATH=dist AS_PUBLIC_BASE=https://dl.example.com "${@:2}" bash "$lib" publish; }
 urls="$(pub 1.2.0)" || fail "publish"
 case "$urls" in *"https://dl.example.com/$APP/1.2.0/App-1.2.0.dmg"*) ;; *) fail "publish urls: $urls" ;; esac
-down_pub() { if [ "$real" = 1 ]; then AWS_ACCESS_KEY_ID="$AS_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$AS_SECRET_KEY" AWS_DEFAULT_REGION=us-east-1 \
+down_pub() { if [ "$real" = 1 ]; then AWS_ACCESS_KEY_ID="$AS_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$AS_SECRET_KEY" AWS_DEFAULT_REGION="${AS_REGION:-us-east-1}" \
   aws --endpoint-url "$AS_ENDPOINT" s3 cp "s3://$AS_BUCKET/$1" - 2>/dev/null; else cat "$t/s3/artifacts/$1"; fi; }
 [ "$(down_pub $APP/1.2.0/App-1.2.0.dmg)" = inst ] && [ "$(down_pub $APP/latest/App-1.2.0.dmg)" = inst ] || fail "publish keys"
 case "$(down_pub $APP/latest.json)" in *'"version":"1.2.0"'*'"url":"https://dl.example.com/'"$APP"'/1.2.0/App-1.2.0.dmg"'*) ;; *) fail "latest.json: $(down_pub $APP/latest.json)" ;; esac
