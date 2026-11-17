@@ -193,8 +193,11 @@ The action never installs anything. The credentials need list permission on the 
 `download`'s do: without it, AWS answers 403 for a missing key instead of 404, and `get` reports
 that 403 as the store's error instead of looking in an earlier attempt.
 
-**Credentials stay out of the log and off the command line.** The secret key is masked, and it
-reaches curl on standard input (`curl -K -`), so it is never in curl's arguments.
+**Credentials stay out of the log and off the command line.** The secret key is masked. It
+reaches curl in a config file (`curl -K <file>`) in the step's own temporary directory, which is
+removed when the step ends, so it is never in curl's arguments. Standard input would have kept it
+off the disk too, but curl rejected a config piped from Windows PowerShell 5.1 ("found an unknown
+config option"), even with a BOM-less `$OutputEncoding`.
 
 **Failures are loud, as with the other two.** A missing file fails with the key it looked for and
 the attempts it searched. A refused signature, a wrong region, a missing bucket or denied access

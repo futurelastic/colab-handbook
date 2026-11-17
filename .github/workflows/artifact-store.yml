@@ -363,11 +363,11 @@ jobs:
           # -ip too: without it the master advertises the runner's LAN address and cannot reach itself
           Start-Process -FilePath $weed -ArgumentList @('server', "-dir=$d\data", '-s3', "-s3.config=$cfg", '-ip=127.0.0.1', '-ip.bind=127.0.0.1') `
             -RedirectStandardOutput "$d\out.log" -RedirectStandardError "$d\err.log" -WindowStyle Hidden
+          $k = Join-Path $env:RUNNER_TEMP 'bucket.cfg'
+          [IO.File]::WriteAllText($k, ('user = "' + $env:AK + ':' + $env:SK + '"' + "`n"), (New-Object System.Text.UTF8Encoding $false))
           for ($i = 0; $i -lt 90; $i++) {
-            # credentials on stdin (-K -), as the action passes them, and with the same encoding:
-            # the runner's Windows PowerShell otherwise writes a BOM curl reads as part of the option
-            $OutputEncoding = New-Object System.Text.UTF8Encoding $false
-            $code = ('user = "' + $env:AK + ':' + $env:SK + '"') | curl.exe -s -K - -o NUL -w '%{http_code}' --aws-sigv4 "aws:amz:${env:REGION}:s3" -X PUT "$env:STORE/artifacts"
+            # credentials in a config file, as the action passes them (never curl's arguments)
+            $code = curl.exe -s -K $k -o NUL -w '%{http_code}' --aws-sigv4 "aws:amz:${env:REGION}:s3" -X PUT "$env:STORE/artifacts"
             if ($code -eq '200') { Write-Output 'store: up, bucket artifacts'; exit 0 }
             Start-Sleep -Seconds 1
           }

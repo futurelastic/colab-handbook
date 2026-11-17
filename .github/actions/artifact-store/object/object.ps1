@@ -14,7 +14,10 @@
 # measured on 7.75 to 7.88, #753), hence the floor below.
 #
 # Must stay Windows PowerShell 5.1-clean and pure ASCII: 5.1 reads a script without a BOM in the
-# ANSI code page. The secret reaches curl on stdin (-K -), never on its command line.
+# ANSI code page. The secret reaches curl in a config file (-K <file>) inside this step's own temp
+# directory, removed when the step ends - never on curl's command line. Not stdin: curl rejected a
+# config piped from Windows PowerShell 5.1 ("found an unknown config option") even with a BOM-less
+# $OutputEncoding, measured on windows-latest (#753).
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 $work = $null
@@ -110,19 +113,20 @@ $work = Join-Path $tmpRoot ('artifact-store-' + [guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $work)
 $errFile = Join-Path $work 'curl.err'
 # A curl config line: backslash and double quote are the only escapes inside a quoted value.
-$cfg = 'user = "' + ("${ak}:${sk}".Replace('\', '\\').Replace('"', '\"')) + '"'
-# The config goes to curl on stdin; make the bytes plain UTF-8 with no BOM whatever the profile set.
-$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+# Written as exact bytes (UTF-8, no BOM) so no shell or console encoding can touch it.
+$cfgFile = Join-Path $work 'curl.cfg'
+$cfg = 'user = "' + ("${ak}:${sk}".Replace('\', '\\').Replace('"', '\"')) + '"' + "`n"
+[IO.File]::WriteAllText($cfgFile, $cfg, (New-Object System.Text.UTF8Encoding $false))
 
 # s3 <method> <key> <body file to write (GET) or to send (PUT)> -> @{ code; exit; body; err }
 function S3([string]$method, [string]$key, [string]$bodyFile) {
   $url = "$endpoint/$(Enc $bucket)/$(EncKey $key)"
   $resp = Join-Path $work 'response'
-  $a = @('-sS', '--stderr', $errFile, '-K', '-', '--aws-sigv4', "aws:amz:${region}:s3",
+  $a = @('-sS', '--stderr', $errFile, '-K', $cfgFile, '--aws-sigv4', "aws:amz:${region}:s3",
          '--connect-timeout', '30', '--retry', '2', '-w', '%{http_code}')
   if ($method -eq 'PUT') { $a += @('-T', $bodyFile, '-o', $resp) } else { $a += @('-o', $bodyFile) }
   $a += $url
-  $code = [string]($cfg | & $curl @a)
+  $code = [string](& $curl @a)
   $exit = $LASTEXITCODE
   $err = ''
   if (Test-Path -LiteralPath $errFile) { $err = ([IO.File]::ReadAllText($errFile)).Trim() }
