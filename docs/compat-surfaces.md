@@ -348,6 +348,7 @@ templates/deploy-container-run.mjs
 templates/deploy-container.yml
 templates/deploy-xserver.yml
 templates/dist-refs.yml
+templates/docs-README.md
 templates/docs-lint.mjs
 templates/docs-lint.yml
 templates/forgejo-release-auto.yml

@@ -1277,10 +1277,11 @@ cut from was green — is documented with the CLI, in
 ## 5. Claiming work — how to say "I'm on this"
 
 > **Frozen — no new features ([#604](https://github.com/futurelastic/colab-handbook/issues/604), 2026-10-14).**
-> Scope is how code lands on git. Claims recorded on the issue, readiness, `Filed-by`
-> provenance, decision records, every `COLAB_HUMAN=1` gate except `solo`, and their commands
-> will move to a separate decision layer adopters run. They still apply as written; bug fixes
-> land, new features are refused. The git claim ref, place-claims and `solo` stay in scope.
+> Scope is how code lands on git, and where a landed change's docs go (#686). Claims recorded
+> on the issue, readiness, `Filed-by` provenance, decision records, every `COLAB_HUMAN=1` gate
+> except `solo`, and their commands will move to a separate decision layer adopters run. They
+> still apply as written; bug fixes land, new features are refused. The git claim ref,
+> place-claims and `solo` stay in scope.
 > Full list and retirement rule: [ADR 604](docs/adr/604-scope-freeze.md).
 
 **The claims and decisions contract (#639).** Whatever tooling a repo uses, holding work, recording
@@ -2352,8 +2353,11 @@ A design ruling needs one more part: an **immutable visual record**.
    the issue body (*Design-approval ask*, #379). Only a ruling recorded **after** that
    review approves the artifact. An earlier one, such as the ruling that let the work
    start, does not.
-2. **The artifact** — a repo file under `docs/design/`, named `<slug>-<N>-mockup.html` or
-   `<slug>-<N>-spec.md`, landing via a claimed docs branch. **Superseded artifacts are marked, never deleted.**
+2. **The artifact** — a repo file in its own folder, `docs/design/<slug>-<N>/`, named
+   `<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md` (frames in its `frames/`), landing via a claimed docs
+   branch. Fonts and shared CSS are never copied in: link the design-system package, or keep one
+   `docs/design/_assets/` copy. Existing flat files stay where they are (lazy migration, #686); the rest of
+   the `docs/` layout is `code-wrap` A2's. **Superseded artifacts are marked, never deleted.**
 3. **The frozen evidence** — a screenshot of the approved option attached to the ruling
    comment, immutable where the repo file is not. Rejected alternatives need never land
    on trunk — their screenshot on the Issue is the whole record.
@@ -3010,7 +3014,7 @@ an adoption must leave true, in words that name no tool.
 
 ### Any repo, first-time adoption
 
-Contract items 1–6. The nine steps, the question table and the label set:
+Contract items 1–6. The ten steps, the question table and the label set:
 [`2-adoption-procedure.md`](skills/handbook-sync/2-adoption-procedure.md#any-repo-first-time-adoption).
 A new repo's CI starts with [one verdict per tree](#one-verdict-per-tree--quick-on-branches-full-once-719).
 

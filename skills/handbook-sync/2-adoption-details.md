@@ -6,7 +6,7 @@ behind them — moved here verbatim (#524).
 
 ### The checklist is not in this file, on purpose
 
-**[`2-adoption-procedure.md`](2-adoption-procedure.md) is the procedure** — nine steps,
+**[`2-adoption-procedure.md`](2-adoption-procedure.md) is the procedure** — ten steps,
 already written, already correct, moved there verbatim from [`CONVENTIONS.md` §9 "Adopting
 this"](../../CONVENTIONS.md#9-adopting-this) by #640; §9 keeps the adoption contract those steps
 serve. Open the procedure and work it in order. This section adds only what the procedure cannot

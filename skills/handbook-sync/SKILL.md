@@ -116,7 +116,6 @@ exposure); `room`, `writes` and `channels` are optional and answered later with
 `--axis` (#533). An existing default branch is kept as trunk whatever it is called —
 never rename `master` to adopt.
 
-
 **How this file is built (#524).** This is the core: the steps in order, each with its rule and
 its stop condition. Each step's full text — edge cases, the measurements behind them, worked
 examples — sits in a reference file next to this one, moved there verbatim, and the step names
@@ -139,9 +138,10 @@ it, never a substitute.
 - **`exposure: released`:** the release rung (§6) is wired in the same pass; the route and the
   disarmed deploy template are proposals, the first final is the operator's.
 - **Registration is the step that gets skipped** — run `colab register`.
+- **A `docs/` with 3+ root entries and no index:** offer `templates/docs-README.md` (step 10, #686) —
+  an offer the maintainer accepts; it moves no existing file.
 - **Finish by proving the repo is visible:** `colab update .`, the audit and
   `colab register --list`, pasted onto the Issue; then return to §1.
-
 
 ## 3. `behind` — let the tool write only what is provably pristine
 

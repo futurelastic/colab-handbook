@@ -98,39 +98,39 @@ Read when you file a follow-up: [a1-follow-up.md](a1-follow-up.md).
 
 ### A2. Update repo docs the work made stale — not in `CLAUDE.md`
 
-The Issue is the feature's log; **docs in the repo are the living knowledge** the
-next person reads without digging through Issues. If this session changed any of
-these, update the doc **in the same session** (don't leave "will update later" in
-a comment while the file stays wrong). Four of the five destinations below are
-in `docs/` — the fifth, a comment at the call site, is not, and follows after
-them:
+The Issue is the feature's log; **docs in the repo are the living knowledge** the next person
+reads without digging through Issues. If this session changed any of these, update the doc **in
+the same session** (don't leave "will update later" in a comment while the file stays wrong). Four
+of the five destinations below are in `docs/` — the fifth, a comment at the call site, is not:
 
-- Domain model changed (new entity/table, renamed concept, new flow) → the
-  architecture doc — a single **running** description of the system as it is
-  now, edited in place.
+- Domain model changed (new entity/table, renamed concept, new flow) → the architecture doc — a
+  single **running** description of the system as it is now, edited in place.
 - Infra/ops changed (deploy, env, DNS, service account, runbook) → the deploy doc.
-- A **decision** worth a rationale-preserving record — chosen option, why,
-  alternatives rejected, consequences — not just what the system now looks
-  like → an ADR, **one file per decision**: `docs/adr/<issue>-<slug>.md`
-  (create the directory if missing).
-- A long-lived gotcha (bites again, not tied to one feature) → **one file per
-  gotcha**, `docs/gotchas.d/<issue>-<slug>.md` (create the directory if
-  missing) — never append it into whichever file is already in your context,
-  which is always the repo's instruction file (`AGENTS.md`, else `CLAUDE.md`).
+- A **decision** worth a rationale-preserving record — chosen option, why, alternatives rejected,
+  consequences — not just what the system now looks like → an ADR, **one file per decision**:
+  `docs/adr/<issue>-<slug>.md` (create the directory if missing).
+- A long-lived gotcha (bites again, not tied to one feature) → **one file per gotcha**,
+  `docs/gotchas.d/<issue>-<slug>.md` (create the directory if missing) — never append it into
+  whichever file is already in your context, which is always the repo's instruction file.
 
 The last two share one naming rule — see below — because they share one defect.
 
-**Rule:** every one of these lands on THIS BRANCH, in your worktree — a commit on the trunk
-checkout is a defect (#322). Write docs with absolute worktree paths; commit them in A4.
-Full text: [a2-on-this-branch.md](a2-on-this-branch.md).
+**Rule:** every one of these lands on THIS BRANCH, in your worktree — a commit on the trunk checkout
+is a defect (#322). Absolute worktree paths; commit in A4. Full text: [a2-on-this-branch.md](a2-on-this-branch.md).
 
 #### Design artifact — promote it out of exploration, onto this branch, right here (`CONVENTIONS.md` §5)
 
-**Rule:** a branch that followed a `⚖ Decision recorded` design ruling promotes its artifact to
-`docs/design/<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md` on this branch (superseded ones
-marked, never deleted); which branch carries it follows the size rule (#359). The ruling must
-postdate the review (#379) — if not, do not promote, and say so. No ruling ⇒ skip silently.
+**Rule:** a branch that followed a `⚖ Decision recorded` design ruling promotes its artifact into
+`docs/design/<slug>-<N>/` (`<slug>-<N>-spec.md`, `-mockup.html`, `frames/`, no copied fonts — #686) on
+this branch (superseded ones marked, never deleted); which branch carries it follows the size rule
+(#359). The ruling must postdate the review (#379) — if not, do not promote, and say so. No ruling ⇒ skip.
 Read when a design ruling landed on this branch: [a2-design-artifact.md](a2-design-artifact.md).
+
+#### The `docs/` layout — where each of these lands (#686)
+
+**Rule:** `docs/README.md` indexes each root entry (`merge=union`); lower-kebab names, no dates; plans
+and reports go on the Issue; reserved root names only on first content; existing files stay.
+Read when this branch adds a file or folder under `docs/`: [a2-docs-layout.md](a2-docs-layout.md).
 
 #### Or: a comment at the call site — when `docs/` is the expensive answer
 

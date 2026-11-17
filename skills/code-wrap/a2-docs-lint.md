@@ -9,7 +9,8 @@ behind them — moved here verbatim (#524).
 A2 above is about whether docs are still **true**; a separate, optional check
 handles whether the doc graph is still **structurally sound** — router links that
 resolve, `docs/` files nobody points to, drafts left where current truth lives,
-§-citations that resolve. If this repo has copied in `docs-lint.mjs`
+§-citations that resolve — and, since #686, the `docs/` layout above (checks 9–14:
+the index, transient and non-kebab names, design folders, image weight, copied fonts). If this repo has copied in `docs-lint.mjs`
 (`templates/docs-lint.mjs` — colab-handbook #249), this is the moment to run it:
 docs were just touched, so this is when a broken reference is cheapest to catch.
 
