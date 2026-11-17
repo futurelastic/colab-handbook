@@ -33,6 +33,25 @@ up globbed $'build/**/*.js\n!build/b/y.js' env
 up empty nothing-here env AS_IF_NO_FILES_FOUND=ignore
 
 [ "$real" = 1 ] || [ -f "$t/s3/artifacts/acme/widget/42/1/file/one.txt" ] || fail "file not keyed under owner/repo/run/attempt/name"
+# #756: the checksum mode reaches aws through the environment, not only through a config file a
+# native Windows aws.exe may not resolve; the config path is in native form wherever cygpath
+# exists; and the step names its client and confirms the client read that config.
+if [ "$real" = 0 ]; then
+  e="$(cat "$t/s3.env")"
+  case "$e" in *AWS_REQUEST_CHECKSUM_CALCULATION=when_required*) ;; *) fail "request checksum mode not exported: $e" ;; esac
+  case "$e" in *AWS_RESPONSE_CHECKSUM_VALIDATION=when_required*) ;; *) fail "response checksum mode not exported: $e" ;; esac
+  if command -v cygpath >/dev/null 2>&1; then
+    case "$e" in *AWS_CONFIG_FILE=/*|*AWS_SHARED_CREDENTIALS_FILE=/*) fail "a POSIX config path handed to aws: $e" ;; esac
+  fi
+  log="$(AS_NAME=file AS_PATH="$t/got/log" bash "$lib" download 2>&1)" || fail "download for the client report: $log"
+  case "$log" in *"artifact-store: client aws-cli/2.99.0 fake"*) ;; *) fail "the step must name its client: $log" ;; esac
+  case "$log" in *"did not read its config"*) fail "aws must read the private config: $log" ;; esac
+  # A client that cannot read the config (the #756 shape) is reported, and the step still succeeds.
+  log="$(AS_NAME=file AS_PATH="$t/got/log2" FAKE_AWS_NO_CONFIG=1 bash "$lib" download 2>&1)" \
+    || fail "an unread config must not fail the step: $log"
+  case "$log" in *"::warning title=artifact-store::aws did not read its config"*) ;; *) fail "an unread config must warn: $log" ;; esac
+  cmp -s one.txt "$t/got/log2/one.txt" || fail "download with an unread config"
+fi
 down file "$t/got/file"; cmp -s one.txt "$t/got/file/one.txt" || fail "file round-trip"
 down dir "$t/got/dir"
 [ -f "$t/got/dir/a.txt" ] && [ -f "$t/got/dir/sub/b.txt" ] || fail "directory round-trip"

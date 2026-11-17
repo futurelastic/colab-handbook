@@ -26,6 +26,9 @@ out() { [ -n "${GITHUB_OUTPUT:-}" ] && printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OU
 
 # Windows paths (D:\a\x) → /d/a/x, so one path logic serves all three OSes.
 topath() { if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+# …and back, for a path handed to a native Windows program in an env var (#756): C:/a/x, which a
+# native aws.exe and an MSYS/Cygwin build both open. Elsewhere, unchanged.
+topath_native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 abspath() { local p; p="$(topath "$1")"; case "$p" in /*) printf '%s' "$p" ;; *) printf '%s/%s' "$PWD" "$p" ;; esac; }
 trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
 truthy() { case "$1" in true|True|TRUE|1|yes) return 0 ;; *) return 1 ;; esac; }
@@ -82,10 +85,11 @@ pick_client() {
 AWS_EP=()
 setup_aws() {
   # A private config file, so the runner's own ~/.aws profile can neither leak in nor be edited.
-  export AWS_CONFIG_FILE="$WORK/aws-config" AWS_SHARED_CREDENTIALS_FILE="$WORK/aws-credentials"
-  unset AWS_PROFILE AWS_DEFAULT_PROFILE
-  : > "$AWS_SHARED_CREDENTIALS_FILE"
-  cat > "$AWS_CONFIG_FILE" <<EOF
+  # Written through the bash path, handed to aws in its native form: a native Windows aws.exe
+  # cannot be relied on to resolve /d/a/_temp/… (#756), and one it cannot read silently falls
+  # back to every default below — including the checksum mode a non-AWS store rejects.
+  : > "$WORK/aws-credentials"
+  cat > "$WORK/aws-config" <<EOF
 [default]
 region = $REGION
 request_checksum_calculation = when_required
@@ -95,10 +99,29 @@ s3 =
   multipart_threshold = $PART_SIZE
   multipart_chunksize = $PART_SIZE
 EOF
+  export AWS_CONFIG_FILE="$(topath_native "$WORK/aws-config")"
+  export AWS_SHARED_CREDENTIALS_FILE="$(topath_native "$WORK/aws-credentials")"
+  unset AWS_PROFILE AWS_DEFAULT_PROFILE
+  # The checksum mode again, as env vars: they hold whatever the client makes of the path above.
+  # AWS CLI 2.23+ otherwise sends a CRC trailer on PUT and asks for one on GET, and a store that is
+  # not AWS answers "signed header content-length is not present" (#756). Older CLIs ignore them.
+  export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
   [ -z "${AS_ACCESS_KEY:-}" ] || export AWS_ACCESS_KEY_ID="$AS_ACCESS_KEY"
   [ -z "${AS_SECRET_KEY:-}" ] || export AWS_SECRET_ACCESS_KEY="$AS_SECRET_KEY"
   export AWS_DEFAULT_REGION="$REGION" AWS_REGION="$REGION"
   [ -z "$ENDPOINT" ] || AWS_EP=(--endpoint-url "$ENDPOINT")
+  report_aws
+}
+# One line per step naming the client, and a check that it reads the private config: a client
+# that cannot is what #756 looked like from the outside (listing works, every GET fails). Never
+# fatal — the env vars above still carry the checksum mode — and `aws configure list` is not
+# called, because it prints the last four characters of the secret key.
+report_aws() {
+  local v got
+  v="$(aws --version 2>&1 | head -n 1)" || v="(aws --version failed)"
+  printf 'artifact-store: client %s\n' "$v"
+  got="$(aws configure get s3.addressing_style 2>/dev/null)" || got=""
+  [ "$got" = "$ADDRESSING" ] || warn "aws did not read its config at $AWS_CONFIG_FILE (s3.addressing_style read '${got}', want '$ADDRESSING'): the checksum mode still holds through the environment, but addressing-style and part-size fall back to the client's defaults."
 }
 
 setup_mc() {
