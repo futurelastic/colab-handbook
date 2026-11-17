@@ -3,9 +3,23 @@
 # makes — `s3 sync`, `s3 ls [--recursive]`, `s3 cp <file> s3://…` — from a directory,
 # $FAKE_S3_ROOT, holding <bucket>/<key>; cp's --content-type/--cache-control land beside it in
 # $FAKE_S3_ROOT.meta/<bucket>/<key>. Put this directory first on PATH. A test double only.
+# Also `--version` and `configure get <key>` (the step's client report, #756), the latter read
+# from $AWS_CONFIG_FILE as a real client would; and every s3 call records the AWS_* settings it
+# saw in $FAKE_S3_ROOT.env, so a test can assert what the action handed the client.
 set -euo pipefail
 root="${FAKE_S3_ROOT:?FAKE_S3_ROOT is not set}"
 if command -v cygpath >/dev/null 2>&1; then root="$(cygpath -u "$root")"; fi
+case "${1:-}" in
+  --version) echo "aws-cli/2.99.0 fake"; exit 0 ;;
+  configure)
+    [ "${2:-}" = get ] && [ -n "${3:-}" ] || { echo "fake aws: unsupported: $*" >&2; exit 252; }
+    [ -z "${FAKE_AWS_NO_CONFIG:-}" ] && [ -r "${AWS_CONFIG_FILE:-}" ] || exit 1   # NO_CONFIG: the #756 client
+    v="$(sed -n "s/^[[:space:]]*${3##*.}[[:space:]]*=[[:space:]]*//p" "$AWS_CONFIG_FILE" | head -n 1)"
+    [ -n "$v" ] || exit 1
+    printf '%s\n' "$v"; exit 0 ;;
+esac
+env | grep -E '^AWS_(CONFIG_FILE|SHARED_CREDENTIALS_FILE|REQUEST_CHECKSUM_CALCULATION|RESPONSE_CHECKSUM_VALIDATION)=' \
+  | sort > "$root.env" || true
 args=(); del=0; rec=0; ct=""; cc=""
 while [ $# -gt 0 ]; do
   case "$1" in

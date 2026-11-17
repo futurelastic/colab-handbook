@@ -96,6 +96,12 @@ gives `download-path`.
   pwsh would drift from the first.
 - The action writes its client configuration to a temporary directory for each step. The
   runner's own `~/.aws` and `~/.mc` are never read or changed.
+- **The AWS CLI checksum mode is set through the environment too** (`AWS_REQUEST_CHECKSUM_CALCULATION`
+  and `AWS_RESPONSE_CHECKSUM_VALIDATION` = `when_required`), not only in that config file. AWS CLI
+  2.23+ otherwise signs a checksum mode that S3-compatible stores reject ("signed header
+  content-length is not present"). On Windows the config path is handed to `aws.exe` in its
+  native form. Each step logs `aws --version`, and a warning if the client could not read the
+  config: then addressing-style and part-size fall back to the client's defaults (#756).
 - A runner that cannot meet these — a clean-install lane with no bash and no S3 client — uses
   `object` for its one file in and its one file out: [next section](#a-runner-with-no-bash-and-no-s3-client-object).
 
