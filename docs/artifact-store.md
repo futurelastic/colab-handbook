@@ -2,7 +2,9 @@
 
 `.github/actions/artifact-store/` holds two composite actions that replace
 `actions/upload-artifact` and `actions/download-artifact` one for one, storing through any
-S3-compatible bucket instead of the GitHub artifact allowance (#601).
+S3-compatible bucket instead of the GitHub artifact allowance (#601). A third, `object`, moves one
+file for a job on a runner that has no bash and no S3 client
+([below](#a-runner-with-no-bash-and-no-s3-client-object)) (#753).
 
 **Why it exists.** On a plan with a capped artifact allowance, both official actions stop working
 once the month's allowance is used. Deleting artifacts does not restore it, because the cap is
@@ -94,6 +96,123 @@ gives `download-path`.
   pwsh would drift from the first.
 - The action writes its client configuration to a temporary directory for each step. The
   runner's own `~/.aws` and `~/.mc` are never read or changed.
+- A runner that cannot meet these — a clean-install lane with no bash and no S3 client — uses
+  `object` for its one file in and its one file out: [next section](#a-runner-with-no-bash-and-no-s3-client-object).
+
+## A runner with no bash and no S3 client (`object`)
+
+A clean-install test lane is a Windows machine rolled back to a bare snapshot before every job, so
+that the installer is proven on a machine with nothing extra. It has no git, no bash and no S3
+client, on purpose. It still has to get the installer from an earlier job, and hand its logs back.
+
+`object` does exactly that, and nothing more: it gets or puts **one file**, in the same bucket and
+the same key layout as `upload` and `download`. So the persistent job uses `upload` as usual, and
+a later persistent job reads the bare job's logs with `download`. It runs under Windows PowerShell
+5.1 (the one shell a bare Windows image is sure to have; on Linux and macOS it uses `pwsh`) and
+signs its requests with the runner's own `curl`.
+
+```yaml
+jobs:
+  build:                      # persistent runner: bash + an S3 client, as usual
+    runs-on: [self-hosted, windows]
+    steps:
+      - run: Compress-Archive -Path dist/* -DestinationPath handoff.zip
+        shell: pwsh
+      - uses: ./.github/actions/artifact-store/upload
+        with:
+          name: installer
+          path: handoff.zip
+          endpoint: ${{ secrets.ARTIFACT_STORE_ENDPOINT }}
+          bucket: ${{ secrets.ARTIFACT_STORE_BUCKET }}
+          access-key: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          secret-key: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          region: ${{ secrets.ARTIFACT_STORE_REGION }}
+
+  clean-install:              # bare snapshot: Windows PowerShell + curl.exe, nothing else
+    needs: build
+    runs-on: [self-hosted, clean-install]
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: <handbook-owner>/colab-handbook/.github/actions/artifact-store/object@<tag or sha>
+        with:
+          mode: get
+          name: installer
+          file: handoff.zip
+          endpoint: ${{ secrets.ARTIFACT_STORE_ENDPOINT }}
+          bucket: ${{ secrets.ARTIFACT_STORE_BUCKET }}
+          access-key: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          secret-key: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          region: ${{ secrets.ARTIFACT_STORE_REGION }}
+      - run: |
+          Expand-Archive handoff.zip -DestinationPath dist
+          .\dist\install.ps1 *> install.log
+      - if: always()
+        run: Compress-Archive -Path install.log, $env:TEMP\*.log -DestinationPath logs.zip
+      - if: always()
+        uses: <handbook-owner>/colab-handbook/.github/actions/artifact-store/object@<tag or sha>
+        with:
+          mode: put
+          name: clean-install-logs
+          path: logs.zip
+          endpoint: ${{ secrets.ARTIFACT_STORE_ENDPOINT }}
+          bucket: ${{ secrets.ARTIFACT_STORE_BUCKET }}
+          access-key: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          secret-key: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          region: ${{ secrets.ARTIFACT_STORE_REGION }}
+```
+
+A later job on a persistent runner reads the logs with `download` and `name: clean-install-logs`.
+
+- **One file each way.** `put` refuses a directory; pack it into one archive first
+  (`Compress-Archive`). `file` is the file's path inside the artifact: `upload` of a single file
+  stores it under its own name, so `file: handoff.zip` above. `put` stores under the leaf name of
+  `path` unless `file` says otherwise.
+- **No job output to pass.** The bare job works out the key itself from the layout
+  ([Keys, and re-runs](#keys-and-re-runs)), so nothing passes through `needs.<job>.outputs`. That
+  matters: `upload`'s `key` output starts with the bucket name, and GitHub drops a job output that
+  contains a secret's value, which the bucket usually is.
+- **Re-runs behave as `download` does.** `get` tries this attempt, then each earlier one, and takes
+  the newest that holds the file. `put` writes under the current attempt.
+- **Remote call or copy, as with the other two.** The runner fetches a remote action itself, with
+  no git. A copied action needs `actions/checkout`, which downloads through the REST API when git
+  is missing.
+- **Inputs.** `mode` (`get` or `put`), `name`, `file`, `path`, `run-id` (get only), and `endpoint`,
+  `bucket`, `access-key`, `secret-key`, `region`, `key-prefix` exactly as for the other two.
+  Requests are always path-style. **Outputs:** `key` (put, without the bucket), `path` (get) and
+  `attempt`.
+
+**What the runner needs: curl 8.1.0 or newer**, as `curl.exe` on Windows. Windows 10 1803+ and
+Windows Server 2019+ ship `curl.exe`, but its version depends on the build and its updates, and
+early builds shipped a 7.x. That is too old: curl before 8.1.0 leaves the
+`x-amz-content-sha256` header unsigned, and an S3 store refuses every such request (measured on
+curl 7.75 to 7.88: "Header `x-amz-content-sha256` should be signed"). The step checks the version
+first, and if it is older it fails and says so. Check `curl.exe --version` on the snapshot once.
+The action never installs anything. The credentials need list permission on the bucket, as
+`download`'s do: without it, AWS answers 403 for a missing key instead of 404, and `get` reports
+that 403 as the store's error instead of looking in an earlier attempt.
+
+**Credentials stay out of the log and off the command line.** The secret key is masked, and it
+reaches curl on standard input (`curl -K -`), so it is never in curl's arguments.
+
+**Failures are loud, as with the other two.** A missing file fails with the key it looked for and
+the attempts it searched. A refused signature, a wrong region, a missing bucket or denied access
+fails with the store's own `Code` and `Message`. An unreachable store fails with curl's error. A
+failed `get` never leaves the error body behind as the file.
+
+**Why not a presigned URL.** It would make the bare job the simplest consumer of all
+(`Invoke-WebRequest`), and it was ruled out:
+
+- A SigV4 presigned URL carries the access key id in `X-Amz-Credential`. When the id is a
+  secret, GitHub drops the job output that carries the URL. Moving the id to a variable gets the
+  URL through, but the URL is then a bearer credential for its whole lifetime, in a place every
+  later job can read.
+- The bare job's queue time (waiting for a snapshot roll-back) sets how long the URL must live.
+- `put` needs a presigned PUT URL. `aws s3 presign` makes only GET URLs, so the persistent job
+  would need another tool.
+
+So `object` signs on the bare runner itself, with the secrets the job already has.
 
 ## Keys, and re-runs
 
@@ -192,6 +311,14 @@ when re-running a release job that failed after its publish step).
   runs on a different runner with a different workspace, and finds the files only through the
   run key. MinIO stopped publishing images and binaries, which is why the test uses SeaweedFS
   and builds `mc` from source. That build is test-only.
+- **Bare-runner path (#753).** `object` runs against a real store twice. On Linux it runs
+  against Garage, which enforces a region other than `us-east-1` (`test/garage.sh`; SeaweedFS
+  ignores the region, so a region bug passes there). There it is interleaved with the bash actions
+  both ways: `upload` → `get`, `put` → `download`. On Windows every step runs in Windows PowerShell
+  5.1 with the inbox `curl.exe`, against SeaweedFS's Windows binary. `test/object.ps1` is the
+  script's own check, of attempts, encoded names, a wrong secret, a wrong region and the
+  refusals. It needs a real store (`AS_ENDPOINT`, `AS_BUCKET`, `AS_ACCESS_KEY`, `AS_SECRET_KEY`,
+  `AS_REGION`).
 - **Local check.** `scripts/smoke.sh` runs the hermetic round-trip.
   `.github/actions/artifact-store/test/roundtrip.sh` runs the same checks against any real
   store when `AS_ENDPOINT`, `AS_BUCKET`, `AS_ACCESS_KEY`, `AS_SECRET_KEY` and `AS_CLIENT` are

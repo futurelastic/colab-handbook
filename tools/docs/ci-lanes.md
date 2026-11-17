@@ -128,7 +128,8 @@ The rule: [CONVENTIONS.md, *CI artifacts — your own store, not the allowance (
 
 **Files passed between jobs go through a store the organisation owns, not GitHub's capped
 artifact allowance** — `.github/actions/artifact-store/`, one for one with the official actions
-(`mode: publish` for release files): [`docs/artifact-store.md`](../../docs/artifact-store.md).
+(`mode: publish` for release files, `object` for a runner with no bash and no S3 client):
+[`docs/artifact-store.md`](../../docs/artifact-store.md).
 
 ## Self-hosted runners — capacity is the agent count, not the machine (#355)
 

@@ -5,6 +5,10 @@
 #               between two jobs, once per client (aws, mc). A store started in a job dies with it,
 #               so its data dir rides to the next job in actions/cache — the consuming job is a
 #               different runner and workspace, and finds the files only through the run key.
+#   bare-linux / bare-windows — object/ (#753), the single-file path for a runner with no bash and
+#               no S3 client. Linux: against Garage, which ENFORCES a non-default region (SeaweedFS
+#               ignores it, #752), interleaved with the bash actions both ways. Windows: every step in
+#               Windows PowerShell 5.1 with the inbox curl.exe, against a native SeaweedFS.
 name: artifact-store
 on:
   push:
@@ -20,6 +24,8 @@ permissions:
   contents: read
 env:
   SEAWEEDFS_IMAGE: chrislusf/seaweedfs:4.48
+  SEAWEEDFS_VERSION: '4.48'   # the same release, as a Windows binary for bare-windows
+  GARAGE_IMAGE: dxflrs/garage:v1.1.0
   # Test-only: built from source because MinIO stopped publishing mc binaries. The action itself
   # never installs a client.
   MC_VERSION: RELEASE.2025-08-13T08-35-41Z
@@ -221,3 +227,200 @@ jobs:
           diff -r fx/tree "got/all/dir-$CLIENT"
           test "$MISSING" = failure
           echo "round-trip between two jobs through the store: ok ($CLIENT)"
+
+  bare-linux:
+    name: Bare-runner path (Linux, region-enforcing store)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GARAGE_REGION: eu-north-9
+      STORE: http://127.0.0.1:3900   # garage.sh start mints a throwaway key into AK / SK
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Start a store that enforces its region
+        run: bash .github/actions/artifact-store/test/garage.sh start
+      - name: Pack the hand-off (the persistent job's side)
+        run: |
+          mkdir -p inst && head -c 300000 /dev/urandom > inst/setup.exe
+          (cd inst && zip -q ../handoff.zip setup.exe)
+      - name: Upload it with the bash action
+        uses: ./.github/actions/artifact-store/upload
+        with:
+          name: installer
+          path: handoff.zip
+          if-no-files-found: error
+          endpoint: ${{ env.STORE }}
+          bucket: artifacts
+          access-key: ${{ env.AK }}
+          secret-key: ${{ env.SK }}
+          region: ${{ env.GARAGE_REGION }}
+          client: aws
+      - name: Get it with the object action
+        id: get
+        uses: ./.github/actions/artifact-store/object
+        with:
+          mode: get
+          name: installer
+          file: handoff.zip
+          path: fetched/handoff.zip
+          endpoint: ${{ env.STORE }}
+          bucket: artifacts
+          access-key: ${{ env.AK }}
+          secret-key: ${{ env.SK }}
+          region: ${{ env.GARAGE_REGION }}
+      - name: Pack its logs (the bare job's side)
+        shell: pwsh
+        run: Compress-Archive -Path fetched/handoff.zip -DestinationPath logs.zip
+      - name: Put the logs with the object action
+        id: put
+        uses: ./.github/actions/artifact-store/object
+        with:
+          mode: put
+          name: clean-install-logs
+          path: logs.zip
+          endpoint: ${{ env.STORE }}
+          bucket: artifacts
+          access-key: ${{ env.AK }}
+          secret-key: ${{ env.SK }}
+          region: ${{ env.GARAGE_REGION }}
+      - name: Read the logs back with the bash action
+        uses: ./.github/actions/artifact-store/download
+        with:
+          name: clean-install-logs
+          path: back
+          endpoint: ${{ env.STORE }}
+          bucket: artifacts
+          access-key: ${{ env.AK }}
+          secret-key: ${{ env.SK }}
+          region: ${{ env.GARAGE_REGION }}
+          client: aws
+      - name: A missing object must fail
+        id: missing
+        continue-on-error: true
+        uses: ./.github/actions/artifact-store/object
+        with:
+          mode: get
+          name: never-uploaded
+          file: x.zip
+          endpoint: ${{ env.STORE }}
+          bucket: artifacts
+          access-key: ${{ env.AK }}
+          secret-key: ${{ env.SK }}
+          region: ${{ env.GARAGE_REGION }}
+      - name: Compare
+        env:
+          MISSING: ${{ steps.missing.outcome }}
+          GOT_ATTEMPT: ${{ steps.get.outputs.attempt }}
+          PUT_KEY: ${{ steps.put.outputs.key }}
+        run: |
+          cmp handoff.zip fetched/handoff.zip
+          cmp logs.zip back/logs.zip
+          test "$MISSING" = failure
+          test "$GOT_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          test "$PUT_KEY" = "$GITHUB_REPOSITORY/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/clean-install-logs/logs.zip"
+          echo "bash upload -> object get, object put -> bash download, region $GARAGE_REGION: ok"
+      - name: The object script's own checks (attempts, encoding, wrong secret, wrong region, refusals)
+        shell: pwsh
+        env:
+          AS_ENDPOINT: ${{ env.STORE }}
+          AS_BUCKET: artifacts
+          AS_ACCESS_KEY: ${{ env.AK }}
+          AS_SECRET_KEY: ${{ env.SK }}
+          AS_REGION: ${{ env.GARAGE_REGION }}
+          AS_EXPECT_REGION_CHECK: 'true'
+        run: '& ./.github/actions/artifact-store/test/object.ps1; exit $LASTEXITCODE'
+      - name: Stop the store
+        if: always()
+        run: bash .github/actions/artifact-store/test/garage.sh stop
+
+  bare-windows:
+    name: Bare-runner path (Windows PowerShell 5.1, no bash)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: powershell   # every step: the bare lane has Windows PowerShell and curl.exe, nothing else
+    env:
+      REGION: eu-north-9    # SeaweedFS ignores it; signed for anyway, as on the real lane
+      STORE: http://127.0.0.1:8333
+      AK: testkey
+      SK: testsecret
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: The tools this path relies on
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          curl.exe --version
+      - name: Start a store (SeaweedFS's Windows binary — test-only)
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $d = Join-Path $env:RUNNER_TEMP 'weed'
+          Invoke-WebRequest -UseBasicParsing "https://github.com/seaweedfs/seaweedfs/releases/download/$env:SEAWEEDFS_VERSION/windows_amd64.zip" -OutFile "$d.zip"
+          Expand-Archive -LiteralPath "$d.zip" -DestinationPath $d
+          $weed = (Get-ChildItem -LiteralPath $d -Recurse -Filter weed.exe | Select-Object -First 1).FullName
+          [void](New-Item -ItemType Directory -Path "$d\data")
+          $cfg = Join-Path $env:GITHUB_WORKSPACE '.github\actions\artifact-store\test\seaweedfs-s3.json'
+          Start-Process -FilePath $weed -ArgumentList @('server', "-dir=$d\data", '-s3', "-s3.config=$cfg", '-ip.bind=127.0.0.1') `
+            -RedirectStandardOutput "$d\out.log" -RedirectStandardError "$d\err.log" -WindowStyle Hidden
+          for ($i = 0; $i -lt 90; $i++) {
+            # credentials on stdin (-K -), as the action passes them
+            $code = ('user = "' + $env:AK + ':' + $env:SK + '"') | curl.exe -s -K - -o NUL -w '%{http_code}' --aws-sigv4 "aws:amz:${env:REGION}:s3" -X PUT "$env:STORE/artifacts"
+            if ($code -eq '200') { Write-Output 'store: up, bucket artifacts'; exit 0 }
+            Start-Sleep -Seconds 1
+          }
+          Get-Content "$d\err.log" -Tail 30; exit 1
+      - name: The object script's own checks, under Windows PowerShell 5.1
+        env:
+          AS_ENDPOINT: ${{ env.STORE }}
+          AS_BUCKET: artifacts
+          AS_ACCESS_KEY: ${{ env.AK }}
+          AS_SECRET_KEY: ${{ env.SK }}
+          AS_REGION: ${{ env.REGION }}
+        run: '& .\.github\actions\artifact-store\test\object.ps1; exit $LASTEXITCODE'
+      - name: Write a log
+        run: |
+          [void](New-Item -ItemType Directory -Path logs -Force)
+          [IO.File]::WriteAllText("$PWD\logs\clean install.log", "installer exit 0`r`n")
+      - name: Put it with the object action
+        uses: ./.github/actions/artifact-store/object
+        with:
+          mode: put
+          name: win-logs
+          path: logs/clean install.log
+          endpoint: ${{ env.STORE }}
+          bucket: artifacts
+          access-key: ${{ env.AK }}
+          secret-key: ${{ env.SK }}
+          region: ${{ env.REGION }}
+      - name: Get it back with the object action
+        uses: ./.github/actions/artifact-store/object
+        with:
+          mode: get
+          name: win-logs
+          file: clean install.log
+          path: got\clean install.log
+          endpoint: ${{ env.STORE }}
+          bucket: artifacts
+          access-key: ${{ env.AK }}
+          secret-key: ${{ env.SK }}
+          region: ${{ env.REGION }}
+      - name: A missing object must fail
+        id: missing
+        continue-on-error: true
+        uses: ./.github/actions/artifact-store/object
+        with:
+          mode: get
+          name: never-uploaded
+          file: x.zip
+          endpoint: ${{ env.STORE }}
+          bucket: artifacts
+          access-key: ${{ env.AK }}
+          secret-key: ${{ env.SK }}
+          region: ${{ env.REGION }}
+      - name: Compare
+        env:
+          MISSING: ${{ steps.missing.outcome }}
+        run: |
+          if ((Get-FileHash -LiteralPath 'logs\clean install.log').Hash -ne (Get-FileHash -LiteralPath 'got\clean install.log').Hash) { Write-Output 'round-trip changed the file'; exit 1 }
+          if ($env:MISSING -ne 'failure') { Write-Output 'a missing object must fail'; exit 1 }
+          Write-Output 'object put -> get under Windows PowerShell 5.1: ok'
