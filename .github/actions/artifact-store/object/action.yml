@@ -1,0 +1,87 @@
+# colab-handbook artifact-store/object (#753) — ONE file to or from the store, for a runner with no
+# bash and no S3 client: PowerShell plus the runner's own curl (8.1.0+) only. Same store, same key
+# layout as upload/ and download/, so either side of a hand-off can be the bash actions.
+# Doc: docs/artifact-store.md, section "A runner with no bash and no S3 client".
+name: artifact-store object
+description: Get or put one file in an S3-compatible store from a runner that has only PowerShell and curl — no bash, no S3 client.
+inputs:
+  mode:
+    description: get — fetch one file an earlier job uploaded | put — send one file, readable by artifact-store/download.
+    required: true
+  name:
+    description: Artifact name — the same name upload/ wrote or download/ will read.
+    required: true
+  file:
+    description: The file's path inside the artifact (e.g. handoff.zip). get needs it; put defaults to the leaf name of `path`.
+    default: ''
+  path:
+    description: get — where to write the file (default the file's own name in the working directory). put — the one local file to send.
+    default: ''
+  run-id:
+    description: (get) Read another run's artifact. Defaults to this run.
+    default: ''
+  endpoint:
+    description: S3 endpoint URL (e.g. https://s3.example.com). Empty means https://s3.<region>.amazonaws.com. Requests are always path-style.
+    default: ''
+  bucket:
+    description: Bucket name.
+    required: true
+  access-key:
+    description: Access key id — pass from a secret.
+    default: ''
+  secret-key:
+    description: Secret access key — pass from a secret.
+    default: ''
+  region:
+    description: Region the requests are signed for — the store's own; a self-hosted store set to another region refuses us-east-1.
+    default: us-east-1
+  key-prefix:
+    description: Optional prefix before every key — the same value the upload/download call sites use.
+    default: ''
+outputs:
+  key:
+    description: (put) The object key written, without the bucket.
+    value: ${{ steps.windows.outputs.key || steps.other.outputs.key }}
+  path:
+    description: (get) The local file written.
+    value: ${{ steps.windows.outputs.path || steps.other.outputs.path }}
+  attempt:
+    description: The run attempt the object was written under (put) or read from (get).
+    value: ${{ steps.windows.outputs.attempt || steps.other.outputs.attempt }}
+runs:
+  using: composite
+  steps:
+    # Windows PowerShell 5.1 (`powershell`) is the one shell a bare Windows image is sure to have;
+    # pwsh is not installed there. Elsewhere `powershell` does not exist, hence two steps, one script.
+    - id: windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      env:
+        AS_NAME: ${{ inputs.name }}
+        AS_FILE: ${{ inputs.file }}
+        AS_PATH: ${{ inputs.path }}
+        AS_RUN_ID: ${{ inputs.run-id }}
+        AS_ENDPOINT: ${{ inputs.endpoint }}
+        AS_BUCKET: ${{ inputs.bucket }}
+        AS_ACCESS_KEY: ${{ inputs.access-key }}
+        AS_SECRET_KEY: ${{ inputs.secret-key }}
+        AS_REGION: ${{ inputs.region }}
+        AS_KEY_PREFIX: ${{ inputs.key-prefix }}
+        AS_MODE: ${{ inputs.mode }}
+      run: '& (Join-Path $env:GITHUB_ACTION_PATH "object.ps1") $env:AS_MODE; exit $LASTEXITCODE'
+    - id: other
+      if: runner.os != 'Windows'
+      shell: pwsh
+      env:
+        AS_NAME: ${{ inputs.name }}
+        AS_FILE: ${{ inputs.file }}
+        AS_PATH: ${{ inputs.path }}
+        AS_RUN_ID: ${{ inputs.run-id }}
+        AS_ENDPOINT: ${{ inputs.endpoint }}
+        AS_BUCKET: ${{ inputs.bucket }}
+        AS_ACCESS_KEY: ${{ inputs.access-key }}
+        AS_SECRET_KEY: ${{ inputs.secret-key }}
+        AS_REGION: ${{ inputs.region }}
+        AS_KEY_PREFIX: ${{ inputs.key-prefix }}
+        AS_MODE: ${{ inputs.mode }}
+      run: '& (Join-Path $env:GITHUB_ACTION_PATH "object.ps1") $env:AS_MODE; exit $LASTEXITCODE'

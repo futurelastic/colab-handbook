@@ -21,6 +21,12 @@ for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit
          .githooks/pre-commit .githooks/pre-commit.d/*; do sh -n "$f"; done
 bash -n .github/actions/artifact-store/lib/artifact-store.sh
 bash .github/actions/artifact-store/test/roundtrip.sh     # hermetic, through the fake client (#601)
+bash -n .github/actions/artifact-store/test/garage.sh
+# object/ runs under Windows PowerShell 5.1, which reads a .ps1 with no BOM in the ANSI code page:
+# its scripts stay pure ASCII (#753). The real round-trip needs a store, so it is CI's (bare-* jobs).
+node -e 'let bad=0; for (const f of process.argv.slice(1)) require("fs").readFileSync(f, "latin1").split("\n").forEach((l, i) => {
+  if (/[^\x00-\x7f]/.test(l)) { console.error(`${f}:${i + 1}: a non-ASCII byte - Windows PowerShell 5.1 would misread it`); bad = 1; } }); process.exit(bad)' \
+  .github/actions/artifact-store/object/object.ps1 .github/actions/artifact-store/test/object.ps1
 node scripts/check-text-bytes.mjs
 node audit/audit.mjs --local . >/dev/null
 node scripts/check-pack-allowlist.mjs
