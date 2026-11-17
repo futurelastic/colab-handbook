@@ -7,7 +7,7 @@
  * WHY THIS FILE LIVES HERE rather than next to the template: the same
  * reasoning as tools/lib/identity-hook.test.js for the shell hook templates —
  * `node --check templates/docs-lint.mjs` (CI's syntax-check step) proves the
- * file parses, not that any of its 8 checks fire on the right input and stay
+ * file parses, not that any of its 14 checks fire on the right input and stay
  * quiet on the wrong one. The script is invoked as a real subprocess against
  * throwaway fixture directories, exactly like identity-hook.test.js drives
  * its shell artifacts — no new machinery needed.
@@ -56,7 +56,7 @@ function findingsFor(report, checkPrefix) {
   return r.findings;
 }
 
-test('docs-lint: clean repo (router + one linked doc) reports no findings on checks 1-6, exit 0', () => {
+test('docs-lint: clean repo (router + one linked doc) reports no findings on checks 1-6 and 9-14, exit 0', () => {
   const dir = mkfixture({
     'CLAUDE.md': '# Router\n\nSee [good](docs/good.md).\n',
     'docs/good.md': '# Good\n\n## 1. Section\nText.\n',
@@ -69,7 +69,7 @@ test('docs-lint: clean repo (router + one linked doc) reports no findings on che
   // check doing its job (the receipt principle: never look silent when a
   // path was never there to inspect), not a false positive to assert away.
   for (const r of report.results) {
-    if (r.name.startsWith('7') || r.name.startsWith('8')) continue;
+    if (r.name.startsWith('7 ') || r.name.startsWith('8 ')) continue;
     assert.equal(r.findings.length, 0, `${r.name} should be clean: ${JSON.stringify(r.findings)}`);
   }
 });
@@ -313,4 +313,90 @@ test('docs-lint: AGENTS.md is the router when there is no CLAUDE.md (#417)', () 
 test('docs-lint: an @-mention in a code span, an escaping path, or user@host is not a shell import (#417)', () => {
   const dir = mkfixture({ 'CLAUDE.md': 'Use `@AGENTS.md`; mail me@AGENTS.md; @../AGENTS.md\n', 'AGENTS.md': '# Rules\n' });
   assert.equal(run(dir).config.router, 'CLAUDE.md');
+});
+
+// --- #686: the docs/ layout (checks 9-14) — one fixture per check, each WARN-only ---------
+
+const names = (report, prefix) => findingsFor(report, prefix).map((f) => f.message);
+
+test('docs-lint: check 9 warns on 3+ root entries with no index, and on a root entry the index never names (#686)', () => {
+  const none = run(mkfixture({ 'CLAUDE.md': '# R\n', 'docs/a.md': '# A\n', 'docs/b.md': '# B\n', 'docs/adr/1-x.md': '# X\n' }));
+  assert.equal(findingsFor(none, '9 ').length, 1);
+  assert.match(names(none, '9 ')[0], /3 root entries and no docs\/README\.md/);
+  // two entries and no index is not nagged — the same threshold handbook-sync offers the template at
+  assert.deepEqual(findingsFor(run(mkfixture({ 'docs/a.md': '# A\n', 'docs/b.md': '# B\n' })), '9 '), []);
+
+  const partial = run(mkfixture({
+    'docs/README.md': '# Docs\n\n- [a](a.md)\n- `adr/` — decisions\n- [design](./design/README.md)\n',
+    'docs/a.md': '# A\n', 'docs/adr/1-x.md': '# X\n', 'docs/design/README.md': '# D\n', 'docs/forgotten.md': '# F\n',
+  }));
+  assert.equal(partial.hasFail, false);
+  assert.deepEqual(names(partial, '9 '), [
+    'docs/forgotten.md is a root entry of docs/ that docs/README.md never names — add its line to the index',
+  ]);
+});
+
+test('docs-lint: check 10 warns on plan/proposal/report/audit names and dated non-markdown names, never a middle word (#686)', () => {
+  const report = run(mkfixture({
+    'docs/migration-plan.md': '# P\n', 'docs/plans/x.md': '# X\n', 'docs/audit-2025.md': '# A\n',
+    'docs/shots/2026-03-01-home.png': 'png',
+    'docs/planning-model.md': '# ok\n', 'docs/adr/536-handoff-missing-plan-rationale.md': '# ok\n',
+    'docs/2026-03-01-notes.md': '# check 5, not 10\n',
+  }));
+  const msgs = names(report, '10 ');
+  assert.equal(msgs.length, 4, JSON.stringify(msgs));
+  for (const f of ['docs/migration-plan.md', 'docs/plans/x.md', 'docs/audit-2025.md', 'docs/shots/2026-03-01-home.png']) {
+    assert.ok(msgs.some((m) => m.startsWith(f)), `${f} not flagged: ${JSON.stringify(msgs)}`);
+  }
+  assert.equal(findingsFor(report, '5 ').length, 1); // the dated .md stays check 5's
+});
+
+test('docs-lint: check 11 warns on a non-kebab name once per directory, exempting README.md and _assets (#686)', () => {
+  const report = run(mkfixture({
+    'docs/DEPLOY.md': '# D\n', 'docs/Specs/a.md': '# A\n', 'docs/Specs/b.md': '# B\n', 'docs/my_notes.md': '# N\n',
+    'docs/README.md': '# I\n', 'docs/design/_assets/inter.css': '', 'docs/gotchas.d/12-x.md': '# G\n', 'docs/a.test.md': '# T\n',
+  }));
+  assert.deepEqual(names(report, '11 ').map((m) => m.split(' ')[0]).sort(), ['docs/DEPLOY.md', 'docs/Specs/', 'docs/my_notes.md']);
+});
+
+test('docs-lint: check 12 warns on a loose design file and a folder not named <slug>-<N> (#686)', () => {
+  const report = run(mkfixture({
+    'docs/design/README.md': '# Designs\n',
+    'docs/design/onboard-88/onboard-88-spec.md': '# S\n', 'docs/design/onboard-88/frames/1.png': 'png',
+    'docs/design/_assets/inter.woff2': 'f',
+    'docs/design/login-12-mockup.html': '<p>flat</p>', 'docs/design/123/spec.md': '# bare number\n',
+  }));
+  const msgs = names(report, '12 ');
+  assert.equal(msgs.length, 2, JSON.stringify(msgs));
+  assert.match(msgs.find((m) => m.includes('login-12')), /sits loose in docs\/design\/.*lazy migration/);
+  assert.match(msgs.find((m) => m.includes('/123/')), /not named <slug>-<N>/);
+});
+
+test('docs-lint: check 13 warns on an image over 1 MB under docs/, not on a small one (#686)', () => {
+  const report = run(mkfixture({ 'docs/big.png': Buffer.alloc(1024 * 1024 + 1), 'docs/small.png': Buffer.alloc(1024), 'docs/big.pdf': Buffer.alloc(2 * 1024 * 1024) }));
+  const msgs = names(report, '13 ');
+  assert.equal(msgs.length, 1, JSON.stringify(msgs));
+  assert.match(msgs[0], /^docs\/big\.png is 1\.0 MB/);
+});
+
+test('docs-lint: check 14 warns on a font inside a design folder, never in _assets/ (#686)', () => {
+  const report = run(mkfixture({
+    'docs/design/onboard-88/fonts/inter.woff2': 'f', 'docs/design/onboard-88/Inter.TTF': 'f',
+    'docs/design/_assets/fonts/inter.woff2': 'f', 'docs/fonts/outside-design.woff2': 'f',
+  }));
+  assert.deepEqual(names(report, '14 ').map((m) => m.split(' ')[0]).sort(), ['docs/design/onboard-88/Inter.TTF', 'docs/design/onboard-88/fonts/inter.woff2']);
+});
+
+test('docs-lint: the layout checks only warn — a repo with every layout finding still exits 0 (#686)', () => {
+  const dir = mkfixture({
+    'docs/a.md': '# A\n', 'docs/b.md': '# B\n', 'docs/q3-report.md': '# R\n', 'docs/UPPER.md': '# U\n',
+    'docs/design/x-mockup.html': '', 'docs/design/x-1/x.woff': 'f', 'docs/huge.jpg': Buffer.alloc(1024 * 1024 + 1),
+  });
+  const report = run(dir);
+  for (const p of ['9 ', '10 ', '11 ', '12 ', '13 ', '14 ']) {
+    const fs_ = findingsFor(report, p);
+    assert.ok(fs_.length > 0, `check ${p} should fire`);
+    assert.ok(fs_.every((f) => f.severity === 'warn'), `check ${p} must be WARN only`);
+  }
+  execFileSync('node', [SCRIPT, '--repo', dir], { stdio: 'pipe' }); // must not throw
 });

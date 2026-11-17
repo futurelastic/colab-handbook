@@ -139,6 +139,8 @@ it, never a substitute.
 - **`exposure: released`:** the release rung (§6) is wired in the same pass; the route and the
   disarmed deploy template are proposals, the first final is the operator's.
 - **Registration is the step that gets skipped** — run `colab register`.
+- **A `docs/` with 3+ root entries and no index:** offer `templates/docs-README.md` (step 10, #686) —
+  an offer the maintainer accepts; it moves no existing file.
 - **Finish by proving the repo is visible:** `colab update .`, the audit and
   `colab register --list`, pasted onto the Issue; then return to §1.
 

@@ -126,11 +126,20 @@ Full text: [a2-on-this-branch.md](a2-on-this-branch.md).
 
 #### Design artifact — promote it out of exploration, onto this branch, right here (`CONVENTIONS.md` §5)
 
-**Rule:** a branch that followed a `⚖ Decision recorded` design ruling promotes its artifact to
-`docs/design/<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md` on this branch (superseded ones
-marked, never deleted); which branch carries it follows the size rule (#359). The ruling must
+**Rule:** a branch that followed a `⚖ Decision recorded` design ruling promotes its artifact into
+its own folder, `docs/design/<slug>-<N>/` (`<slug>-<N>-spec.md`, `<slug>-<N>-mockup.html`, `frames/`;
+no copied fonts — #686) on this branch (superseded ones marked, never deleted); which branch
+carries it follows the size rule (#359). The ruling must
 postdate the review (#379) — if not, do not promote, and say so. No ruling ⇒ skip silently.
 Read when a design ruling landed on this branch: [a2-design-artifact.md](a2-design-artifact.md).
+
+#### The `docs/` layout — where each of these lands (#686)
+
+**Rule:** `docs/README.md` is the index, one line per root entry, `merge=union` in
+`.gitattributes`; names are lower-kebab-case with no dates (the issue number is the only key);
+plans, reports and session notes never go in `docs/` — they go on the Issue; the reserved root
+names are created only when their first content arrives. Existing files stay (lazy migration).
+Read when this branch adds a file or folder under `docs/`: [a2-docs-layout.md](a2-docs-layout.md).
 
 #### Or: a comment at the call site — when `docs/` is the expensive answer
 

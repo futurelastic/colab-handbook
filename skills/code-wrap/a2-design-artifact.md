@@ -17,10 +17,19 @@ scratch/exploration home with instructions not to promote it: that leaves the
 next session touching the same surface to pay the design lane's boot cost again,
 from nothing, as if the ruling never happened.
 
-- File it `docs/design/<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md`, per
-  `CONVENTIONS.md` §5's
-  naming — commit it as a deliverable path in A4, same as any other file this
-  session produced.
+- File it in its own folder, `docs/design/<slug>-<N>/`, as
+  `<slug>-<N>-spec.md` and/or `<slug>-<N>-mockup.html`, with any frames under
+  that folder's `frames/` — per `CONVENTIONS.md` §5's naming (#686). The file
+  names are the ones the flat rule used, one directory level down. Commit it as
+  a deliverable path in A4, same as any other file this session produced.
+- **Never copy fonts or shared CSS into the folder.** Link the design-system
+  package, or point at the one shared copy in `docs/design/_assets/`. Copied
+  fonts are what put one repo at 454 font files for 11 unique ones.
+- **A flat file already on trunk stays where it is** (lazy migration, the same
+  as issue-keyed naming). A new ruling for that surface goes in a folder; the
+  old flat file is marked superseded in place, not moved.
+- **Add the folder's line to `docs/design/README.md`**, the index of what lives
+  under `docs/design/` (`CONVENTIONS.md` §5) — one line per folder.
 - **Superseded artifacts are marked, never deleted** — trunk carries the design
   lineage. Replacing an earlier ruling's file for the same surface adds the new
   one and marks the old one superseded; it does not overwrite or remove it.

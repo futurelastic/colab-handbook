@@ -7,7 +7,8 @@ behind them — moved here verbatim (#524).
 #### UI-affecting issues — also grade against the design artifact, when one exists (`CONVENTIONS.md` §5)
 
 When the harvested set touches a UI surface and `docs/design/` carries an artifact
-for it (`<slug>-<N>-mockup.html` / `<slug>-<N>-spec.md` — `CONVENTIONS.md`
+for it (`<slug>-<N>-mockup.html` / `<slug>-<N>-spec.md`, in the folder
+`docs/design/<slug>-<N>/` or, from before #686, flat in `docs/design/` — `CONVENTIONS.md`
 [§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design
 conclusions are three units, not two*), grade the diff against that artifact too,
 alongside the plan's own oracle — not instead of it: a diff can satisfy the plan's
