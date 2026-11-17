@@ -37,14 +37,29 @@
 # artifact per platform named `<artifact-prefix><os>-<arch>`, then:
 #
 #   dist:
-#     needs: [build]                       # your matrix build, one upload-artifact per platform
+#     needs: [build]                       # your matrix build, one artifact-store/upload per platform
 #     uses: ./.github/workflows/dist-refs.yml
 #     permissions:
 #       contents: write
+#     secrets: inherit                     # the artifact-store secrets below — a called workflow
+#                                          # reads no secret it is not passed
 #     with:
 #       version: ${{ needs.release.outputs.tag }}            # vX.Y.Z or vX.Y.Z-rc.N
 #       platforms: darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64
 #       bin: mytool                                          # EDIT: the launcher's binary name
+#
+# THE ARTIFACTS GO THROUGH YOUR ARTIFACT STORE, not GitHub's capped artifact allowance
+# (CONVENTIONS.md §7, "CI artifacts", #601). The build uploads each platform with
+# artifact-store/upload, and the download step below reads them back with
+# artifact-store/download, both with the same five secrets: ARTIFACT_STORE_ENDPOINT,
+# ARTIFACT_STORE_BUCKET, ARTIFACT_STORE_ACCESS_KEY, ARTIFACT_STORE_SECRET_KEY and
+# ARTIFACT_STORE_REGION (docs/artifact-store.md in the handbook). Pass them with
+# `secrets: inherit` as above, or one by one under `secrets:`. With no bucket secret the
+# download runs with `backend: github`, i.e. GitHub's own artifact action, so a copy works
+# before its store exists — the build's uploads must then use the same fallback.
+# ⚠ REGION: requests are signed for the region and default to us-east-1. A store configured
+# with any other region answers 400 to every GET signed for the wrong one, so set
+# ARTIFACT_STORE_REGION and pass it on every call site, uploads included.
 #
 # Each artifact must hold the binary at its top level, named `<bin>` (`<bin>.exe` on win32-*).
 # Anything else in the artifact rides along in the same ref and is covered by SHA256SUMS.
@@ -92,6 +107,24 @@ on:
         required: false
         type: string
         default: 'dist-'
+    # The artifact store's connection (#601). All optional: with no bucket the download falls
+    # back to GitHub's artifact action. `secrets: inherit` from the caller passes them too.
+    secrets:
+      ARTIFACT_STORE_ENDPOINT:
+        description: 'S3 endpoint URL. Empty means the AWS default endpoint.'
+        required: false
+      ARTIFACT_STORE_BUCKET:
+        description: 'Bucket the build uploaded to. Empty = backend github.'
+        required: false
+      ARTIFACT_STORE_ACCESS_KEY:
+        description: 'Access key id for the store.'
+        required: false
+      ARTIFACT_STORE_SECRET_KEY:
+        description: 'Secret access key for the store.'
+        required: false
+      ARTIFACT_STORE_REGION:
+        description: 'Region the store signs for. Empty means us-east-1.'
+        required: false
 
 permissions:
   contents: write
@@ -120,10 +153,26 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      # Through the artifact store (#601): the secrets and the region trap are in the header.
+      # EDIT: `@HANDBOOK_TAG` is the handbook release this copy calls — `colab template` writes
+      # the version it stamps; by hand, pin a tag or a commit, never a branch. Copied the action
+      # into this repo instead? `uses: ./.github/actions/artifact-store/download`.
+      - name: Download the per-platform artifacts
+        uses: futurelastic/colab-handbook/.github/actions/artifact-store/download@HANDBOOK_TAG
         with:
+          # Empty name + pattern = every `<artifact-prefix>*` artifact of this run, each in
+          # dist-in/<name>/ — the layout the push step reads.
           pattern: ${{ inputs.artifact-prefix }}*
           path: dist-in
+          # No bucket secret → GitHub's own artifact action, unchanged. The bucket, not the
+          # endpoint, decides: an empty endpoint is a real store (the AWS default), a missing
+          # bucket is none.
+          backend: ${{ secrets.ARTIFACT_STORE_BUCKET != '' && 's3' || 'github' }}
+          endpoint: ${{ secrets.ARTIFACT_STORE_ENDPOINT }}
+          bucket: ${{ secrets.ARTIFACT_STORE_BUCKET }}
+          access-key: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          secret-key: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          region: ${{ secrets.ARTIFACT_STORE_REGION }}
 
       - name: Push one orphan ref per platform
         env:
