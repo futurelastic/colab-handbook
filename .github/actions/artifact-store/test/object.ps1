@@ -32,7 +32,8 @@ function Fail([string]$msg) { Done 1 "object test: FAIL - $msg" }
 function Run([string]$mode, [string]$name, [string]$file, [string]$path, [string]$attempt = '1') {
   $env:AS_NAME = $name; $env:AS_FILE = $file; $env:AS_PATH = $path; $env:GITHUB_RUN_ATTEMPT = $attempt
   $env:GITHUB_OUTPUT = Join-Path $t 'out'
-  $text = (& $obj $mode 2>&1 | Out-String)
+  # ::add-mask:: lines are dropped: echoed back inside a FAIL message they would print the secret.
+  $text = ((& $obj $mode 2>&1) | Where-Object { "$_" -notmatch '^::add-mask::' } | Out-String)
   return @{ exit = $LASTEXITCODE; text = $text }
 }
 function Bytes([string]$p) { return [Convert]::ToBase64String([IO.File]::ReadAllBytes($p)) }

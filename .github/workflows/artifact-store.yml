@@ -360,9 +360,13 @@ jobs:
           $weed = (Get-ChildItem -LiteralPath $d -Recurse -Filter weed.exe | Select-Object -First 1).FullName
           [void](New-Item -ItemType Directory -Path "$d\data")
           $cfg = Join-Path $env:GITHUB_WORKSPACE '.github\actions\artifact-store\test\seaweedfs-s3.json'
-          # -ip too: without it the master advertises the runner's LAN address and cannot reach itself
-          Start-Process -FilePath $weed -ArgumentList @('server', "-dir=$d\data", '-s3', "-s3.config=$cfg", '-ip=127.0.0.1', '-ip.bind=127.0.0.1') `
-            -RedirectStandardOutput "$d\out.log" -RedirectStandardError "$d\err.log" -WindowStyle Hidden
+          # -ip too: without it the master advertises the runner's LAN address and cannot reach itself.
+          # Win32_Process.Create, not Start-Process: the runner ends a step's process tree with the
+          # step, and the store has to outlive this one.
+          [void](New-Item -ItemType Directory -Path "$d\logs")
+          $cl = '"{0}" server -dir="{1}\data" -s3 -s3.config="{2}" -ip=127.0.0.1 -ip.bind=127.0.0.1 -logdir="{1}\logs"' -f $weed, $d, $cfg
+          $p = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cl; CurrentDirectory = $d }
+          if ($p.ReturnValue -ne 0) { Write-Output "could not start the store (Win32_Process.Create returned $($p.ReturnValue))"; exit 1 }
           $k = Join-Path $env:RUNNER_TEMP 'bucket.cfg'
           [IO.File]::WriteAllText($k, ('user = "' + $env:AK + ':' + $env:SK + '"' + "`n"), (New-Object System.Text.UTF8Encoding $false))
           for ($i = 0; $i -lt 90; $i++) {
@@ -371,7 +375,7 @@ jobs:
             if ($code -eq '200') { Write-Output 'store: up, bucket artifacts'; exit 0 }
             Start-Sleep -Seconds 1
           }
-          Get-Content "$d\err.log" -Tail 30; exit 1
+          Get-ChildItem "$d\logs" -File | ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 15 }; exit 1
       - name: The object script's own checks, under Windows PowerShell 5.1
         env:
           AS_ENDPOINT: ${{ env.STORE }}
