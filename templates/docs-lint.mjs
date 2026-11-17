@@ -12,6 +12,12 @@
 // know whether a gotcha is still true; that stays with `code-wrap`'s stale-docs
 // step and a human hygiene pass. This split is deliberate (colab-handbook #249).
 //
+// Checks 9-14 (colab-handbook #686) read the `docs/` LAYOUT `code-wrap` A2
+// states: an index (`docs/README.md`, one line per root entry), no plan/
+// proposal/report/audit or dated names, lower-kebab-case names, one folder per
+// design issue (`docs/design/<slug>-<N>/`), images under 1 MB, and fonts only
+// in `docs/design/_assets/`. All WARN — existing files may stay where they are.
+//
 // ZERO DEPENDENCIES. Plain Node (>= 18), no npm install, no package.json needed
 // to run it — only `node:fs`, `node:path`, (for the receipt hashes below) the
 // builtin `node:crypto`, and `node:child_process` to shell out to `git
@@ -428,6 +434,9 @@ const LINK_RE = /\]\(([^)#\s]*\.md)?#?([^)\s]*)\)/g;
 // A simpler "does this file link anywhere" scanner for the orphan check
 // (check 2), which only needs the TARGET path, not the fragment.
 const ANY_MD_LINK_RE = /\]\(([^)#\s]+\.md)(#[^)\s]*)?\)/g;
+// Any link target, markdown or not (`](adr/)`, `](design/README.md)`) — the
+// index check (9) asks which docs/ root entries a link reaches, files or folders.
+const ANY_LINK_TARGET_RE = /\]\(([^)#\s]+)(#[^)\s]*)?\)/g;
 
 function isExternalTarget(t) {
   return /^[a-z][a-z0-9+.-]*:/i.test(t) || t.startsWith("//");
@@ -925,6 +934,254 @@ function checkTwoSurfaceLinkage(ctx) {
   return { receipt };
 }
 
+// ===========================================================================
+// Checks 9-14 — the docs/ LAYOUT (colab-handbook #686; `code-wrap` A2,
+// a2-docs-layout.md). Every one is WARN: a layout finding is a tidy-up for the
+// repo's own issue, never a broken reference, and existing files are allowed
+// to stay where they are (lazy migration). They read FILE NAMES, not content,
+// and they see every file under docs/ — not only markdown — because the
+// patterns they look for (a 6 MB screenshot, a font copied into a design
+// folder, a loose mockup.html) are mostly not markdown.
+// ===========================================================================
+
+// Every file under docs/ (any extension), repo-relative, git-ignore filtered.
+// Cached on ctx: six checks share one walk and one `git check-ignore` call.
+function docsAllFiles(ctx) {
+  if (ctx.docsAll) return ctx.docsAll;
+  const { repoRoot, config } = ctx;
+  const out = [];
+  const exists = existsSync(join(repoRoot, config.docsDir));
+  const stack = [config.docsDir];
+  while (exists && stack.length) {
+    const rel = stack.pop();
+    let entries;
+    try { entries = readdirSync(join(repoRoot, rel), { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const childRel = `${rel}/${e.name}`;
+      if (SKIP_DIR_RE.test(`/${childRel}/`)) continue;
+      if (e.isDirectory()) stack.push(childRel);
+      else if (e.isFile()) out.push(childRel.split(sep).join("/"));
+    }
+  }
+  const { files } = ctx.ignoreFilter(out.sort());
+  ctx.docsAll = { exists, files };
+  return ctx.docsAll;
+}
+
+// A file's size, as a receipt input: layout checks never read content.
+function sizeOf(repoRoot, rel) {
+  try { return statSync(join(repoRoot, rel)).size; } catch { return 0; }
+}
+
+// Check 9 — the index. `docs/README.md` names every ROOT entry of docs/ (one
+// line per entry — a link to it, or the name in backticks); entries below the
+// root are reached through their own directory's README, which is check 2's
+// business, not this one. No index at all is only a finding once docs/ has
+// INDEX_MIN_ENTRIES root entries — the same threshold handbook-sync uses to
+// offer templates/docs-README.md, so a two-file docs/ is never nagged.
+const INDEX_MIN_ENTRIES = 3;
+const INDEX_NAMES = ["README.md", "INDEX.md"];
+
+function checkDocsIndex(ctx) {
+  const { repoRoot, config, findings } = ctx;
+  const receipt = makeReceipt();
+  const check = "9 docs-index";
+  const { exists, files } = docsAllFiles(ctx);
+  if (!exists) {
+    receipt.note = `${config.docsDir}/ does not exist — nothing to index`;
+    return { receipt };
+  }
+  const prefix = `${config.docsDir}/`;
+  const roots = [...new Set(files.map((f) => f.slice(prefix.length).split("/")[0]))].sort();
+  const indexName = INDEX_NAMES.find((n) => roots.includes(n));
+  const entries = roots.filter((r) => !INDEX_NAMES.includes(r));
+  for (const r of roots) receipt.add(`${prefix}${r}`, ""); // the root listing is what was read
+  if (!indexName) {
+    if (entries.length >= INDEX_MIN_ENTRIES) {
+      findings.warn(check, `${config.docsDir}/ has ${entries.length} root entries and no ${config.docsDir}/README.md — add an index, one line per root entry (templates/docs-README.md), with \`${config.docsDir}/README.md merge=union\` in .gitattributes`);
+    }
+    receipt.note = `${entries.length} root entr(y/ies), no index`;
+    return { receipt };
+  }
+  const indexPath = `${prefix}${indexName}`;
+  const text = readFileSafeText(join(repoRoot, indexPath)) ?? "";
+  receipt.add(indexPath, text);
+  const named = new Set();
+  ANY_LINK_TARGET_RE.lastIndex = 0;
+  let m;
+  while ((m = ANY_LINK_TARGET_RE.exec(text))) {
+    const raw = m[1];
+    if (isExternalTarget(raw) || PLACEHOLDER_TARGET_RE.test(raw)) continue;
+    named.add(resolveRepoPath(config.docsDir, raw).slice(prefix.length).split("/")[0]);
+  }
+  for (const t of text.matchAll(/`\.?\/?([^`/\s]+)\/?`/g)) named.add(t[1]);
+  let missing = 0;
+  for (const e of entries) {
+    if (named.has(e)) continue;
+    missing++;
+    findings.warn(check, `${prefix}${e} is a root entry of ${config.docsDir}/ that ${indexPath} never names — add its line to the index`);
+  }
+  receipt.note = `${entries.length} root entr(y/ies) vs ${indexPath}, ${missing} not indexed`;
+  return { receipt };
+}
+
+// Check 10 — transient names. Plans, proposals, reports, audits and session
+// notes are the Issue's, not current truth's. The signal is the word as the
+// FIRST or LAST word of a name under docs/ (`plan.md`, `q3-report.md`,
+// `audit-2025.md`, `plans/`), after a leading issue number is dropped — never a
+// substring (`planning-model.md`, `airplane.md`), and never a middle word, so
+// an issue-keyed record whose TOPIC is a plan (`536-handoff-missing-plan-
+// rationale.md`, measured on this handbook's own docs/adr/) stays quiet. A
+// dated MARKDOWN name is check 5's (left alone, so one file never warns
+// twice); a dated name on any other file (`2026-03-01-shot.png`) is reported here.
+const TRANSIENT_WORDS = new Set(["plan", "plans", "proposal", "proposals", "report", "reports", "audit", "audits"]);
+
+function transientWord(rel) {
+  for (const seg of rel.split("/")) {
+    const words = seg.replace(/\.[^.]*$/, "").toLowerCase().split(/[-_.]+/).filter(Boolean);
+    while (words.length && /^\d+$/.test(words[0])) words.shift();
+    for (const w of [words[0], words[words.length - 1]]) if (w && TRANSIENT_WORDS.has(w)) return w;
+  }
+  return null;
+}
+
+function checkTransientNames(ctx) {
+  const { repoRoot, config, findings } = ctx;
+  const receipt = makeReceipt();
+  const check = "10 transient-names";
+  const { files } = docsAllFiles(ctx);
+  const prefix = `${config.docsDir}/`;
+  let flagged = 0;
+  for (const f of files) {
+    receipt.add(f, String(sizeOf(repoRoot, f)));
+    const rel = f.slice(prefix.length);
+    const word = transientWord(rel);
+    if (word) {
+      flagged++;
+      findings.warn(check, `${f} is named as a ${word.replace(/s$/, "")} — plans, proposals, reports, audits and session notes go on the Issue, not in ${config.docsDir}/ (current truth)`);
+    } else if (!/\.md$/i.test(f) && DATED_NAME_RE.test(rel)) {
+      flagged++;
+      findings.warn(check, `${f} has a dated name — the issue number is the only key under ${config.docsDir}/`);
+    }
+  }
+  receipt.note = `${files.length} name(s) checked, ${flagged} transient`;
+  return { receipt };
+}
+
+// Check 11 — lower-kebab-case names. Every path segment below docs/ is
+// lower-case letters, digits and hyphens, with dot-separated extensions
+// (`gotchas.d`, `x.test.md`). Two exemptions: README.md (any case of the
+// extension), and ONE leading underscore, which marks a shared support folder
+// (`design/_assets/`) rather than content.
+const KEBAB_SEGMENT_RE = /^_?[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*$/;
+
+function checkKebabNames(ctx) {
+  const { repoRoot, config, findings } = ctx;
+  const receipt = makeReceipt();
+  const check = "11 kebab-names";
+  const { files } = docsAllFiles(ctx);
+  const prefix = `${config.docsDir}/`;
+  const reported = new Set();
+  for (const f of files) {
+    receipt.add(f, String(sizeOf(repoRoot, f)));
+    const segs = f.slice(prefix.length).split("/");
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i];
+      const last = i === segs.length - 1;
+      if (last && /^readme\.md$/i.test(seg)) continue;
+      if (KEBAB_SEGMENT_RE.test(seg)) continue;
+      const where = `${prefix}${segs.slice(0, i + 1).join("/")}${last ? "" : "/"}`;
+      if (reported.has(where)) break; // one finding per offending directory, not one per file in it
+      reported.add(where);
+      findings.warn(check, `${where} is not lower-kebab-case — names under ${config.docsDir}/ are lower-case words joined by hyphens (README.md excepted)`);
+      break;
+    }
+  }
+  receipt.note = `${files.length} path(s) checked, ${reported.size} non-kebab name(s)`;
+  return { receipt };
+}
+
+// Check 12 — design artifacts live in one folder per design issue,
+// `design/<slug>-<N>/` (spec, mockup, frames/). Flagged: a loose file at the
+// design root (README.md, the folder's index, excepted) and a first-level
+// folder that is not `<slug>-<N>` — a bare number (`design/123/`) included —
+// apart from `_assets/`, the one shared copy of fonts and CSS. What sits
+// INSIDE a well-named folder is that folder's own business.
+const DESIGN_FOLDER_RE = /^[a-z0-9]+(-[a-z0-9]+)*-\d+$/;
+
+function checkDesignLayout(ctx) {
+  const { repoRoot, config, findings } = ctx;
+  const receipt = makeReceipt();
+  const check = "12 design-layout";
+  const designDir = `${config.docsDir}/design`;
+  const inDesign = docsAllFiles(ctx).files.filter((f) => f.startsWith(`${designDir}/`));
+  if (inDesign.length === 0) {
+    receipt.note = `${designDir}/ has no files — nothing to check`;
+    return { receipt };
+  }
+  const badFolders = new Set();
+  let loose = 0;
+  for (const f of inDesign) {
+    receipt.add(f, String(sizeOf(repoRoot, f)));
+    const segs = f.slice(designDir.length + 1).split("/");
+    if (segs.length === 1) {
+      if (/^readme\.md$/i.test(segs[0])) continue;
+      loose++;
+      findings.warn(check, `${f} sits loose in ${designDir}/ — a design artifact belongs in ${designDir}/<slug>-<N>/ (a file already here may stay — lazy migration; new ones go in a folder)`);
+    } else if (segs[0] !== "_assets" && !DESIGN_FOLDER_RE.test(segs[0]) && !badFolders.has(segs[0])) {
+      badFolders.add(segs[0]);
+      findings.warn(check, `${designDir}/${segs[0]}/ is not named <slug>-<N> — one folder per design issue, slug first, issue number last`);
+    }
+  }
+  receipt.note = `${inDesign.length} file(s) under ${designDir}/, ${loose} loose, ${badFolders.size} misnamed folder(s)`;
+  return { receipt };
+}
+
+// Check 13 — image weight. An image over IMAGE_MAX_BYTES under docs/ is
+// weight every clone carries forever; export it smaller, or link it.
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|tiff?|svg|heic)$/i;
+const IMAGE_MAX_BYTES = 1024 * 1024;
+
+function checkLargeImages(ctx) {
+  const { repoRoot, config, findings } = ctx;
+  const receipt = makeReceipt();
+  const check = "13 large-images";
+  const images = docsAllFiles(ctx).files.filter((f) => IMAGE_EXT_RE.test(f));
+  let flagged = 0;
+  for (const f of images) {
+    const size = sizeOf(repoRoot, f);
+    receipt.add(f, String(size));
+    if (size > IMAGE_MAX_BYTES) {
+      flagged++;
+      findings.warn(check, `${f} is ${(size / 1024 / 1024).toFixed(1)} MB — over the 1 MB advisory ceiling for an image under ${config.docsDir}/; export it smaller`);
+    }
+  }
+  receipt.note = `${images.length} image(s) checked, ${flagged} over 1 MB`;
+  return { receipt };
+}
+
+// Check 14 — fonts in design folders. A design folder links the design-system
+// package, or the one shared copy in `design/_assets/` — it never carries its
+// own fonts (measured: 454 font files for 11 unique ones, one repo).
+const FONT_EXT_RE = /\.(woff2?|ttf|otf|eot)$/i;
+
+function checkDesignFonts(ctx) {
+  const { repoRoot, config, findings } = ctx;
+  const receipt = makeReceipt();
+  const check = "14 design-fonts";
+  const designDir = `${config.docsDir}/design`;
+  const fonts = docsAllFiles(ctx).files.filter((f) => f.startsWith(`${designDir}/`) && FONT_EXT_RE.test(f));
+  let flagged = 0;
+  for (const f of fonts) {
+    receipt.add(f, String(sizeOf(repoRoot, f)));
+    if (f.startsWith(`${designDir}/_assets/`)) continue;
+    flagged++;
+    findings.warn(check, `${f} is a font copied into a design folder — link the design-system package, or keep one copy in ${designDir}/_assets/`);
+  }
+  receipt.note = `${fonts.length} font file(s) under ${designDir}/, ${flagged} outside _assets/`;
+  return { receipt };
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -938,6 +1195,12 @@ const CHECKS = [
   ["6 section-citations", checkGotchaCitations],
   ["7 gotchas-d-registry", checkGotchasDRegistry],
   ["8 two-surface-linkage", checkTwoSurfaceLinkage],
+  ["9 docs-index", checkDocsIndex],
+  ["10 transient-names", checkTransientNames],
+  ["11 kebab-names", checkKebabNames],
+  ["12 design-layout", checkDesignLayout],
+  ["13 large-images", checkLargeImages],
+  ["14 design-fonts", checkDesignFonts],
 ];
 
 function main() {

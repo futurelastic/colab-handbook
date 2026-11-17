@@ -1962,7 +1962,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.design.03 | default |  | Record the ruling with colab decision --record, never as prose alone with the label cleared by hand. | never as prose alone with the label cleared by hand | CONVENTIONS.md | #361 |
 | C5c.design.04 | default |  | Approval of a finished artifact is asked once the artifact exists, never at filing, with a Mockup: line in the issue body. | Approval of a finished artifact is asked once | CONVENTIONS.md | #379 |
 | C5c.design.05 | default |  | Only a ruling recorded after the review approves the artifact; an earlier ruling does not. | Only a ruling recorded **after** that review approves the artifact | CONVENTIONS.md | #379 |
-| C5c.design.06 | default |  | Unit 2, the artifact, is a repo file under docs/design/ named <slug>-<N>-mockup.html or <slug>-<N>-spec.md, landing via a claimed docs branch. | a repo file under `docs/design/`, named | CONVENTIONS.md | — |
+| C5c.design.06 | default |  | Unit 2, the artifact, is a repo file in its own folder docs/design/<slug>-<N>/, named <slug>-<N>-mockup.html or <slug>-<N>-spec.md (frames in its frames/), landing via a claimed docs branch. | a repo file in its own folder, `docs/design/<slug>-<N>/` | CONVENTIONS.md | #686 |
 | C5c.design.07 | default |  | Superseded artifacts are marked, never deleted; trunk carries the design lineage. | Superseded artifacts are marked, never deleted | CONVENTIONS.md | — |
 | C5c.design.08 | default |  | Unit 3, the frozen evidence, is a screenshot of the approved option attached to the ruling comment. | a screenshot of the approved option attached to the ruling | CONVENTIONS.md | — |
 | C5c.design.09 | default |  | Rejected alternatives need never land on trunk; their screenshot on the Issue is the whole record. | Rejected alternatives need never land | CONVENTIONS.md | — |
@@ -1975,6 +1975,8 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.design.16 | default |  | Consumer docs link to code-triage §6 instead of restating it. | Consumer docs should link to | CONVENTIONS.md | #356 |
 | C5c.design.17 | default |  | A ruling given elsewhere and never recorded does not block, but must be written down as unit 1 with colab decision --record --ruled-by <human>; triage reports it and does not treat it as a gate. | A ruling given elsewhere and never recorded does not block either | CONVENTIONS.md | — |
 | C5c.design.18 | default |  | The index of what lives under docs/design/ belongs in that directory itself, never in CLAUDE.md, which gets one pointer row. | belongs in that directory itself | CONVENTIONS.md | — |
+| C5c.design.19 | default |  | Fonts and shared CSS are never copied into a design folder: link the design-system package, or keep one docs/design/_assets/ copy. | Fonts and shared CSS are never copied in | CONVENTIONS.md | #686 |
+| C5c.design.20 | default |  | Existing flat design files stay where they are (lazy migration); the rest of the docs/ layout is code-wrap A2's. | Existing flat files stay where they are (lazy migration | CONVENTIONS.md | #686 |
 | C5c.expl.44 | explanation |  | Rationale moved to the ADR: Design conclusions: missing artifact. | Following it stalls settled work, measured at about a day | docs/adr/94-planning-and-conclusion-writing-rationale.md | — |
 
 ### Design exploration files its Issue first — before the first mockup, not after

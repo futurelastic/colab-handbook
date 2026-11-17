@@ -136,6 +136,13 @@ as stubs, so every link into them still resolves. Mechanics of `colab adopt`, `c
    reserved-ports aggregation. Unregistered = invisible to the fleet audit.
 8. **Leave existing branches alone** — grandfathered.
 9. **Do not create `dev`** unless the repo is genuinely Tier A or Tier C.
+10. **Offer a `docs/` index** (#686) when `docs/` has three or more root entries and neither
+    `docs/README.md` nor `docs/INDEX.md`: copy [`templates/docs-README.md`](../../templates/docs-README.md)
+    to `docs/README.md`, one line per existing root entry, and add `docs/README.md merge=union`
+    to `.gitattributes`. An offer, not a precondition. It is the maintainer's to accept, and it
+    moves no existing file: tidying the rest of `docs/` (names, design folders, binaries) is
+    that repo's own issue, never part of adoption
+    ([`code-wrap` A2, *The `docs/` layout*](../code-wrap/a2-docs-layout.md)).
 
 Why, with the measurements: [ADR 539](../../docs/adr/539-adoption-first-time-rationale.md).
 

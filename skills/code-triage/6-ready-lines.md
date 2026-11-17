@@ -105,7 +105,7 @@ not after:
 READY  feat/onboard-redesign-88   #88
        why: cheap and unblocking; trunk CI green 2h ago
        files: resources/js/Onboard/*.tsx
-       design: docs/design/onboard-88-spec.md present — build to it
+       design: docs/design/onboard-88/onboard-88-spec.md present — build to it
        start: colab claim 88 --worktree onboard-redesign-88
 ```
 
@@ -126,7 +126,9 @@ BLOCKED #88  blocked by #87 (delivery:design, new surface) — clears: the desig
 Four states. The first three mirror the ruling's table exactly. The fourth is about
 the ruling's record, not the artifact:
 
-- **present** — name the file(s) found under `docs/design/` for this slug/issue.
+- **present** — name the file(s) found under `docs/design/` for this slug/issue: the
+  folder `docs/design/<slug>-<N>/` (#686), or a flat `<slug>-<N>-spec.md` /
+  `<slug>-<N>-mockup.html` left from before it (lazy migration). Look in both.
 - **absent** — say so plainly. Absence is not a gate here, and it never calls for adding
   `needs-decision` to the build issue: a small change builds and `code-wrap` A2 promotes
   its artifact, and a new surface takes the design issue below. **Before you print

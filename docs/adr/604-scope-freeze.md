@@ -31,7 +31,8 @@ Tiers, room, exposure, recovery, writes and channels · `project.yml` · branche
 batch landing, "has it landed" · worktrees, ports and place-claims · **the git claim ref**
 (`refs/claims/*`, which stays as the git-level fence) · ship and landing mechanics · release
 mechanics (cut, channels, notes, distribution) · CI templates, toolchain and runners · conformance
-and sync · adoption · `solo`.
+and sync · adoption · `solo` · the `docs/` layout a landed change's docs go into (#686, the owner's
+ruling of 2026-11-07: per-issue design folders, the index, the names, `docs-lint`'s layout checks).
 
 Where a frozen gate needs a fact (touches migrations, trunk red, docs-only, exposure lowered),
 `colab` keeps **detecting and reporting** that fact. Only the decision moves out.
