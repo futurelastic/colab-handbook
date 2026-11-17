@@ -363,8 +363,8 @@ jobs:
           # -ip too: without it the master advertises the runner's LAN address and cannot reach itself.
           # Win32_Process.Create, not Start-Process: the runner ends a step's process tree with the
           # step, and the store has to outlive this one.
-          [void](New-Item -ItemType Directory -Path "$d\logs")
-          $cl = '"{0}" server -dir="{1}\data" -s3 -s3.config="{2}" -ip=127.0.0.1 -ip.bind=127.0.0.1 -logdir="{1}\logs"' -f $weed, $d, $cfg
+          # Through cmd only to keep the store's output in a file (runner paths have no spaces).
+          $cl = 'cmd.exe /c {0} server -dir={1}\data -s3 -s3.config={2} -ip=127.0.0.1 -ip.bind=127.0.0.1 > {1}\out.log 2>&1' -f $weed, $d, $cfg
           $p = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cl; CurrentDirectory = $d }
           if ($p.ReturnValue -ne 0) { Write-Output "could not start the store (Win32_Process.Create returned $($p.ReturnValue))"; exit 1 }
           $k = Join-Path $env:RUNNER_TEMP 'bucket.cfg'
@@ -375,7 +375,8 @@ jobs:
             if ($code -eq '200') { Write-Output 'store: up, bucket artifacts'; exit 0 }
             Start-Sleep -Seconds 1
           }
-          Get-ChildItem "$d\logs" -File | ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 15 }; exit 1
+          Get-Process weed -ErrorAction SilentlyContinue | Format-Table Id, StartTime
+          Get-Content -LiteralPath "$d\out.log" -Tail 30 -ErrorAction SilentlyContinue; exit 1
       - name: The object script's own checks, under Windows PowerShell 5.1
         env:
           AS_ENDPOINT: ${{ env.STORE }}
