@@ -131,6 +131,22 @@ test('renderForRepo: CI templates only, and only when a trunk is declared', () =
   assert.strictEqual(tt.renderForRepo('release-auto', 'x refs/heads/main', { trunk: 'master' }), 'x refs/heads/main');
 });
 
+// #754: release-tag and dist-refs call the artifact-store action at `@HANDBOOK_TAG`. `colab template` pins every
+// .yml it writes, so the render `colab update` compares against must pin them too — else a fresh copy reads as
+// hand-edited. Their main/dev refs are still not touched: trunk substitution stays CI-template-only.
+test('renderForRepo: the handbook pin applies to non-CI templates too, the trunk refs do not (#754)', () => {
+  for (const name of ['release-tag', 'dist-refs']) {
+    const body = read(`${name}.yml`);
+    assert.match(body, /artifact-store\/download@HANDBOOK_TAG$/m, `${name}.yml calls the store at the pin token`);
+    assert.doesNotMatch(body, /actions\/download-artifact@/, `${name}.yml no longer calls actions/download-artifact`);
+    const out = tt.renderForRepo(name, body, { trunk: 'master' }, 'v1.9.0');
+    assert.match(out, /artifact-store\/download@v1\.9\.0$/m);
+    assert.doesNotMatch(out, /@HANDBOOK_TAG/);
+    assert.strictEqual(out, tt.pinHandbookTag(body, 'v1.9.0').text, 'pin only — no trunk substitution outside ci-*');
+    assert.strictEqual(tt.renderForRepo(name, body, { trunk: 'master' }), body, 'no version, nothing pinned');
+  }
+});
+
 test('colab update: a CI copy rendered for its repo still reads pristine (behind), a hand edit still diverged (#526)', () => {
   const stamp = require('./stamp.js');
   const hb = stamp.handbookInfo(REPO_ROOT);

@@ -76,8 +76,10 @@ function substituteTrunk(text, p) {
  * a refreshed file stays byte-identical to what `colab template <name> --force` would write.
  */
 function renderForRepo(name, body, doc, version) {
-  if (!/^ci-/.test(String(name || ''))) return body;
+  // The pin applies to every template, as `colab template` writes it (#754: release-tag and dist-refs
+  // call the artifact-store action at `@HANDBOOK_TAG`); only the trunk refs are CI-template-only.
   const pinned = version ? pinHandbookTag(body, version).text : body;
+  if (!/^ci-/.test(String(name || ''))) return pinned;
   const p = protectedRefs(doc);
   return p ? substituteTrunk(pinned, p).text : pinned;
 }

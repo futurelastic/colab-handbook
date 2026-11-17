@@ -85,6 +85,18 @@ env:
   # is no artifact lying around from the CI run on main. To use this you must add a
   # build job to THIS file that uploads an artifact, and make the release job
   # `needs:` it. Left false because most of our repos build on the deploy target.
+  #
+  # The files come through the organisation's artifact store, not GitHub's capped
+  # artifact allowance (CONVENTIONS.md §7, "CI artifacts", #601): the "Download build
+  # artifacts" step calls artifact-store/download, so your build job uploads with
+  # artifact-store/upload and the same five secrets — ARTIFACT_STORE_ENDPOINT,
+  # ARTIFACT_STORE_BUCKET, ARTIFACT_STORE_ACCESS_KEY, ARTIFACT_STORE_SECRET_KEY and
+  # ARTIFACT_STORE_REGION (docs/artifact-store.md in the handbook). Until the bucket
+  # secret exists the step runs with `backend: github`, i.e. GitHub's own artifact
+  # action, so a fresh copy works before its store does.
+  # ⚠ REGION: requests are signed for the region and default to us-east-1. A store
+  # configured with any other region answers 400 to every GET signed for the wrong one,
+  # so set ARTIFACT_STORE_REGION — on the upload call site too, not just this one.
   ATTACH_ARTIFACTS: "false"
   # Empty means every artifact from this run.
   ARTIFACT_NAME: ""
@@ -228,13 +240,26 @@ jobs:
           # Same summary into the run page, so it is readable without opening Releases.
           cat /tmp/body.md >> "$GITHUB_STEP_SUMMARY"
 
+      # Through the artifact store (#601): see ATTACH_ARTIFACTS above for the secrets and
+      # the region trap. EDIT: `@HANDBOOK_TAG` is the handbook release this copy calls —
+      # `colab template` writes the version it stamps; by hand, pin a tag or a commit, never
+      # a branch. Copied the action into this repo instead? `uses: ./.github/actions/artifact-store/download`.
       - name: Download build artifacts
         if: env.ATTACH_ARTIFACTS == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: futurelastic/colab-handbook/.github/actions/artifact-store/download@HANDBOOK_TAG
         with:
-          # Empty name = every artifact produced by this run.
+          # Empty name = every artifact produced by this run, each in release-artifacts/<name>/.
           name: ${{ env.ARTIFACT_NAME }}
           path: release-artifacts
+          # No bucket secret yet → GitHub's own artifact action, unchanged. The bucket, not the
+          # endpoint, decides: an empty endpoint is a real store (the AWS default), a missing
+          # bucket is none.
+          backend: ${{ secrets.ARTIFACT_STORE_BUCKET != '' && 's3' || 'github' }}
+          endpoint: ${{ secrets.ARTIFACT_STORE_ENDPOINT }}
+          bucket: ${{ secrets.ARTIFACT_STORE_BUCKET }}
+          access-key: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          secret-key: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          region: ${{ secrets.ARTIFACT_STORE_REGION }}
         continue-on-error: true
 
       - name: List artifacts to attach
