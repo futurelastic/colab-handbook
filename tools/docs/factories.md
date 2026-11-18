@@ -78,7 +78,8 @@ ssh-keygen -Y verify -f <allowed_signers> -I <factory> -n colab-verdict -s <sig 
 - **Claim comment.** `· factory \`<id>\`` after the `· machine` field and before the `· session` tail,
   so an older colab parses the comment exactly as before and ignores the field. Omitted when no
   factory is named, which keeps the comment byte-identical to the earlier format.
-- **Hand-off marker.** `<!-- colab:handoff branch=<branch> head=<full sha> factory=<id> -->`
+- **Hand-off marker.** `<!-- colab:handoff branch=<branch> head=<full sha> gate=<word> factory=<id> -->`
+  (`gate=` and its optional `gate-reason=`, #757, come before `factory=`)
   ([code-wrap](../../skills/code-wrap/handoff-last-word.md)). `colab ship --handoff` matches the
   executor's claim by login **and** factory.
 - **Readers.** Two claims that both name a factory and name different ones are two holders, whatever
