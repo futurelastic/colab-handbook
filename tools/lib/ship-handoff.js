@@ -101,11 +101,12 @@ function namesBranch(body, branch) {
 }
 
 /**
- * #685/#743 — the hand-off marker code-wrap opens the comment with:
- * `<!-- colab:handoff branch=<branch> head=<full sha> [factory=<id>] -->` → `{ branch, head, factory,
- * fields }` (`factory` '' when absent), or null when the body holds none. Fields are space-separated
- * `key=value` pairs in any order; a value holds no space. When a body holds several markers the LAST
- * one wins — a later hand-off on the same thread supersedes an earlier one.
+ * #685/#743/#757 — the hand-off marker code-wrap opens the comment with:
+ * `<!-- colab:handoff branch=<branch> head=<full sha> gate=<word> [gate-reason=<token>] [factory=<id>] -->`
+ * → `{ branch, head, factory, gate, gateReason, fields }` (`factory` and `gateReason` '' when absent),
+ * or null when the body holds none. Fields are space-separated `key=value` pairs in any order; a value
+ * holds no space. When a body holds several markers the LAST one wins — a later hand-off on the same
+ * thread supersedes an earlier one. `gate` is normalised by handoffGate below.
  */
 function parseHandoffMarker(body) {
   const all = [...String(body || '').matchAll(/<!--\s*colab:handoff((?:\s+[A-Za-z][\w-]*=\S+?)*)\s*-->/g)];
@@ -115,12 +116,49 @@ function parseHandoffMarker(body) {
     const i = kv.indexOf('=');
     fields[kv.slice(0, i)] = kv.slice(i + 1);
   }
-  return { branch: fields.branch || '', head: (fields.head || '').toLowerCase(), factory: fields.factory || '', fields };
+  return { branch: fields.branch || '', head: (fields.head || '').toLowerCase(), factory: fields.factory || '',
+    gate: handoffGate(fields.gate), gateReason: fields['gate-reason'] || '', fields };
 }
 
-/** #743 — the marker line for a hand-off. `factory` is omitted when '' (no factories file names one). */
-function formatHandoffMarker({ branch, head, factory }) {
-  return `<!-- colab:handoff branch=${branch} head=${head}${factory ? ` factory=${factory}` : ''} -->`;
+/**
+ * #757 — the words the `gate=` field may hold: what A3's own gate run did at the handed-off head
+ * (`gate.smoke` in `ci` mode, the full local gate otherwise). `passed` ran green · `failed` ran red ·
+ * `not-run` never ran (`gate-reason=` says why). Anything else — no field (a pre-#757 marker), a
+ * misspelling — is `unknown`, and unknown is never read as passed: only the literal `passed` is.
+ */
+const GATE_WORDS = ['passed', 'failed', 'not-run'];
+function handoffGate(raw) {
+  const w = String(raw || '').trim().toLowerCase();
+  return GATE_WORDS.includes(w) ? w : 'unknown';
+}
+
+/** #757 — a reason as one marker token: whitespace runs become `-`, and nothing can close the comment. */
+function gateReasonToken(reason) {
+  return String(reason || '').trim().replace(/\s+/g, '-').replace(/-->|>/g, '');
+}
+
+/**
+ * #743/#757 — the marker line for a hand-off. `gate` is written whenever given (code-wrap always gives
+ * it); `gate-reason` only beside a non-passed word; `factory` is omitted when '' (no factories file
+ * names one). Field order: branch, head, gate, gate-reason, factory.
+ */
+function formatHandoffMarker({ branch, head, factory, gate, gateReason }) {
+  const g = gate ? ` gate=${handoffGate(gate)}` : '';
+  const r = gate && handoffGate(gate) !== 'passed' && gateReasonToken(gateReason) ? ` gate-reason=${gateReasonToken(gateReason)}` : '';
+  return `<!-- colab:handoff branch=${branch} head=${head}${g}${r}${factory ? ` factory=${factory}` : ''} -->`;
+}
+
+/**
+ * #757 — how a lander says the hand-off's gate word: the clause `colab ship` prints beside a verified
+ * hand-off, and the grade quotes. `passed` is the only wording that claims a run went green.
+ */
+function describeHandoffGate(gate, gateReason) {
+  const g = handoffGate(gate);
+  const why = gateReason ? ` (${gateReason})` : '';
+  if (g === 'passed') return 'own gate passed at the handed-off head';
+  if (g === 'failed') return `own gate failed${why} at the handed-off head — a red gate`;
+  if (g === 'not-run') return `own gate not-run${why} — never a passed smoke; branch CI is the only test verdict`;
+  return 'own gate unknown — the marker carries no gate= field (pre-#757 writer); never read as passed';
 }
 
 /** #743 — may `claim` (a live claim entry) and a hand-off naming `factory` be the same holder's? */
@@ -150,7 +188,9 @@ function namedShas(body) {
  *   issueStates  — (#647) { [n]: { state, closedAt } } per issue as read now; a missing entry is
  *                  unknown and earns no exemption
  *   refNumbers   — (#647) the --refs numbers; used only to say why they do not waive a claim
- * Returns { ok: true, issues, refIssues, sha, handedOff, syncMerges, executor, url, ref, htmlUrl } or { ok: false, reason, detail }.
+ * Returns { ok: true, issues, refIssues, sha, handedOff, syncMerges, executor, url, ref, htmlUrl, gate, gateReason } or { ok: false, reason, detail }.
+ * `gate` (#757) is the marker's gate word, `unknown` when the comment has no marker or no field — reported, never
+ * a refusal: ship's own CI gate decides whether the branch lands.
  * `url` is the --handoff value as given; `ref` (#740) is the neutral reference, built from the comment's
  * own web address as read back — so a URL-form input records the same `ref` a neutral one does.
  * `issues` is the whole trailing run; `refIssues` is its closed-before-the-hand-off subset (#647).
@@ -220,8 +260,10 @@ function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain, 
     }
     if (!executor) executor = { login: match.login, host: match.host, machine: match.machine || '', factory: match.factory || handoffFactory || '' };
   }
+  const marker = parseHandoffMarker(comment.body);
   return { ok: true, issues, refIssues, sha: refs.remoteSha, handedOff: lineage[at], syncMerges: at, executor, url: String(url).trim(),
-    ref: formatHandoffRef(got), htmlUrl: comment.htmlUrl };
+    ref: formatHandoffRef(got), htmlUrl: comment.htmlUrl,
+    gate: marker ? marker.gate : 'unknown', gateReason: marker ? marker.gateReason : '' };
 }
 
 /** #647: was this issue CLOSED strictly before `at` (the hand-off's createdAt)? Unknown ⇒ false. */
@@ -320,4 +362,4 @@ function parseHandoffTrailer(body) {
   return m ? { url: m[1], handedOff: m[2] } : null;
 }
 
-module.exports = { parseHandoffUrl, parseHandoffRef, formatHandoffRef, parseHandoffMarker, formatHandoffMarker, sameFactory, namesBranch, namedShas, handoffVerdict, closedBefore, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };
+module.exports = { parseHandoffUrl, parseHandoffRef, formatHandoffRef, parseHandoffMarker, formatHandoffMarker, handoffGate, gateReasonToken, describeHandoffGate, sameFactory, namesBranch, namedShas, handoffVerdict, closedBefore, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };

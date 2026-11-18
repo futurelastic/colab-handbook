@@ -13877,7 +13877,8 @@ function cmdShipDryJson(opts) {
       // #591: the verified hand-off (or its refusal), so `ship --batch` puts this member's
       // Colab-Handoff trailer on its squash and words a refusal exactly as the single door does.
       ...(handoff ? { handoff: handoff.ok
-        ? { ok: true, url: handoff.url, ref: handoff.ref, sha: handoff.sha, handedOff: handoff.handedOff, syncMerges: handoff.syncMerges || 0 }
+        ? { ok: true, url: handoff.url, ref: handoff.ref, sha: handoff.sha, handedOff: handoff.handedOff, syncMerges: handoff.syncMerges || 0,
+          gate: handoff.gate || 'unknown', gateReason: handoff.gateReason || '' } // #757
         : { ok: false, reason: handoff.reason, detail: handoff.detail } } : {}),
     };
     // #373: `ship --batch` reads each member through this SAME function — handed the body, not stdout.
@@ -15053,7 +15054,9 @@ function handoffDetail(v) {
   const refd = new Set(v.refIssues || []);
   const closed = v.issues.filter((n) => !refd.has(n));
   const tail = refd.size ? `; ${[...refd].map((n) => '#' + n).join(' ')} closed before the hand-off — Refs only, no claim needed (#647)` : '';
-  return `${v.url} hands off ${head}; executor ${v.executor.login}'s live claim on ${closed.map((n) => '#' + n).join(' ')}${tail}`;
+  // #757: the executor's own gate word, said beside the hand-off — never a refusal (B1a's CI gate decides).
+  const gate = `; ${shipHandoff.describeHandoffGate(v.gate, v.gateReason)} (#757)`;
+  return `${v.url} hands off ${head}; executor ${v.executor.login}'s live claim on ${closed.map((n) => '#' + n).join(' ')}${tail}${gate}`;
 }
 
 /** The clause the 🚢 comment carries for a hand-off land — the executor still holds its claim. */

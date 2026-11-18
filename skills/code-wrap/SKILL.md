@@ -351,9 +351,9 @@ never by trusting this session's word for it:
 ### Post the hand-off comment — the last word on its head (#586)
 
 **Rule:** after A5, post A1's distill as one comment per issue, opening with its `colab:handoff` marker
-(#685) and naming the branch, the **full** head sha and A5's class — the **last** comment you write for
-that head. Later news on the same head ⇒ **edit** it or post a complete new hand-off, never a follow-up
-comment; a new head ⇒ a new hand-off naming the new sha. Full text: [handoff-last-word.md](handoff-last-word.md).
+(#685; `gate=passed|failed|not-run` as A3 really ran, #757), naming the branch, the **full** head sha
+and A5's class — the **last** comment for that head. Later news, same head ⇒ **edit** it or post a
+complete new hand-off, never a follow-up; a new head ⇒ a new hand-off naming it. Full text: [handoff-last-word.md](handoff-last-word.md).
 
 State this checklist, filled in, as the last thing you report. A box you cannot
 check is not a reason to force it true — say what is missing and why, and let

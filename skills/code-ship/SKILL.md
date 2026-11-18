@@ -171,7 +171,9 @@ Full text: [b1b-harvest.md](b1b-harvest.md).
 ask. Verdict `pass` (rides on B2b's evidence) or `reject` (a comment naming the actual gap,
 with a `colab:grade` marker; every claim stays held). UI-affecting work is also graded against
 its `docs/design/` artifact; a child of a switched epic is graded "dark with the switch off"
-(or "removed completely" for `role=remove`).
+(or "removed completely" for `role=remove`). A hand-off whose marker says `gate=not-run` or
+`failed`, or carries no `gate=`, is never graded as a passed smoke: the grade names that word
+(`own gate not-run (<reason>)`, #757; how each is treated: [0-handoff-contract.md](0-handoff-contract.md)).
 **Stop:** any reject ⇒ nothing past B1c runs for that issue set on this pass.
 Full text: [b1c-grade.md](b1c-grade.md). Read when the set is UI-affecting or belongs to a
 switched epic: [b1c-ui-and-switched-epics.md](b1c-ui-and-switched-epics.md). Read before

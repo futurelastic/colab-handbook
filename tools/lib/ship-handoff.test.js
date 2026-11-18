@@ -796,3 +796,63 @@ test('#743 of two live claims by one login, the one under the hand-off\'s factor
   assert.strictEqual(v.ok, true, v.detail);
   assert.strictEqual(v.executor.host, 'box-c');
 });
+
+// --- #757: the hand-off marker says whether the executor's own gate ran ------------------------------
+
+const gated = (gate, gateReason) => ({ ...COMMENT, body: `${ho.formatHandoffMarker({ branch: BR, head: HEAD, gate, gateReason })}\n${COMMENT.body}` });
+
+test('#757 gate=passed parses, round-trips, and is the only word that reads as passed', () => {
+  const line = ho.formatHandoffMarker({ branch: BR, head: HEAD, gate: 'passed', gateReason: 'ignored beside passed', factory: 'core' });
+  assert.strictEqual(line, `<!-- colab:handoff branch=${BR} head=${HEAD} gate=passed factory=core -->`);
+  const m = ho.parseHandoffMarker(line);
+  assert.deepStrictEqual({ gate: m.gate, gateReason: m.gateReason, factory: m.factory }, { gate: 'passed', gateReason: '', factory: 'core' });
+  const v = ho.handoffVerdict(base({ comment: gated('passed') }));
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.strictEqual(v.gate, 'passed');
+  assert.match(ho.describeHandoffGate(v.gate, v.gateReason), /^own gate passed/);
+});
+
+test('#757 gate=failed parses with its reason, and is said as failed', () => {
+  const line = ho.formatHandoffMarker({ branch: BR, head: HEAD, gate: 'failed', gateReason: 'lint red, unrelated' });
+  assert.strictEqual(line, `<!-- colab:handoff branch=${BR} head=${HEAD} gate=failed gate-reason=lint-red,-unrelated -->`);
+  const v = ho.handoffVerdict(base({ comment: gated('failed', 'lint red, unrelated') }));
+  assert.strictEqual(v.ok, true, 'a gate word is reported, never a refusal — CI decides the land');
+  assert.deepStrictEqual({ gate: v.gate, gateReason: v.gateReason }, { gate: 'failed', gateReason: 'lint-red,-unrelated' });
+  assert.match(ho.describeHandoffGate(v.gate, v.gateReason), /^own gate failed \(lint-red,-unrelated\)/);
+  assert.doesNotMatch(ho.describeHandoffGate(v.gate, v.gateReason), /gate passed/);
+});
+
+test('#757 gate=not-run parses with its reason, and is never said as passed', () => {
+  const line = ho.formatHandoffMarker({ branch: BR, head: HEAD, gate: 'not-run', gateReason: 'toolchain not in sandbox --> x' });
+  assert.ok(!/-->.*-->/.test(line), 'the reason cannot close the comment early');
+  const m = ho.parseHandoffMarker(line);
+  assert.strictEqual(m.gate, 'not-run');
+  assert.strictEqual(m.gateReason, 'toolchain-not-in-sandbox--x');
+  assert.strictEqual(m.head, HEAD, 'fields before the reason still parse');
+  const v = ho.handoffVerdict(base({ comment: gated('not-run', 'toolchain missing') }));
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.strictEqual(v.gate, 'not-run');
+  const said = ho.describeHandoffGate(v.gate, v.gateReason);
+  assert.match(said, /^own gate not-run \(toolchain-missing\)/);
+  assert.doesNotMatch(said, /gate passed/);
+});
+
+test('#757 an old marker with no gate field reads as unknown — never as passed', () => {
+  const m = ho.parseHandoffMarker(`<!-- colab:handoff branch=${BR} head=${HEAD} factory=core -->`);
+  assert.strictEqual(m.gate, 'unknown');
+  assert.strictEqual(m.gateReason, '');
+  assert.strictEqual(ho.formatHandoffMarker({ branch: BR, head: HEAD }), `<!-- colab:handoff branch=${BR} head=${HEAD} -->`, 'no gate given: the pre-#757 line, byte for byte');
+  const v = ho.handoffVerdict(base({ comment: marked('') }));
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.strictEqual(v.gate, 'unknown');
+  assert.strictEqual(ho.handoffVerdict(base()).gate, 'unknown', 'no marker at all: unknown too');
+  assert.match(ho.describeHandoffGate('unknown', ''), /unknown .*never read as passed/);
+});
+
+test('#757 a misspelt or upper-case gate word: upper-case normalises, anything else is unknown', () => {
+  assert.strictEqual(ho.handoffGate('PASSED'), 'passed');
+  assert.strictEqual(ho.handoffGate('pass'), 'unknown');
+  assert.strictEqual(ho.handoffGate('green'), 'unknown');
+  assert.strictEqual(ho.handoffGate(''), 'unknown');
+  assert.strictEqual(ho.parseHandoffMarker(`<!-- colab:handoff branch=${BR} head=${HEAD} gate=ok -->`).gate, 'unknown');
+});

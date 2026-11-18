@@ -110,6 +110,22 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   B1a measures it again from GitHub anyway. A class that *contradicts* what B1a measures
   usually means the head moved between the two reads, which is B1a's own sync caveat,
   not a dishonest report.
+- **The marker's `gate=` word (#757)** — read it off the hand-off's `colab:handoff` marker
+  (`colab ship --handoff` prints it beside the verified hand-off as `own gate …`). It is the
+  implementer's word for what its own A3 run did at that head, and **only the literal `passed` is
+  a passed gate**:
+  - `passed` — as above; nothing changes.
+  - `not-run` (`gate-reason=` says why) — never graded as a passed smoke. **`ci` mode:** not a
+    send-back by itself, because branch CI at the current head is the test verdict — B1a must read
+    `green` there, and B1c's grade names `own gate not-run (<reason>)` so the skipped step is
+    visible. A `red:finding` on such a head is a send-back whose comment says the smoke never ran:
+    the fix is to run it before the next push, not another CI round. **`local` mode:** there is
+    no gate verdict at all — send back, as for a missing hermetic verdict.
+  - `failed` — a red gate: send back, unless the hand-off reports the red as unrelated to the
+    change (A3's finding case); then the grade names it as such.
+  - no field (`unknown`, a marker written before #757) — not stated, never passed: fall back to
+    the prose verdict as before, and say `gate word missing` in the report. Not a blocker by
+    itself where branch CI is the verdict.
 - **Trunk checkout dirty here too** → `code-wrap` A2b's own re-derivation (its *Verify
   complete* step) either missed this or ran before whatever caused it. Don't re-run the
   same ownership ladder blind: `git ls-remote` above already told you this branch's

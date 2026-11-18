@@ -13,7 +13,7 @@ to look past such comments; the skill still makes the hand-off unambiguous on it
 
 ### What it carries
 
-- **First line, a marker** (#685): `<!-- colab:handoff branch=<branch> head=<full sha> -->`. It
+- **First line, a marker** (#685): `<!-- colab:handoff branch=<branch> head=<full sha> gate=<word> -->`. It
   costs a human reader nothing in the rendered comment, and it lets a tool find the hand-off
   without matching the branch name and sha in prose. The newest marker whose `head=` equals the
   branch's remote head is the live hand-off; an older one names a head that no longer lands.
@@ -21,6 +21,21 @@ to look past such comments; the skill still makes the hand-off unambiguous on it
   `colab factory` prints (#743). A lander matches your claim by login **and** factory, so a
   hand-off without it is compared by login alone. `colab factory` exiting 1 means there is no
   factory to name, so leave the field out.
+- **The gate field** (#757) says what A3's own gate run did at this head — `gate.smoke` in `ci`
+  mode, the full local gate otherwise. Write it from what actually ran, never from what you expect:
+
+  | A3 | field |
+  |---|---|
+  | ran, green | `gate=passed` |
+  | ran, red (a red you report as unrelated, a `live-env` hermetic verdict) | `gate=failed gate-reason=<token>` |
+  | did not run — a toolchain the sandbox cannot reach, a command that cannot start here | `gate=not-run gate-reason=<token>` |
+
+  `gate-reason` is one token, no spaces (`toolchain-missing`, `lint-red-unrelated`); the prose
+  below the marker says the rest. Put both before ` factory=`. Why it is a field and not prose: in
+  one measured case three wrapped heads in about 45 minutes were each red on branch CI at a step the
+  local smoke would have caught, and the only trace that smoke never ran was a sentence in the
+  report — the lander could not tell those hand-offs from smoke-green ones. A marker with no
+  `gate=` (written before #757) reads as `unknown`, never as `passed`.
 - The branch, as a whole token, and the **full** head sha — `git rev-parse HEAD`, never a short
   form. `colab ship --handoff` accepts any 7–40 hex prefix of the remote head, but a full sha
   can never be ambiguous and reads the same on every tool that parses the thread.
