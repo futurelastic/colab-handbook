@@ -54,6 +54,15 @@ function gh(args, opts = {}) {
   return require('./tracker-github').exec(args, opts);
 }
 
+/**
+ * The read buffer for a call whose output scales with a branch's size — a whole three-dot diff, a
+ * file's text at a ref (#758). spawnSync's 1 MiB default kills the child with ENOBUFS, and a design
+ * branch carrying frozen frames and a copied stylesheet passes 1 MiB routinely; the read then fails
+ * and whatever it gates (the docs-only secret check) holds forever with no override. Same class as
+ * #585's batch-stats log read, and the same 256 MiB headroom.
+ */
+const DIFF_MAX_BUFFER = 256 * 1024 * 1024;
+
 function git(args, cwd, opts = {}) {
   return run('git', args, { ...(cwd ? { cwd } : {}), ...opts });
 }
@@ -1894,7 +1903,7 @@ function ghAssignedIssues(repo) {
 
 module.exports = {
   ghCommitCheckRuns, ghCheckRunAnnotations,
-  run, spawnErrorLine, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
+  run, spawnErrorLine, DIFF_MAX_BUFFER, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
   detectTrunk, branchExists, branchRefs, existingBranchRef,
   claimRemote, remoteHeads, parseRemoteHeads, CLAIM_REF_PREFIX, claimRef, pushClaimRef, deleteClaimRef,
   CLAIM_LOCK_PREFIX, claimLockRef, parseClaimLocks, claimLockMessage, parseClaimLockMessage, makeClaimLockCommit,

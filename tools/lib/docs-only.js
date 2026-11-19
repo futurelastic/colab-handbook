@@ -189,8 +189,9 @@ function readEntries(git, repo, cmd, range) {
   const common = cmd === 'diff-tree'
     ? ['diff-tree', '-r', '-z', '--no-renames', '--no-commit-id', '--root', '-m']
     : ['diff', '-z', '--no-renames'];
-  const raw = git.git([...common, '--raw', '--no-abbrev', ...range], repo);
-  const num = git.git([...common, '--numstat', ...range], repo);
+  const big = { maxBuffer: git.DIFF_MAX_BUFFER || 256 * 1024 * 1024 };  // a design branch's entry list passes 1 MiB too (#758)
+  const raw = git.git([...common, '--raw', '--no-abbrev', ...range], repo, big);
+  const num = git.git([...common, '--numstat', ...range], repo, big);
   if (!raw.ok || !num.ok) return null;
   const binary = parseBinary(num.stdout);
   return parseRaw(raw.stdout).map((e) => ({ ...e, binary: binary.has(e.path) }));

@@ -202,6 +202,22 @@ test('#606: a path listed in ci-docs-skip, and ci-docs-skip: off, need CI as usu
   assert.strictEqual(dry(fx, 'docs/apiary-68').row(DOCS_ROW).ok, true);
 });
 
+test('#758: a docs-only branch whose diff passes 1 MiB is scanned and reads clean, not held on a read failure', () => {
+  const fx = fixture();
+  // A design branch in shape: a copied stylesheet and a frozen frame, ~2 MiB of clean added lines.
+  const css = Array.from({ length: 30000 }, (_, i) => `.frame-${i} { color: var(--ink); margin: 0 auto; }`).join('\n') + '\n';
+  const html = Array.from({ length: 10000 }, (_, i) => `<div class="frame-${i}">Frame ${i}</div>`).join('\n') + '\n';
+  branch(fx, 'design/frames-75', 75, { 'docs/design/frames-75/frames.css.md': css, 'docs/design/frames-75/frame-1.md': html });
+  const bytes = execFileSync('git', ['diff', 'main...design/frames-75'], { cwd: fx.work, maxBuffer: 1 << 28 }).length;
+  assert.ok(bytes > 1024 * 1024, `fixture diff is ${bytes} bytes, must pass spawnSync's 1 MiB default`);
+  fx.setState({ branches: { 'design/frames-75': 'none' } });
+  const d = dry(fx, 'design/frames-75');
+  assert.strictEqual(d.row(DOCS_ROW).ok, true, JSON.stringify(d.j.checks));
+  assert.match(d.row(DOCS_ROW).detail, /^docs-only: CI not required \(2 files\)/);
+  assert.strictEqual(d.row(SCAN_ROW).ok, true, d.row(SCAN_ROW).detail);
+  assert.match(d.row(SCAN_ROW).detail, /40000 added line\(s\) in 2 file\(s\) clean/);
+});
+
 test('#606: a planted credential in a docs-only change refuses the ship by file:line, never echoing it', () => {
   const fx = fixture();
   branch(fx, 'docs/leak-69', 69, { 'docs/setup.md': `# Setup\n\nkey: ${FAKE_AWS}\n` });

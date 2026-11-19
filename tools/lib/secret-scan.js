@@ -107,12 +107,14 @@ function scanLines(lines, terms = []) {
  * run — a caller refuses on that too, it never reads it as clean.
  */
 function scanBranch(git, repo, base, branch) {
-  const d = git.git(['diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', `${base}...${branch}`, '--'], repo);
-  if (!d.ok) return { ok: false, findings: [], reason: `could not read the diff ${base}...${branch}` };
+  const big = { maxBuffer: git.DIFF_MAX_BUFFER || 256 * 1024 * 1024 };  // a design branch passes 1 MiB (#758)
+  const why = (r) => (r.stderr ? `: ${String(r.stderr).split('\n')[0]}` : '');
+  const d = git.git(['diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', `${base}...${branch}`, '--'], repo, big);
+  if (!d.ok) return { ok: false, findings: [], reason: `could not read the diff ${base}...${branch}${why(d)}` };
   let terms = [];
   if (git.git(['cat-file', '-e', `${base}:${TERMS_PATH}`], repo).ok) {
-    const t = git.git(['show', `${base}:${TERMS_PATH}`], repo);
-    if (!t.ok) return { ok: false, findings: [], reason: `could not read ${TERMS_PATH} at ${base}` };
+    const t = git.git(['show', `${base}:${TERMS_PATH}`], repo, big);
+    if (!t.ok) return { ok: false, findings: [], reason: `could not read ${TERMS_PATH} at ${base}${why(t)}` };
     const parsed = parseTerms(t.stdout);
     if (parsed.problems.length) return { ok: false, findings: [], reason: parsed.problems.join('; ') };
     terms = parsed.terms;
