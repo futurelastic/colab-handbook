@@ -104,6 +104,15 @@ test('#606: classify honours the ci-docs-skip exclusions — by path prefix, nev
   assert.equal(d.classify([e('docs/api/x.md')]).docsOnly, true, 'no list, no exclusion');
 });
 
+test('readEntries: both diff reads get the large buffer, so a big branch is not misread as not docs-only (#758)', () => {
+  const seen = [];
+  const fake = { DIFF_MAX_BUFFER: git.DIFF_MAX_BUFFER, git: (args, cwd, opts = {}) => { seen.push(opts.maxBuffer); return { ok: true, stdout: '' }; } };
+  assert.deepEqual(d.readEntries(fake, '/r', 'diff', ['main...b', '--']), []);
+  assert.deepEqual(d.readEntries(fake, '/r', 'diff-tree', ['abc']), []);
+  assert.equal(seen.length, 4);
+  for (const m of seen) assert.ok(m >= 64 * 1024 * 1024, `maxBuffer ${m} must clear a design branch`);
+});
+
 // ---- against real git: renames, deletions, binaries, symlinks -------------------------------
 
 function repo() {
