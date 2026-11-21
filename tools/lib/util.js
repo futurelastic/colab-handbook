@@ -57,7 +57,20 @@ function humanAge(iso) {
  *                  instead of last-one-wins (#479). Off by default: most commands keep the old
  *                  overwrite, where a dropped value is harmless; turn it on where it is not.
  * Positionals collected into result._ .
+ *
+ * A value flag never takes the next token as its value when that token starts with `--` (#763):
+ * `--answers --body-file f` is a missing value, not the value "--body-file". Taking it silently
+ * swallowed the next option AND wrote a malformed value (a decision record answering an ask named
+ * `--body-file`). A value that really starts with `--` is passed inline: `--reason=--force`.
  */
+function needsValue(flag, v, inlineVal) {
+  if (inlineVal !== null) return;
+  if (v === undefined) throw new UserError(`Option ${flag} needs a value`);
+  if (v.startsWith('--')) {
+    throw new UserError(`Option ${flag} needs a value — the next token "${v}" is an option, not a value. Give the value right after ${flag}; one that really starts with "--" goes inline — use --flag=value: ${flag}=<value>`);
+  }
+}
+
 function parseArgs(argv, spec = {}) {
   const flags = spec.flags || {};
   const values = spec.values || {};
@@ -75,12 +88,12 @@ function parseArgs(argv, spec = {}) {
     if (flags[a]) { out[flags[a]] = true; }
     else if (lists[a]) {
       const v = inlineVal !== null ? inlineVal : argv[++i];
-      if (v === undefined) throw new UserError(`Option ${a} needs a value`);
+      needsValue(a, v, inlineVal);
       const k = lists[a];
       out[k] = out[k] === undefined ? v : `${out[k]},${v}`;
     } else if (values[a]) {
       const v = inlineVal !== null ? inlineVal : argv[++i];
-      if (v === undefined) throw new UserError(`Option ${a} needs a value`);
+      needsValue(a, v, inlineVal);
       if (spec.once && seen.has(values[a])) {
         throw new UserError(`Option ${a} given more than once — only one value is accepted; pass it once`);
       }

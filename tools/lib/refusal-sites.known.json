@@ -189,7 +189,6 @@
   "tools/lib/adopt.js:user-error:--channels combines \"none\" with another value — \"none\" must stand alone": "pre-#532: refusal with no next command yet",
   "tools/lib/state.js:user-error:records.refusalMessage(problems)": "pre-#532: refusal with no next command yet",
   "tools/lib/util.js:user-error:Option … needs a value": "pre-#532: refusal with no next command yet",
-  "tools/lib/util.js:user-error:Option … needs a value#2": "pre-#532: refusal with no next command yet",
   "tools/lib/util.js:user-error:Option … given more than once — only one value is accepted; pass it once": "pre-#532: refusal with no next command yet"
  }
 }

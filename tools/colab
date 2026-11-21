@@ -5146,7 +5146,12 @@ reads the issue's open asks first (#582) — an ask with no answer record, and n
 naming it, after its latest version: with ONE open ask and no --answers it prints the ask id
 and the exact re-run line, and says the ruling will be read as answering that ask; with TWO OR
 MORE it REFUSES before any write and lists every id, because a nameless ruling cannot say which
-one it settles.
+one it settles. A ref that resolves to nothing on the issue — not an open ask id, not a
+\`decision:options\` comment (node id, URL, \`issuecomment-<n>\` or bare \`<n>\`), not the issue's own
+URL when its body holds the block, not \`-\` — is REFUSED before any write, with the open ask ids
+listed (#763): a record naming an ask that does not exist closes nothing, and the real ask stays
+open. \`--answers\` with no value (\`--answers --body-file f\`) is a usage error, never the value
+"--body-file"; a value that really starts with "--" goes inline, \`--answers=<value>\`.
 
 Reopening removes \`${labels.DECISION_RECORDED_LABEL}\`, re-applies \`${labels.NEEDS_DECISION_LABEL}\`,
 and posts a \`${decisionRecord.REOPEN_MARK}\` receipt — every decision on that issue up to this
@@ -5251,10 +5256,27 @@ function describeDecisionPair(num, pair) {
 }
 
 function cmdDecisionRecord(repoAbs, num, opts, body) {
-  const info = git.ghIssueView(repoAbs, num, ['state', 'labels', 'comments']);
+  const info = git.ghIssueView(repoAbs, num, ['state', 'labels', 'comments', 'body', 'url']);
   if (!info) throw new UserError(`could not read #${num} from the tracker — refusing to write a decision record blind`);
   if (info.state !== 'OPEN') {
     throw new UserError(`#${num} is ${info.state} — record the decision on the issue it actually answers before it closes`);
+  }
+
+  // #763: an --answers ref that resolves to nothing on this issue is refused before any write. A
+  // record naming a non-existent ask closes no ask, so every gate waiting on the real one kept
+  // holding (measured: four rulings recorded as answering `--body-file`).
+  if (opts.answers !== undefined) {
+    const v = decisionRecord.answersRefVerdict({ ref: opts.answers, comments: info.comments, body: info.body, issueUrl: info.url });
+    if (!v.ok) {
+      const askRows = v.asks.length
+        ? v.asks.map((a) => `    ${a.id}  (v${a.version}, asked ${a.at || 'unknown'})`).join('\n')
+        : '    (none)';
+      const optRows = v.optionRefs.length ? `\n  decision:options blocks on #${num}:\n${v.optionRefs.map((r) => `    ${r}`).join('\n')}` : '';
+      throw new UserError(`--answers: ${v.why} — nothing was written.
+  Open asks on #${num}:
+${askRows}${optRows}
+  Re-run with --answers <one of the above>, or --answers - when the ruling answers no recorded question.`);
+    }
   }
 
   // #357: over the both-labels pair, a record must say WHICH question it answers. Without
