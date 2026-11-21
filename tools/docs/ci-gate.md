@@ -282,10 +282,14 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   The templates therefore carry `push` and `workflow_dispatch` only. Three things follow:
   1. **A copy that went back to trunk-only push (#355) restores `pull_request: branches: [<trunk>]`.**
      There the PR run is the only branch run (the *none* paragraph above, and #353 below).
-  2. **Trunk runs keep a group of their own.** The group is `ci-<ref>` for a branch, so a newer
-     push cancels the older run, and `ci-<ref>-<run id>` for the trunk and release refs: GitHub
+  2. **Trunk commits keep a group of their own.** The group is `ci-<ref>` for a branch, so a newer
+     push cancels the older run, and `ci-<ref>-<sha>` for the trunk and release refs: GitHub
      cancels an older run still **pending** in a group even when `cancel-in-progress` is
-     `false`, so a third quick merge would drop the second one's run before it started. The trunk
+     `false`, so a third quick merge would drop the second one's run before it started. The key
+     is the commit sha, never a run-identity field (#761; [*CI on a Forgejo remote*](#ci-on-a-forgejo-remote-761),
+     below). Two runs on one sha — a push run and a dispatch, or a re-dispatch — share the group,
+     so the newer can displace a still-pending older one; it tests the same sha, and every reader
+     judges the newest run per workflow at a sha, so the sha keeps its verdict. The trunk
      list appears three times in a copy — the group, `cancel-in-progress`, and the `dedupe`
      job's `if:` — and the three must name the same refs.
   3. **Do not deduplicate any other way.** A shared push/PR group (`head_ref || ref_name`) can
@@ -400,6 +404,43 @@ all, and the stale-base row refuses as `unread` instead of passing.
 **Releasing on such a repo** (#681) reads the same statuses, and also reads, never writes, the
 forge's issue list. It publishes release objects through the forge. See
 [releases.md, *A Forgejo remote*](releases.md#a-forgejo-remote--candidates-by-the-workflow-finals-by-a-human-681).
+
+### CI on a Forgejo remote (#761)
+
+The handbook ships **no Forgejo CI file**. The CI templates here (`templates/ci-*.yml` and the
+reusable `.github/workflows/ci-light.yml`) are GitHub-dialect. Per #608 item 2, a per-forge CI file
+belongs to the adopter's CI layer, which puts it in `.forgejo/workflows/`. The one Forgejo starting
+file here is `templates/forgejo-release-auto.yml`, the release exception of #681, and that
+exception does not cover CI. A light template copied as-is still degrades rather than breaks there,
+because its dedupe gate reads runs through `gh api` and falls back to the full suite without `gh`
+(#418). It is still not a working answer for a Forgejo remote. Three rules hold whoever writes the
+file:
+
+- **Forgejo falls back to `.github/workflows/` per ref.** It reads `.forgejo/workflows/` and, at a
+  ref where that directory does not exist, runs `.github/workflows/` instead. The lookup is per ref,
+  so after a move every branch and tag from the GitHub era still runs the GitHub workflows. Measured
+  on one Node repo: mirroring its refs to a Forgejo host produced about 450 runs from the old
+  `.github/workflows/`. About 150 of them waited forever on a runner label the new host does not
+  have, and about 300 failed.
+  - **Once the Forgejo CI exists, retire `.github/workflows/` on trunk.** At a ref that has
+    `.forgejo/workflows/`, Forgejo never runs the old files, so they are dead text that every person
+    and tool grepping the repo reads as its CI.
+  - **Older refs still carry it.** On a move, push only the refs still wanted (trunk and the live
+    branches). Otherwise turn the repository's Actions unit off for the mirror push and back on after
+    it, so the old refs never queue a run.
+- **Never put a run-identity field in a concurrency group.** On Forgejo 15.0.6, `github.run_id`
+  expanded to an empty string when the group was evaluated. Every trunk run then shared one group
+  (`ci-refs/heads/main-`), and with `cancel-in-progress: false` one stale run held it. Every later
+  trunk run sat `waiting` on an idle runner, trunk CI never turned green, and `colab ship` refused
+  every landing. Forgejo's reference lists `run_id` as supported. The empty value looks like an
+  evaluation-order defect: the Gitea code Forgejo Actions derives from evaluated the workflow-level
+  group before the run was stored, so the run had no id yet (go-gitea/gitea#37331). Whether a given
+  Forgejo version carries that fix is unconfirmed, so keep `run_id`, `run_number` and `run_attempt`
+  out of every group. The light templates key a trunk run's group by `github.sha`, which comes from
+  the triggering push rather than the stored run. That is reasoning from the defect's cause, not a
+  measurement on Forgejo.
+- **The CI read is still the commit status.** Whatever the file is, `colab ship` judges trunk and
+  the branch by the combined commit status (above), so a job's context name is what a reader sees.
 
 ## Docs-only — no CI wait (#606)
 

@@ -33,6 +33,8 @@
 #   - `on:` (a called workflow's only trigger is workflow_call) and `concurrency:` (the same group in
 #     caller and callee deadlocks). templates/ci-call.yml carries both as fixed text; their policy —
 #     which refs are trunk, and that a trunk run is never cancelled — is the `trunk-branches` input.
+#     A trunk run's group is keyed by the commit sha, never by a run-identity field (#761): Forgejo
+#     15.0.6 evaluated `github.run_id` as empty in a group, which queued every trunk run behind one.
 #   - Jobs of its own (deploy, publish, a migration round-trip). Gate one on the guard with
 #     `needs: ci` + `if: !cancelled() && needs.ci.result == 'success' && needs.ci.outputs.tested != 'true'`,
 #     or keep it ungated and name it in

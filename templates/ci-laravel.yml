@@ -102,15 +102,20 @@ on:
 # One live run per branch: a new push cancels the superseded run on the same ref.
 # Trunk is NEVER cancelled — every trunk sha keeps a completed run of its own, which
 # is what the merge gate reads (CONVENTIONS.md §4, "Branch CI"). A trunk run also gets a
-# group of its own (the run id): GitHub cancels an older run that is still PENDING in a
+# group of its own (the commit sha): GitHub cancels an older run that is still PENDING in a
 # group even when cancel-in-progress is false, so a third quick merge would otherwise
-# drop the second one's run before it ever started (#512).
+# drop the second one's run before it ever started (#512). The sha, not the run id (#761):
+# Forgejo 15.0.6 evaluated `github.run_id` as EMPTY in a group, so every trunk run shared one
+# group and waited behind a stale one forever — keep run_id/run_number/run_attempt out of it.
+# The cost: two runs on ONE sha (a push run and a dispatch, or a re-dispatch) share a group, so
+# a newer one can displace a still-pending older one. It tests the same sha, and readers judge
+# the newest run per workflow at a sha, so the sha keeps its verdict and the cancelled one is moot.
 # EDIT: name exactly this repo's trunk (and release branch) here — in the group, in
 # cancel-in-progress, and in the call's `trunk-branches` input below. A Tier C trunk may carry any
 # name; one left off this list gets its trunk runs cancelled. `colab template` writes these
 # from the `trunk:` in .github/project.yml and prints what it wrote (#526).
 concurrency:
-  group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
+  group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.sha) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
 
 # The called jobs can only narrow these: the gate lists this workflow's runs and reads git objects.
