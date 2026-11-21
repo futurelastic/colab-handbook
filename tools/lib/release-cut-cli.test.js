@@ -1148,3 +1148,82 @@ test('#620 library-fast: a workspace version below the last final is refused, ne
   assert.match(r.body.checks.find((c) => c.condition === 'version').detail, /below the last final v0\.2\.0/);
   assert.deepStrictEqual(originTags(fx), ['v0.2.0']);
 });
+
+// ---- #733: a destructive schema change has a human path on a candidate route ---------------------
+
+/**
+ * A candidate-route repo whose gh also answers the tracker writes and `colab migration-grant`'s reads:
+ * view-<N>.json, create (always #90), comment (body kept in comment-<N>.txt), close, label list, edit.
+ */
+function grantableCandidateFixture() {
+  const fx = fixture();
+  const ghPath = path.join(fx.bin, 'gh');
+  const log = path.join(fx.root, 'gh-writes.log');
+  const lines = fs.readFileSync(ghPath, 'utf8').split('\n');
+  lines.splice(3, 0,
+    `if [ "$1" = "issue" ] && [ "$2" = "view" ]; then [ -f "${fx.root}/view-$3.json" ] && { cat "${fx.root}/view-$3.json"; exit 0; }; echo '{"comments":[]}'; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "create" ]; then echo "create $*" >> "${log}"; echo "https://github.invalid/o/r/issues/90"; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then printf '%s' "$5" > "${fx.root}/comment-$3.txt"; echo "comment $3 $5" >> "${log}"; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "close" ]; then echo "close $3" >> "${log}"; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then echo "edit $*" >> "${log}"; exit 0; fi`,
+    `if [ "$1" = "label" ] && [ "$2" = "list" ]; then echo "${labels.MIGRATION_GRANT_LABEL}"; exit 0; fi`);
+  fs.writeFileSync(ghPath, lines.join('\n'), { mode: 0o755 });
+  fx.writes = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '');
+  return fx;
+}
+
+const DROP_LEGACY = "<?php\nreturn new class extends Migration {\n  public function up(): void { Schema::table('users', fn ($t) => $t->dropColumn('legacy')); }\n};\n";
+
+test('#733 candidate route, by hand: a refused destructive cut opens the tracking record and hands off the grant; the printed grant lets the next cut through, bound to its version', () => {
+  const fx = grantableCandidateFixture();
+  commit(fx, 'database/migrations/2026_09_14_drop_legacy.php', 'fix: retire the legacy column', DROP_LEGACY);
+  const hand = ['--bump', 'patch', '--reason', 'hand cut after review'];
+
+  // --dry reads, writes nothing, and still names the command (no tracking issue yet → placeholder).
+  const dry = cut(fx, [...hand, '--dry']);
+  assertRefused(fx, dry, 'schema-additive', /dropColumn.*a person lets it through with the migration grant on v1\.2\.1's tracking issue: COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch v1\.2\.1/);
+  assert.strictEqual(fx.writes(), '');
+
+  // Without a grant: refused, standing, one tracking record opened for v1.2.1 and one hand-off posted.
+  const r = cut(fx, hand);
+  assertRefused(fx, r, 'schema-additive', /dropColumn/);
+  assert.ok(r.body.standing.includes('schema-additive'));
+  assert.strictEqual(r.body.handoff, 'COLAB_HUMAN=1 colab migration-grant 90 --branch v1.2.1');
+  assert.match(fx.writes(), /^create issue create --title release: v1\.2\.1 --body <!-- colab:release version=v1\.2\.1 -->/m);
+  assert.match(fx.writes(), /opened by `colab release cut`/);
+  assert.match(fs.readFileSync(path.join(fx.root, 'comment-90.txt'), 'utf8'), /destructive schema change[\s\S]*COLAB_HUMAN=1 colab migration-grant 90 --branch v1\.2\.1/);
+
+  // The tracker now returns that record; a re-run finds it instead of opening a second one.
+  const releaseFinalize = require('./release-finalize');
+  const tracking = { number: 90, state: 'OPEN', title: 'release: v1.2.1', labels: [],
+    body: releaseFinalize.trackingBody({ version: 'v1.2.1', row: 'public-tool', final: 'auto', testPeriodDays: 3, openedBy: 'colab release cut' }) };
+  fs.writeFileSync(fx.issuesFile, JSON.stringify([tracking]));
+  fs.writeFileSync(path.join(fx.root, 'view-90.json'), JSON.stringify({ ...tracking, comments: [] }));
+  const before = fx.writes().match(/^create /gm).length;
+  assertRefused(fx, cut(fx, hand), 'schema-additive', /migration-grant 90 --branch v1\.2\.1/);
+  assert.strictEqual(fx.writes().match(/^create /gm).length, before, 'a second run opens no second record');
+
+  // A human runs the printed line, exactly as printed.
+  const g = runPrinted(fx, r.body.handoff);
+  assert.strictEqual(g.code, 0, g.out + g.err);
+  assert.match(g.out, /Granted #90 .* release v1\.2\.1/);
+  const posted = fs.readFileSync(path.join(fx.root, 'comment-90.txt'), 'utf8');
+  fs.writeFileSync(path.join(fx.root, 'view-90.json'), JSON.stringify({
+    ...tracking, labels: [{ name: labels.MIGRATION_GRANT_LABEL }],
+    comments: [{ body: posted, createdAt: '2026-10-05T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } }],
+  }));
+
+  // A different version is not what the grant names: --bump minor computes v1.3.0, and refuses.
+  const minor = cut(fx, ['--bump', 'minor', '--reason', 'hand cut', '--dry']);
+  assertRefused(fx, minor, 'schema-additive', /--branch v1\.3\.0/);
+
+  // The granted version cuts: a candidate, its row naming whose decision cleared it.
+  const again = cut(fx, hand);
+  assert.strictEqual(again.code, 0, again.out + again.err);
+  assert.strictEqual(again.body.ok, true, JSON.stringify(again.body.checks, null, 2));
+  assert.strictEqual(again.body.tag, 'v1.2.1-rc.1');
+  assert.strictEqual(again.body.handoff, null);
+  assert.match(again.body.checks.find((c) => c.condition === 'schema-additive').detail, /cleared by a person's decision: the migration grant on the tracking issue #90 for v1\.2\.1/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1']);
+  assert.doesNotMatch(fx.writes(), /^close /m, 'a candidate route keeps the record open for release finalize');
+});

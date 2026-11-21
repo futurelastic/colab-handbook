@@ -2535,9 +2535,9 @@ channels, publishing and deploys — is documented with the CLI, in
 
 1. **[Hard C6.contract.01 — refuse: a candidate on a commit failing any of the four conditions]**
    A candidate is cut only when all four conditions hold, on the exact commit it names: (1) CI is
-   green on that commit; (2) the full suite passed on it; (3) every schema change since the last
-   final is additive ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336),
-   rule 5) — a destructive one is a person's decision; (4) switch dependencies are satisfied (rule 3).
+   green on that commit; (2) the full suite passed on it; (3) every schema change since the last final is additive
+   ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 5) — a destructive one, any edited migration included, is a person's decision: the migration grant on the version's tracking issue, on every route ([#733](tools/docs/releases.md#cutting-a-candidate--the-four-conditions));
+   (4) switch dependencies are satisfied (rule 3).
 2. **[Hard C6.contract.02 — refuse: an automatic final before its test period ends clean]**
    An automatic final waits out its candidate's test period — three days unless a route lengthens
    it, clean only if trunk stayed green throughout and no regression against the candidate is open —
@@ -2550,8 +2550,8 @@ channels, publishing and deploys — is documented with the CLI, in
    Where a final tag deploys production, the final is a person's act. The two exceptions —
    [*An operator-granted automatic final*](tools/docs/releases.md#an-operator-granted-automatic-final-441) and [*A final on every green head*](tools/docs/releases.md#a-final-on-every-green-head--deploy-tag-fast-446) —
    each need the operator's grant: a ruling a person recorded, never written by an agent, per repo and
-   revocable at once. A release carrying a database migration still waits for a person's grant — and on the
-   second, where nobody cuts by hand, that grant is also the person's decision on a destructive schema change (item 1, #709).
+   revocable at once. A release carrying a database migration still waits for a person's grant — the
+   same grant that is the person's decision on a destructive schema change (item 1, #709, #733).
 5. Nothing deploys a candidate, and no agent tags a candidate or a final by hand around the release
    tooling.
 6. A version a user sees reads the tag, or a stamp made from it at release or build time — never a

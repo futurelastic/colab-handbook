@@ -56,6 +56,18 @@ The rule: [CONVENTIONS.md §6, the release contract](../../CONVENTIONS.md#6-rele
 3. **[Hard — gate: colab release cut refuses]** **Every schema change since the last final tag is additive**
    ([*Switched epics*](../../CONVENTIONS.md#switched-epics--concurrent-unfinished-features-336), rule 5). A
    release carrying a destructive one is not a candidate an agent cuts; a human decides it.
+   **The human's act is the migration grant (#733), on every route, by hand or `--auto`.** A cut
+   refusing a measured destructive change opens the version's tracking issue (`release: vX.Y.Z`, the
+   record `release finalize` then reuses — its test period still starts no earlier than the
+   candidate's tag) and posts, and prints, the one command:
+   `COLAB_HUMAN=1 colab migration-grant <N> --branch vX.Y.Z`. Once a person runs it, the next cut
+   for **that version** passes, and the row (and the tag message) names the grant. A hand cut binds
+   to the version its `--bump` computes, so another bump asks again. An edited, renamed or deleted
+   migration stays destructive whatever its new text says — a database that already ran it never
+   runs the new one — so it, too, waits for the grant. A finding the check could not read, or a
+   `migrations: none` contradiction, is never cleared by a grant. `--dry` writes nothing; a Forgejo
+   remote keeps no tracking issue (#678), so there the refusal stands. On `library-fast` the record
+   exists only for the grant, and the final it lets through closes it.
    A Laravel `->change()` counts as destructive **only on a column the last final shipped** (#674):
    one on a column this release itself added — earlier in the same migration, or in an added
    migration that runs before it, same table — rewrites nothing released, so the safe shape *add it
