@@ -1499,7 +1499,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5b.me.01 | hard | tools/colab::function shipMigrationGate | `colab ship` refuses any branch touching `database/migrations/`, `prisma/migrations/` or a declared migrations prefix, with no flag, env var or field to lower the bar. | refuses, by default with no flag/env/field to lower the bar, any branch | tools/docs/grants.md | #98 |
+| C5b.me.01 | hard | tools/colab::function shipMigrationGate | `colab ship` refuses any branch touching `database/migrations/`, `prisma/migrations/` or a declared migrations prefix, with no flag, env var or field to lower the bar; a target's `data: none` with no falsifier (#762) is the one case with nothing to protect. | refuses, by default with no flag/env/field to lower the bar, any branch | tools/docs/grants.md | #98 |
 | C5b.me.02 | default |  | A declared `migrations:` prefix only ever widens what the gate sees, never narrows it. | A declaration only ever widens what the gate sees, never narrows it. | tools/docs/grants.md | #383 |
 | C5b.me.03 | default |  | A migration grant is a narrow, per-issue, branch-bound, expiring exemption that names the role that decided it, never a repo- or tier-level switch. | A migration grant is a narrow, per-issue, branch-bound, expiring exemption, and every | tools/docs/grants.md | #98 |
 | C5b.me.04 | default |  | The `human` role is a person's grant, bound to the branch, accepted on every repo. | a person \| `🛢 Migration grant` \| the branch | tools/docs/grants.md | #397 |
@@ -2625,6 +2625,7 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.keykinds.02 | default |  | `trust-humans` is identity, not a grant, and the grant rule covers it too. | `trust-humans` is identity, not a grant | project.schema.md#key-kinds | #641 |
 | S1.keykinds.03 | default |  | Only a person changes a grant key or `trust-humans`; an agent may only propose the change. | only a person changes a grant key or `trust-humans` | project.schema.md#key-kinds | #641 |
 | S1.keykinds.04 | default |  | A tool may let tuning change without an issue only within the tuning row, never wider. | is never wider than the tuning row above | project.schema.md#key-kinds | #641 |
+| S1.keykinds.05 | default |  | Adding `data: none` lowers a protection, so a person adds it. | adding `data: none` lowers a | project.schema.md#key-kinds | #762 |
 
 ### `tier`
 
@@ -2932,6 +2933,17 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.trusthumans.09 | default |  | `trust-humans` is a flat key holding a list, not `trust: { humans: … }`. | A flat key holding a list, not `trust: { humans: … }`. | project.schema.md | — |
 | S1.trusthumans.10 | hard | tools/lib/trust-humans.js::function parseTrustHumans | A malformed `trust-humans` value means nobody is human, blocking every human grant and ruling until fixed. | A malformed value means nobody is human. | project.schema.md | — |
 | S1.trusthumans.11 | default |  | The audit always reports the value in `--json` as `trustHumans`. | It appears in `--json` as `trustHumans` | project.schema.md | — |
+
+### `data`
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S1.data.01 | default |  | `data: none` says no database the repo's code runs against holds real data, and exempts ship's no-new-migrations gate while no falsifier is present. | Says whether any database this repo's code runs against holds **real data** | project.schema.md | #762 |
+| S1.data.02 | default |  | Absent or `real` `data` changes nothing; any other value is a finding and reads as absent. | **Absent or `real` → nothing changes.** | project.schema.md | #762 |
+| S1.data.03 | hard | tools/lib/data-exemption.js::function falsifiers | Any falsifier (production, tier A/C or exposure live/released, a deploy mechanism, a version tag on the target, an unreadable tag list) restores the migration gate, and the refusal names it. | **Any falsifier brings the gate back** | project.schema.md | #762 |
+| S1.data.04 | hard | tools/colab::function shipDataExemption | `data` is read from the target, never the branch; a branch that adds it gets no exemption for its own migrations. | that adds `data: none` gets no exemption for its own migrations. | project.schema.md | #762 |
+| S1.data.05 | hard | tools/colab::function shipDataLoweringCheck | A branch that introduces `data: none` lands only through the human door, whatever `autonomy` says. | **Adding it is a human act**, like lowering exposure | project.schema.md | #762 |
+| S1.data.06 | default |  | The audit reports `data` and warns when `data: none` sits beside a falsifier. | warns when `data: none` sits beside | project.schema.md | #762 |
 
 ### `room`
 

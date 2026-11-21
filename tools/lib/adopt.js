@@ -34,6 +34,7 @@ const yaml = require('./yaml.js');
 const { consumerEvidence, describeEvidence } = require('./consumer-evidence.js');
 const { evaluateExposure } = require('./exposure-shape.js');
 const { UserError } = require('./util.js');
+const dataExemption = require('./data-exemption.js'); // #762
 const labels = require('./codec/labels.js');
 
 const ROW_NAMES = ['tier', 'room', 'exposure', 'writes', 'channels'];
@@ -1057,6 +1058,61 @@ function autonomyGateVerdict({ autonomy, current, ceremony, isTTY, colabHuman, a
   return { ok: true, write: true };
 }
 
+const VALID_DATA = new Set(['none', 'real']);
+
+/**
+ * #762 — `data:` on `colab adopt`: does any database this repo's code runs against hold real data?
+ * `none` LOWERS a protection (colab ship's migration gate is exempt while no sign of production is
+ * present — tools/lib/data-exemption.js), so it carries the same human bar as `autonomy: auto-trunk`
+ * and is refused outright against an effective descriptor that already shows a falsifier
+ * (production, a deploy mechanism, live/released): the declaration would be false the moment it
+ * was written. `real` is never gated. Append-only like every other answer.
+ *
+ * `eff` = the descriptor as it will stand after this run (cfg overlaid with this run's answers).
+ * Returns `{ ok, write }` or a refusal `{ ok:false, class, exitCode, message }`. Pure.
+ */
+function dataGateVerdict({ data, current, eff, isTTY, colabHuman, answeredBy }) {
+  if (!VALID_DATA.has(data)) {
+    throw new UserError(`--data must be one of: ${[...VALID_DATA].join(', ')} (got ${JSON.stringify(data)})`);
+  }
+  if (current !== undefined) {
+    if (String(current).trim() === data) return { ok: true, write: false };
+    return {
+      ok: false,
+      class: GATE_CLASS.REPO_SHAPE,
+      exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE],
+      message: `project.yml already declares data: ${current} — adopt is append-only and never `
+        + 'rewrites a declared key; change it by hand, as its own reviewed commit (adding data: none lands through the human door)',
+    };
+  }
+  if (data !== 'none') return { ok: true, write: true };
+  const f = dataExemption.falsifiers(eff, null);
+  if (f.length) {
+    return {
+      ok: false,
+      class: GATE_CLASS.REPO_SHAPE,
+      exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE],
+      message: `data: none contradicts this descriptor — ${f.map((x) => x.detail).join('; ')}. `
+        + 'A repo with a sign of production is not a no-real-data repo; answer --data real',
+    };
+  }
+  if (!(isTTY || (colabHuman && answeredBy))) {
+    return {
+      ok: false,
+      class: GATE_CLASS.HUMAN_GATED,
+      exitCode: EXIT_CODE[GATE_CLASS.HUMAN_GATED],
+      message: 'declaring data: none requires a human: answer at an interactive terminal, or '
+        + 're-run with COLAB_HUMAN=1 and --answered-by "<name>" — it lets migrations land with no grant',
+    };
+  }
+  return { ok: true, write: true };
+}
+
+/** #762 — the default the first-adoption question offers: none only when nothing deploys. */
+function dataDefault(eff) {
+  return dataExemption.falsifiers(eff, null).length ? 'real' : 'none';
+}
+
 /**
  * #481 — may `colab adopt --land` commit the descriptor straight to trunk? Landing writes trunk,
  * so it is the human's act and never an agent's: COLAB_HUMAN=1 AND --answered-by, no TTY
@@ -1239,6 +1295,9 @@ module.exports = {
   writesGateVerdict,
   VALID_AUTONOMY,
   autonomyGateVerdict,
+  VALID_DATA,
+  dataGateVerdict,
+  dataDefault,
   landVerdict,
   landCommitMessage,
   provenanceComment,

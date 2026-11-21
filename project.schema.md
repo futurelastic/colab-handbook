@@ -17,12 +17,13 @@ it matters.
 
 | kind | what the key says | keys |
 |---|---|---|
-| **fact** | something true of the repo, which a reader can check against the repo | `tier`, `trunk`, `production`, `deploy`, `runbook`, `stack`, `integration`, `releaseBranch`, `owner`, `migrations`, `room`, `exposure`, `channels`, `distribution`, `ceremony`, `writes`, `contention`, `release`, `downloads`, `live-env`, `tree-reuse`, `ci-docs-skip`, `docs-only-paths`, `instruction-files`, `integration-profile`, `gate`, `node`, `php`, `python` |
+| **fact** | something true of the repo, which a reader can check against the repo | `tier`, `trunk`, `production`, `deploy`, `runbook`, `stack`, `integration`, `releaseBranch`, `owner`, `migrations`, `data`, `room`, `exposure`, `channels`, `distribution`, `ceremony`, `writes`, `contention`, `release`, `downloads`, `live-env`, `tree-reuse`, `ci-docs-skip`, `docs-only-paths`, `instruction-files`, `integration-profile`, `gate`, `node`, `php`, `python` |
 | **owner's grant** | who may take a consequential action here without a person's word each time | `autonomy`, `promotion`, `migration-grant`, `ci-grant`, `release-only-checks`, and `release`'s `final-grant` |
 | **tool tuning** | how a tool behaves here; every valid value is safe to choose | `ports`, `worktreePorts`, `ship-batch`, `ship-batch-wait`, `ship-batch-steps`, `ci-wait-factor`, `thresholds`, `holds`, `generated`, `branchPrefix`, `ship-gate-workflows`, `ship-ignore-workflows`, `heavy-workflow` |
 
 `trust-humans` is identity, not a grant: it says who counts as a person, which every grant
-relies on, so the grant rule covers it too.
+relies on, so the grant rule covers it too. `data` is a fact, but adding `data: none` lowers a
+protection, so a person adds it, as a person lowers exposure.
 
 **The grant rule, one rule for every grant key:** only a person changes a grant key or
 `trust-humans`. An agent may propose the change on a branch; it lands on a person's word,
@@ -692,6 +693,33 @@ Declare it when your agents run under their own GitHub account. The one reading 
   way: [ADR 539](docs/adr/539-schema-migrations-and-grants-rationale.md).
 - **The audit always reports the value.** It appears in `--json` as `trustHumans`
   (lowercased), or `null` when absent or malformed.
+
+### `data` — optional
+
+```yaml
+data: none   # absent (or real) = every new migration waits for a grant
+```
+
+Says whether any database this repo's code runs against holds **real data** — data anyone
+would miss. `none` is the one value that changes anything: `colab ship`'s no-new-migrations
+gate has nothing to protect, so a branch adding migrations lands without a grant while no
+sign of production is present (#762). The one reading is `tools/lib/data-exemption.js`.
+
+- **Absent or `real` → nothing changes.** The gate runs as before. Anything else is a
+  finding, and the gate reads it as absent.
+- **[Hard — gate: colab ship refuses]** **Any falsifier brings the gate back**, with no edit:
+  `production` non-null, `tier` A or C or `exposure` live or released, a `deploy` mechanism,
+  or a version-shaped tag on the target (an unreadable tag list counts). The refusal names
+  the falsifier, so the exemption cannot outlive the greenfield stage.
+- **[Hard — gate: colab ship refuses]** **Read from the target, never the branch.** A branch
+  that adds `data: none` gets no exemption for its own migrations.
+- **[Hard — gate: colab ship refuses]** **Adding it is a human act**, like lowering exposure:
+  a branch that introduces `data: none` lands only through the human door, whatever
+  `autonomy` says. `colab adopt --data` records it at adoption under the same bar as
+  `--autonomy auto-trunk`, and a first adoption asks it.
+- **The audit reports the value** (`--json`: `data`) and warns when `data: none` sits beside
+  a falsifier in the same descriptor. Mechanics:
+  [`tools/docs/grants.md`](tools/docs/grants.md#no-real-data--data-none-762).
 
 ### `room` — optional
 
