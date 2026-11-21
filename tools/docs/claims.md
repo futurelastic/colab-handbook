@@ -45,6 +45,20 @@ anywhere, naming the ref and how to continue it. Each machine sweeps its own wor
   older claim still refuses and is still deleted at `colab worktree rm`, until none is left.
 - Only `refs/heads/claim/<digits>` is a lock; any other `claim/…` ref is some tool's own and is
   ignored. No reader treats a lock as a session branch.
+- **Spent carriers (#760).** A remote **branch** carrying `#N` does not refuse a claim on `#N`
+  when it is provably over. Two shapes count. A branch that **already shipped** must meet all of
+  these: `landed` by content against trunk (`git merge-tree`, never `git cherry` and never the
+  two-signal fallback), at least one commit ahead of trunk (a branch with none may have just been
+  cut), and a commit on trunk whose message references `#N`. When content has no answer (trunk
+  has since rewritten the same lines), the tip's **tree** being exactly the tree of such a trunk
+  commit proves it too, again only with a commit ahead. A **prepared revert**
+  `<type>/revert-<sha>-N` counts when `<sha>` is a commit on trunk. Only these candidates are
+  fetched (one fetch), so a claim with no branch carrier stays fetch-free. A failed fetch, a branch
+  that moved since `ls-remote`, or an `unknown` keeps the branch a carrier. Each skipped ref is
+  printed with the reason and its delete command, on success and before a refusal. Nothing is
+  deleted. Locks and legacy claim refs are never skipped this way, so a session really working a
+  revert still refuses through its lock. Not covered: a shipped branch whose change trunk has since
+  reverted reads as cargo again and still refuses.
 
 ### Cross-factory takeover (#744)
 

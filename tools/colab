@@ -22,6 +22,7 @@ const releaseTag = require('./lib/release-tag');
 const squash = require('./lib/squash');
 const procs = require('./lib/procs');
 const landed = require('./lib/landed');
+const spentCarriers = require('./lib/spent-carriers'); // #760
 const notify = require('./lib/notify');
 const notifyEndpoint = require('./lib/notify-endpoint'); // #414
 const journal = require('./lib/journal');
@@ -676,6 +677,12 @@ function remoteClaimConflicts(st, repoAbs, nums) {
     if (!carried.length || ours(h.branch)) continue;
     for (const num of carried) conflicts.push({ num, remote, branch: h.branch, sha: h.sha, claimRef: !!h.claimRef });
   }
+  // #760: a BRANCH that already shipped (squash-merged, its change on trunk) or a prepared revert
+  // named for the issue is not a claim — `spent-carriers.js` proves it or keeps it. Only these
+  // candidates are fetched, so a claim with no branch carrier stays fetch-free. A legacy claim ref
+  // points at its cut commit, so "on trunk" says nothing about it: never a candidate.
+  const spent = spentCarriers.partitionSpent(repoAbs, remote, trunk, conflicts.filter((c) => !c.claimRef));
+  conflicts.splice(0, conflicts.length, ...conflicts.filter((c) => c.claimRef), ...spent.kept);
   // #741: the lock, `refs/heads/claim/<N>`. Ours when (a) this machine's own claim record holds that
   // exact lock — the ONLY test for a lock colab wrote, because two colab homes on one host share the
   // hardware and a `Machine:` line would read each other's locks as their own; or (b) another tool
@@ -701,7 +708,19 @@ function remoteClaimConflicts(st, repoAbs, nums) {
       branch: tr.branch || null, machine: tr.machine || null, writer: tr.colab ? 'colab' : (tr.author || null),
       unread: read.ok ? null : String(read.stderr || '').split('\n')[0] });
   }
-  return { mode: 'ok', remote, conflicts, ownLocks };
+  return { mode: 'ok', remote, conflicts, ownLocks, skipped: spent.skipped, spentWarning: spent.warning };
+}
+
+/**
+ * #760 — name every remote branch the carrier check skipped as spent, with its delete command, so a
+ * human can clear it. Printed on success and before a refusal alike: the skip is a fact either way.
+ */
+function printSkippedCarriers(check) {
+  if (!check || check.mode !== 'ok') return;
+  if (check.spentWarning) warn(check.spentWarning);
+  for (const s of check.skipped || []) {
+    print(`  #${s.num}: skipped ${s.remote}/${s.branch} @ ${s.sha} — ${s.why}; not counted as a claim (#760). Delete it: git push ${s.remote} --delete ${s.branch}`);
+  }
 }
 
 /**
@@ -1398,6 +1417,7 @@ function cmdClaim(argv) {
   const remoteCheck = remoteClaimConflicts(st0, repoAbs, nums);
   if (remoteCheck.mode === 'unreachable') { printRemoteUnreachable(remoteCheck, 'claim'); return 1; }
   if (remoteCheck.mode === 'no-remote') warn('no git remote — this claim is recorded on this machine only; no other machine can see it');
+  printSkippedCarriers(remoteCheck);
   const remoteConf = remoteCheck.conflicts;
   const localConf = localClaimConflicts(st0, repoAbs, nums, wtName);
   const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin, HOST, session, comps, myMachineId(), myFactory(repoAbs)) : [];
@@ -6532,6 +6552,7 @@ function cmdWorktreeNew(argv) {
     remoteCheck = remoteClaimConflicts(st0, repoAbs, issues);
     if (remoteCheck.mode === 'unreachable') { printRemoteUnreachable(remoteCheck, 'worktree and its claims'); return 1; }
     if (remoteCheck.mode === 'no-remote') warn('no git remote — these claims are recorded on this machine only; no other machine can see them');
+    printSkippedCarriers(remoteCheck);
     const localConf = localClaimConflicts(st0, repoAbs, issues, name);
     const ghConf = gh ? ghClaimConflicts(repoAbs, issues, myLogin, HOST, session, comps, myMachineId(), myFactory(repoAbs)) : [];
     if (!gh && remoteCheck.mode === 'ok') warn(`gh not usable here (${ghUnusableWhy(repoAbs)}) — refusal checked the remote and this machine; the tracker half will be PENDING`);
