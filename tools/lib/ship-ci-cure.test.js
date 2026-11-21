@@ -214,8 +214,11 @@ test('#589: shipCiCure resolves containment and the diff through the ref ship la
   assert.doesNotMatch(fn, /'--is-ancestor', redSha, branch\]/, 'the bare-name ancestry read is gone');
   assert.match(fn, /cureDiff\.cureDiffSignals\(git, repoAbs, trunk, branchRef\)/);
   assert.match(fn, /containmentReason: containment\.reason/);
-  // The CI read keeps the name — ghRunForSha resolves the remote head itself.
-  assert.match(fn, /git\.ghRunForSha\(repoAbs, branch\)/);
+  // The CI read keeps the name — ghRunForSha resolves the remote head itself. #765: through the
+  // branchEvidenceRun seam, whose GitHub branch is that same call (a forge reads its commit status).
+  assert.match(fn, /branchEvidenceRun\(repoAbs, branch\)/);
+  const seam = src.slice(src.indexOf('function branchEvidenceRun('), src.indexOf('\n}\n', src.indexOf('function branchEvidenceRun(')));
+  assert.match(seam, /if \(!fc\) return git\.ghRunForSha\(repoAbs, branch\);/);
 });
 
 test('#297: shipCureJobEvidence reads EVERY run at the branch head and tags each job with its workflow', () => {
@@ -224,7 +227,10 @@ test('#297: shipCureJobEvidence reads EVERY run at the branch head and tags each
   // slice ends where the reviewer-grant readers (#730) begin — they tag their jobs the same way, and
   // counting them here would make this a count of the file's readers, not of the cure path's two.
   const fn = src.slice(src.indexOf('function shipCureJobEvidence('), src.indexOf('function trunkReviewerRedJobs('));
-  assert.match(fn, /git\.ghRunsForCommit\(repoAbs, branch, evRun\.sha\)/);
+  // #765: through the ciRunsAt seam — GitHub's branch of it is git.ghRunsForCommit, unchanged.
+  assert.match(fn, /ciRunsAt\(repoAbs, branch, evRun\.sha\)/);
+  const seam = src.slice(src.indexOf('function ciRunsAt('), src.indexOf('\n}\n', src.indexOf('function ciRunsAt(')));
+  assert.match(seam, /if \(!fc\) return git\.ghRunsForCommit\(repoAbs, ref, sha, limit\);/);
   assert.equal((fn.match(/jobs\.map\(\(j\) => \(\{ \.\.\.j, workflowName: r\.workflowName/g) || []).length, 2, 'both sides tag their jobs');
 });
 

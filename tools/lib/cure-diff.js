@@ -394,6 +394,9 @@ function cureContainment(git, repo, redSha, branch, remote) {
  * (#476): `[]` when their condition is untouched, `[{path, added|pins}]` when EVERY touched manifest
  * is of the admissible shape, `null` otherwise. Never throws.
  */
+/** #765: the workflow directories condition 4 counts — GitHub's, plus the ones a Forgejo/Gitea remote runs. */
+const WORKFLOW_DIRS = Object.freeze(['.github/workflows/', '.forgejo/workflows/', '.gitea/workflows/']);
+
 function cureDiffSignals(git, repo, trunk, branch) {
   const raw = git.git(['diff', '-z', '--no-renames', '--raw', '--no-abbrev', `${trunk}...${branch}`], repo);
   if (!raw.ok) {
@@ -402,7 +405,11 @@ function cureDiffSignals(git, repo, trunk, branch) {
       pythonManifestTouched: null, pythonManifestPaths: [], pythonPinOnly: null };
   }
   const entries = parseRaw(raw.stdout);
-  const workflowsTouched = entries.some((e) => e.path.startsWith('.github/workflows/'));
+  // #765: every directory a forge runs workflows from, not only GitHub's — Forgejo reads
+  // `.forgejo/workflows/` (and Gitea `.gitea/workflows/`) before falling back to `.github/workflows/`, so
+  // on a forge remote a branch editing those edits the CI grading it. On GitHub they are inert; counting
+  // them there only ever refuses (the carve-out then decides), never admits.
+  const workflowsTouched = entries.some((e) => WORKFLOW_DIRS.some((d) => e.path.startsWith(d)));
 
   const touched = [];
   const unmeasured = [];

@@ -48,6 +48,7 @@ const dataExemption = require('./lib/data-exemption'); // #762
 const ownerPolicy = require('./lib/owner-policy');
 const grantPolicy = require('./lib/grant-policy');
 const ciCure = require('./lib/ci-cure');
+const ciForgejo = require('./lib/ci-forgejo'); // #765: status rows → job/run rows for the red-trunk doors
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
 const treeGreen = require('./lib/tree-green');
@@ -265,6 +266,49 @@ function forgeEngine(repoAbs) {
  */
 function forgeCi(repoAbs) {
   return forgeEngine(repoAbs).engine === 'github' ? null : tracker.ciFor(repoAbs);
+}
+
+/**
+ * #765: the remote head sha of `branch` (plain `git ls-remote`, the protocol — no REST call), or null.
+ * The forge reads key by commit, so this is how a forge read finds "the branch's current head".
+ */
+function forgeRemoteHead(repoAbs, branch) {
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  const ls = git.git(['ls-remote', remote, `refs/heads/${branch}`], repoAbs);
+  return ls.ok ? ((ls.stdout.split('\n')[0] || '').split('\t')[0].trim() || null) : null;
+}
+
+/**
+ * #765: every CI run on `ref` at `sha`, the one seam the red-trunk doors read runs through. GitHub:
+ * `git.ghRunsForCommit`, unchanged. A forge: its status rows grouped into one run per workflow
+ * (ci-forgejo.js `runsFromRows`), each carrying its jobs inline — a commit status belongs to the commit,
+ * so `ref` and `limit` do not narrow it. null when the read failed, never "no runs".
+ */
+function ciRunsAt(repoAbs, ref, sha, limit) {
+  const fc = forgeCi(repoAbs);
+  if (!fc) return git.ghRunsForCommit(repoAbs, ref, sha, limit);
+  return typeof fc.ciRunsAt === 'function' ? ciForgejo.runsFromRows(fc.ciRunsAt(sha)) : null;
+}
+
+/** #765: a run's jobs — inline on a forge run (ciRunsAt), else one `gh run view`. null when unread. */
+function ciRunJobs(repoAbs, run) {
+  if (run && Array.isArray(run.jobs)) return run.jobs;
+  return git.ghRunJobs(repoAbs, run && run.databaseId);
+}
+
+/**
+ * #765: the branch's CI at its CURRENT remote head, as `{sha, status, conclusion}` — what the cure rule
+ * and the grant read as measured evidence. GitHub: `git.ghRunForSha`, unchanged. A forge: the remote
+ * head (ls-remote) and its commit-status verdict (`ciVerdict`), the read the branch-head row (#682)
+ * already makes. null when the branch is not on the remote or the read failed.
+ */
+function branchEvidenceRun(repoAbs, branch) {
+  const fc = forgeCi(repoAbs);
+  if (!fc) return git.ghRunForSha(repoAbs, branch);
+  const sha = forgeRemoteHead(repoAbs, branch);
+  if (!sha) return null;
+  const v = fc.ciVerdict(sha, { branch });
+  return v ? { ...v, sha: v.sha || sha } : null;
 }
 
 /**
@@ -5657,7 +5701,10 @@ function computeAntiStacking(repoAbs, trunk, trunkIsRed) {
     // local offset is positive (tools/lib/ci-grant.js's wentGreenSince doc comment has the full
     // failure).
     let wentGreen = false;
-    const runsR = tracker.forRepo(repoAbs).runList({ branch: trunk, limit: 100, fields: ['conclusion', 'status', 'createdAt'] });
+    const fc = forgeCi(repoAbs);
+    // #765: a forge has no run list — read trunk's commits since the prior exemption (forgeTrunkVerdictsSince).
+    const runsR = fc ? { data: forgeTrunkVerdictsSince(repoAbs, fc, trunk, priorGrantMerge.at) }
+      : tracker.forRepo(repoAbs).runList({ branch: trunk, limit: 100, fields: ['conclusion', 'status', 'createdAt'] });
     if (runsR.data) {
       try {
         wentGreen = ciGrant.wentGreenSince(runsR.data, priorGrantMerge.at);
@@ -5666,6 +5713,35 @@ function computeAntiStacking(repoAbs, trunk, trunkIsRed) {
     redContinuousSincePriorGrant = !wentGreen;
   }
   return ciGrant.stackingVerdict({ trunkIsRed, priorGrantMerge, redContinuousSincePriorGrant });
+}
+
+/**
+ * #765: computeAntiStacking's "did trunk go green since the prior exemption" input on a forge, as rows
+ * `ciGrant.wentGreenSince` reads: one per trunk commit since the day of `priorAtIso`, its WHOLE commit
+ * status summarized (git.summarizeRunsForCommit — one green context beside a red one is not green), and
+ * dated by the commit's own time (a status has no run start). null when any read failed, which the
+ * caller reads as "cannot prove it went green" — the stacked, conservative answer.
+ */
+function forgeTrunkVerdictsSince(repoAbs, fc, trunk, priorAtIso) {
+  if (typeof fc.ciRunsSince !== 'function') return null;
+  const t = Date.parse(priorAtIso);
+  if (Number.isNaN(t)) return null;
+  const day = new Date(t).toISOString().slice(0, 10);
+  const r = fc.ciRunsSince(trunk, day);
+  if (!r || !Array.isArray(r.runs)) return null;
+  const bySha = new Map();
+  for (const row of r.runs) {
+    if (!bySha.has(row.headSha)) bySha.set(row.headSha, []);
+    bySha.get(row.headSha).push(row);
+  }
+  const out = [];
+  for (const [sha, rows] of bySha) {
+    const v = git.summarizeRunsForCommit(rows, sha);
+    const ms = git.commitTimeMs(repoAbs, sha);
+    if (!v || ms == null) continue;
+    out.push({ status: v.status, conclusion: v.conclusion, createdAt: new Date(ms).toISOString() });
+  }
+  return out;
 }
 
 function cmdCiGrant(argv) {
@@ -12786,10 +12862,13 @@ function descriptorHolds(doc) {
 function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk, branch = null, docsOnlyThunk = null) {
   const name = `${target === trunk ? 'trunk' : 'line'} CI green`;
   const r = readCiVerdict(repoAbs, gh, target, trunk);
-  // #678: on a forge the engine map names, the verdict is final — the #482 no-workflow door counts
+  // #678: on a forge the engine map names, the #482 no-workflow door is not offered — it counts
   // `.github/workflows` and reads the branch through gh, neither of which describes a forge's CI.
-  if (forgeCi(repoAbs)) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null, releaseOnlyVerdict: null };
-  const nw = noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch, docsOnlyThunk);
+  // #765: but a red forge trunk (HUMAN_GATED, not final) still goes through the red-trunk doors below,
+  // with their evidence read from commit statuses — before, this returned every forge verdict as final,
+  // so neither the cure rule nor a ci-grant nor the release-only door was ever asked.
+  const forge = !!forgeCi(repoAbs);
+  const nw = forge ? null : noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch, docsOnlyThunk);
   if (nw) return { name, ...nw, grantVerdict: null, cureVerdict: null, releaseOnlyVerdict: null };
   if (r.final) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null, releaseOnlyVerdict: null };
   // #736: the release-only door is built here, not passed in — it needs only the branch, so every
@@ -12817,11 +12896,20 @@ function shipReleaseOnly(repoAbs, target, trunk, redSha, branch) {
   if (target !== trunk || !redSha || !branch) return null;
   const decl = releaseOnly.parseReleaseOnly(projectDocAt(repoAbs, trunk));
   if (!decl.valid || !decl.checks.length) return null;
-  const run = git.ghRunForCommit(repoAbs, trunk, redSha, undefined, { verifying: verifyingPolicy(repoAbs), heads: true });
-  const heads = run && Array.isArray(run.heads) ? run.heads : null;
+  // #765: on a forge the heads are its status rows grouped per workflow, each with its jobs inline.
+  let heads;
+  let jobsOf;
+  if (forgeCi(repoAbs)) {
+    heads = ciRunsAt(repoAbs, trunk, redSha); // null = unread → the door refuses "could not read the runs"
+    jobsOf = (id) => { const h = (heads || []).find((x) => x.databaseId === id); return h ? h.jobs : null; };
+  } else {
+    const run = git.ghRunForCommit(repoAbs, trunk, redSha, undefined, { verifying: verifyingPolicy(repoAbs), heads: true });
+    heads = run && Array.isArray(run.heads) ? run.heads : null;
+    jobsOf = (id) => git.ghRunJobs(repoAbs, id);
+  }
   const diff = git.git(['diff', '--name-only', '-z', '--no-renames', `${target}...${shipRefFor(repoAbs, branch)}`, '--'], repoAbs);
   const changed = diff.ok ? diff.stdout.split('\0').map((x) => x.replace(/^\n+/, '')).filter(Boolean) : null;
-  const v = releaseOnly.releaseOnlyVerdict({ heads, jobsOf: (id) => git.ghRunJobs(repoAbs, id), changed, checks: decl.checks });
+  const v = releaseOnly.releaseOnlyVerdict({ heads, jobsOf, changed, checks: decl.checks });
   return v.applies ? { ...v, redSha } : null;
 }
 
@@ -13020,9 +13108,10 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
  * through the tracker contract's `ciVerdict` (commit statuses on Forgejo), classified by the same
  * classifyCiRun every GitHub read goes through. Kept: the line→trunk fallback and the #413 empty-read
  * grace (both git-side). Not offered: the GitHub-only doors — the by-commit re-read (#413), the
- * docs-only tip (#606), the batch substitute (#373), the tree-green citation (#493) — and, by
- * returning `final: true`, the ci-grant and cure exemptions, which live on the tracker (frozen on a
- * forge, #604/#608). A failed read is SELF_CLEARING and never green.
+ * docs-only tip (#606), the batch substitute (#373), the tree-green citation (#493). #765: a finished
+ * red (HUMAN_GATED) is NOT final, so shipCiCheck asks the red-trunk doors — release-only, the cure
+ * rule, ci-grant — with evidence read from commit statuses (ciRunsAt / branchEvidenceRun); before, this
+ * returned `final: true` and none of them was ever consulted. A failed read is SELF_CLEARING and never green.
  */
 function readForgeCiVerdict(repoAbs, fc, target, trunk) {
   const engine = fc.kind || 'forge';
@@ -13052,7 +13141,7 @@ function readForgeCiVerdict(repoAbs, fc, target, trunk) {
         detail: `no commit status yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${Math.round(fresh.graceMinutes * 10) / 10}m grace; retry later` };
     }
   }
-  return { run, verdict, final: true };
+  return { run, verdict, final: verdict.ok || verdict.class !== HUMAN_GATED };
 }
 
 /**
@@ -13549,18 +13638,23 @@ function doorRefusalNote(cureVerdict, grantVerdict, releaseOnlyVerdict = null) {
  * the same "ask by sha" discipline, applied to the branch instead of the target.
  */
 function shipCiGrants(repoAbs, gh, issues, branch, trunk, redSha) {
-  if (!gh) {
+  // #765: on a forge the grant is READ through the forge (issue, comments, who added the label); the
+  // mint stays gh-only — writing one is a tracker write, frozen on a forge by #678's ruling, so a forge
+  // grant is a comment + label a person posts in the forge's own UI.
+  const fc = forgeCi(repoAbs);
+  if (!gh && !fc) {
     return { ok: false, granted: [],
       missing: [{ issue: null, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — a CI grant lives on the tracker and cannot be confirmed` }] };
   }
   const records = {};
   // `title` (#504): a reviewer grant requires its issue to be titled `TRUNK RED:`.
-  for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments', 'title']);
-  const evRun = git.ghRunForSha(repoAbs, branch);
+  for (const n of issues) records[n] = fc ? forgeGrantRecord(fc, n) : git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments', 'title']);
+  const evRun = branchEvidenceRun(repoAbs, branch);
   const evidence = !evRun ? null : { ok: evRun.status === 'completed' && evRun.conclusion === 'success', sha: evRun.sha };
   return ciGrant.evaluateShipSet(issues, records, branch, trunk, redSha, evidence, labels.CI_GRANT_LABEL, {
     trust: trustAt(repoAbs, trunk),
-    labelActors: (n) => git.ghIssueLabelActors(repoAbs, n, labels.CI_GRANT_LABEL),
+    labelActors: (n) => (fc ? (typeof fc.labelActors === 'function' ? fc.labelActors(n, labels.CI_GRANT_LABEL) : null)
+      : git.ghIssueLabelActors(repoAbs, n, labels.CI_GRANT_LABEL)),
     // #615: the head's pure trunk-sync lineage, bounded by the RED sha (not trunk's tip) — a merge of
     // anything past what the human reviewed against is not a sync this grant covers.
     // The head may have been synced from another machine: fetch it when absent (a failed fetch just
@@ -13578,6 +13672,25 @@ function shipCiGrants(repoAbs, gh, issues, branch, trunk, redSha) {
     redJobs: () => trunkReviewerRedJobs(repoAbs, trunk, redSha),
     branchJobs: () => (evRun && evRun.sha ? branchHeadJobs(repoAbs, branch, evRun.sha) : null),
   });
+}
+
+/**
+ * #765: one issue as the grant readers need it (`state`, `labels`, `comments`, `title` — the
+ * `gh issue view` shape), read from a forge. A forge comment carries no author association, so each
+ * distinct author's is read once (ci-forgejo.js `authorAssociation`: OWNER / COLLABORATOR / NONE, or
+ * '' when unread — untrusted, so a grant from it refuses). null when the issue could not be read.
+ */
+function forgeGrantRecord(fc, num) {
+  if (typeof fc.issueView !== 'function') return null;
+  const info = fc.issueView(num, ['state', 'labels', 'comments', 'title']);
+  if (!info) return null;
+  const assoc = new Map();
+  const of = (login) => {
+    if (!assoc.has(login)) assoc.set(login, typeof fc.authorAssociation === 'function' ? fc.authorAssociation(login) : '');
+    return assoc.get(login);
+  };
+  const comments = (info.comments || []).map((c) => ({ ...c, authorAssociation: of((c.author && c.author.login) || '') }));
+  return { ...info, comments };
 }
 
 /**
@@ -13649,7 +13762,9 @@ function ciGrantPayload(ciResult) {
  * fired.
  */
 function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
-  if (!gh) {
+  // #765: a forge needs no gh — its evidence is the commit statuses (branchEvidenceRun, ciRunsAt).
+  const forge = !!forgeCi(repoAbs);
+  if (!gh && !forge) {
     return { ok: false, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — the cure rule needs a measured CI run`, redSha, evidenceSha: null };
   }
   // #589: containment and the diff read the ref ship lands — the local branch, else its remote-tracking
@@ -13659,7 +13774,7 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   const containment = cureDiff.cureContainment(git, repoAbs, redSha, branch);
   const containsRedSha = containment.contains;
   const branchRef = containment.ref || branch;
-  const evRun = git.ghRunForSha(repoAbs, branch);
+  const evRun = branchEvidenceRun(repoAbs, branch);
   const evidence = !evRun ? null : { ok: evRun.status === 'completed' && evRun.conclusion === 'success', sha: evRun.sha };
   const stacking = computeAntiStacking(repoAbs, trunk, true /* trunkIsRed: shipCiCure is only ever reached from a HUMAN_GATED raw verdict */);
   const diff = cureDiff.cureDiffSignals(git, repoAbs, trunk, branchRef);
@@ -13669,9 +13784,10 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
     ? shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) : null;
   // #474: which workflows at the branch head offer a dry run — a static read (git show), read only
   // when job evidence exists, so a branch that already refuses on containment or 2a pays nothing.
-  const capable = jobEvidence && evidence ? dryRunCapableWorkflows(repoAbs, evidence.sha) : [];
+  // #765: never on a forge — both plans are `gh workflow run` commands, and a forge has no gh to run them.
+  const capable = jobEvidence && evidence && !forge ? dryRunCapableWorkflows(repoAbs, evidence.sha) : [];
   // #510: which branch workflows a plain workflow_dispatch can run — same static read, same gating.
-  const dispatchable = jobEvidence && evidence ? dispatchableWorkflows(repoAbs, evidence.sha) : [];
+  const dispatchable = jobEvidence && evidence && !forge ? dispatchableWorkflows(repoAbs, evidence.sha) : [];
   // #477: a stacked refusal may be lifted by progress — measure the prior red set only then.
   const priorRedJobs = jobEvidence && stacking && stacking.stacked ? priorExemptionRedJobs(repoAbs, trunk, stacking) : null;
   const verdict = ciCure.cureVerdict({ containsRedSha, containmentReason: containment.reason, evidence, redSha, stacking, jobEvidence, priorRedJobs,
@@ -13723,11 +13839,11 @@ function shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) {
   const redRunJobs = trunkRedRunJobs(repoAbs, trunk, redSha);
   if (redRunJobs === null) return null;
 
-  const branchRuns = git.ghRunsForCommit(repoAbs, branch, evRun.sha);
+  const branchRuns = ciRunsAt(repoAbs, branch, evRun.sha);
   if (branchRuns === null || branchRuns.length === 0) return null;
   const branchRunJobs = [];
   for (const r of branchRuns) {
-    const jobs = git.ghRunJobs(repoAbs, r.databaseId);
+    const jobs = ciRunJobs(repoAbs, r);
     if (jobs === null) return null;
     // #510: workflowId, event and headSha too — the dispatch rules (W1/W2) read them per job.
     branchRunJobs.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '', workflowId: r.workflowId ?? null,
@@ -13752,7 +13868,7 @@ function trunkRedRunJobs(repoAbs, trunk, sha, limit) {
   // red is exactly the failure this evidence exists to prevent.
   // #451: a run from a workflow the repo does not own is not part of trunk's red — same drop the
   // verdict itself makes (git.summarizeRunsForCommit), so cure evidence never chases its jobs.
-  const runsAll = git.ghRunsForCommit(repoAbs, trunk, sha, limit);
+  const runsAll = ciRunsAt(repoAbs, trunk, sha, limit); // #765: a forge's runs from its commit statuses
   const runs = runsAll === null ? null : runsAll.filter(git.isRepoOwnedRun);
   if (runs === null || runs.length === 0) return null;
 
@@ -13763,7 +13879,7 @@ function trunkRedRunJobs(repoAbs, trunk, sha, limit) {
 
   const out = [];
   for (const r of notGreen) {
-    const jobs = git.ghRunJobs(repoAbs, r.databaseId);
+    const jobs = ciRunJobs(repoAbs, r);
     if (jobs === null) return null;
     out.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '', workflowId: r.workflowId ?? null })));
   }
@@ -13777,14 +13893,14 @@ function trunkRedRunJobs(repoAbs, trunk, sha, limit) {
  * `reviewerRedJobSet`. `null` on any failed read, or when nothing red can be named.
  */
 function trunkReviewerRedJobs(repoAbs, trunk, sha) {
-  const runsAll = git.ghRunsForCommit(repoAbs, trunk, sha);
+  const runsAll = ciRunsAt(repoAbs, trunk, sha); // #765: forge statuses too; no `attempt`, so no spent cancel there
   const runs = runsAll === null ? null : runsAll.filter(git.isRepoOwnedRun);
   if (runs === null || runs.length === 0) return null;
   const failedRuns = runs.filter((r) => r.status === 'completed' && r.conclusion !== 'success' && r.conclusion !== 'cancelled');
   const jobsOf = (list) => {
     const out = [];
     for (const r of list) {
-      const jobs = git.ghRunJobs(repoAbs, r.databaseId);
+      const jobs = ciRunJobs(repoAbs, r);
       if (jobs === null) return null;
       out.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '', workflowId: r.workflowId ?? null })));
     }
@@ -13802,11 +13918,11 @@ function trunkReviewerRedJobs(repoAbs, trunk, sha) {
  * any failed read — never an empty set standing for "could not tell".
  */
 function branchHeadJobs(repoAbs, branch, sha) {
-  const runs = git.ghRunsForCommit(repoAbs, branch, sha);
+  const runs = ciRunsAt(repoAbs, branch, sha); // #765
   if (runs === null) return null;
   const out = [];
   for (const r of runs.filter(git.isRepoOwnedRun)) {
-    const jobs = git.ghRunJobs(repoAbs, r.databaseId);
+    const jobs = ciRunJobs(repoAbs, r);
     if (jobs === null) return null;
     out.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '', runStatus: r.status || null, runConclusion: r.conclusion || null })));
   }

@@ -16,7 +16,11 @@
  * Plus three reads that are NOT contract (forge-shaped, like the GitHub adapter's raw run lists):
  * `ciRunsAt` (the status rows at a commit), `ciRunsSince` (rows for every commit on a branch since a
  * day — finalize's trunk window) and `blockedBy` (an issue's dependencies — a tracking record's
- * regression edges).
+ * regression edges). #765 adds two more READS for ship's red-trunk doors — `authorAssociation` (a
+ * login's collaborator permission, as the trust class a grant reader checks) and `labelActors` (who
+ * added a label, from the issue timeline) — plus the pure `jobFromRow`/`runsFromRows`, which turn status
+ * rows into the job and run rows the cure rule and the release-only door read. Still no write: a CI
+ * grant on a forge is posted in the forge's own UI and only READ here (#678's ruling).
  *
  * The CI read: the commit's COMBINED status, `GET {api}/repos/{owner}/{repo}/commits/{sha}/status`,
  * which already holds the newest status per context. Each status becomes one row in the shape
@@ -117,6 +121,115 @@ function statusRow(sha, st) {
     url: (st && st.target_url) || null,
     ...(ev ? { event: ev[1] } : {}), // #681: `<workflow> / <job> (<event>)`
   };
+}
+
+/**
+ * #765: one status row → one JOB row, in the shape `gh run view --json jobs` rows take once the CLI has
+ * tagged them with their run's `workflowName` (tools/lib/ci-cure.js `shapeJobEvidence` reads it). A forge
+ * has no job API, but a Forgejo Actions context already names one job: `<workflow> / <job> (<event>)`.
+ * The event comes off the end. The rest splits on the FIRST ` / `, so a job name that itself holds a
+ * slash survives. A context with no ` / ` (an external CI's status) is its own workflow and job.
+ * `steps` and the timestamps are null ON PURPOSE: a status carries neither, and every rule that needs
+ * them (the #321 carve-out, the manifest step proofs) refuses on null — unmeasured, never passed. Pure.
+ */
+function jobFromRow(row) {
+  const ctx = String((row && row.workflowName) || '');
+  const ev = /\s*\(([a-z_]+)\)\s*$/.exec(ctx);
+  const bare = ev ? ctx.slice(0, ev.index) : ctx;
+  const cut = bare.indexOf(' / ');
+  const workflowName = cut > 0 ? bare.slice(0, cut).trim() : bare.trim();
+  const name = cut > 0 ? bare.slice(cut + 3).trim() : bare.trim();
+  return {
+    name,
+    workflowName,
+    workflowId: null,
+    event: (row && row.event) || (ev ? ev[1] : null),
+    headSha: (row && row.headSha) || null,
+    status: row && row.status,
+    conclusion: (row && row.conclusion) || '',
+    startedAt: null,
+    completedAt: null,
+    steps: null,
+  };
+}
+
+/** Conclusions that executed nothing: a run made only of these neither passed nor failed. */
+const NEUTRAL_JOB = new Set(['skipped', 'cancelled', 'neutral']);
+
+/**
+ * #765: the status rows at one sha → RUN rows, one per workflow, each carrying its `jobs` inline (the
+ * jobFromRow rows). The run shape is the one `git.ghRunsForCommit` returns, so the cure rule, the
+ * reviewer red set and the release-only door read a forge the way they read GitHub:
+ *   - status `in_progress` while any job is pending, else `completed`;
+ *   - conclusion `success` when every job succeeded; the first neutral one (skipped/cancelled) when
+ *     every job is neutral; else the first red job's conclusion — a run is green only if all of it is;
+ *   - `databaseId` is a SYNTHETIC key `status:<workflow>` (a status has no run id). It is not a number,
+ *     so nothing can mistake it for a GitHub run id, and the CLI reads the jobs off `jobs`, never by id.
+ * Push and pull_request contexts of one workflow are ONE run here, as GitHub's newest-run-per-workflow
+ * makes them one head; the jobs keep their own `event`, and the cure rule's index already treats two
+ * instances of one job at one sha (a passing and a failing one refuse). `[]` for no rows; null for null. Pure.
+ */
+function runsFromRows(rows) {
+  if (rows === null || rows === undefined) return null;
+  if (!Array.isArray(rows)) return null;
+  const by = new Map();
+  for (const r of rows) {
+    const j = jobFromRow(r);
+    const key = j.workflowName;
+    if (!by.has(key)) by.set(key, { headSha: j.headSha, events: [], jobs: [] });
+    const run = by.get(key);
+    run.jobs.push(j);
+    if (j.event && !run.events.includes(j.event)) run.events.push(j.event);
+  }
+  const out = [];
+  for (const [workflowName, run] of by) {
+    const pending = run.jobs.some((j) => j.status !== 'completed');
+    const red = run.jobs.find((j) => j.status === 'completed' && j.conclusion !== 'success' && !NEUTRAL_JOB.has(j.conclusion));
+    const anyOk = run.jobs.some((j) => j.conclusion === 'success');
+    // No red, nothing pending: success when any job passed (a skipped job beside it is how GitHub
+    // concludes a run too), else every job was neutral and the run is that neutral conclusion.
+    const conclusion = pending ? '' : red ? red.conclusion : anyOk ? 'success' : run.jobs[0].conclusion;
+    out.push({
+      workflowName,
+      workflowId: null,
+      databaseId: `status:${workflowName}`,
+      headSha: run.headSha,
+      event: run.events.length === 1 ? run.events[0] : null,
+      status: pending ? 'in_progress' : 'completed',
+      conclusion,
+      jobs: run.jobs,
+    });
+  }
+  return out;
+}
+
+/**
+ * #765: a Forgejo collaborator permission → the GitHub `authorAssociation` class the grant readers
+ * trust (tools/lib/trust-humans.js TRUSTED_ASSOCIATIONS). The repo owner (or `owner` permission) is
+ * OWNER; `admin`/`write` is COLLABORATOR — stricter than GitHub, whose COLLABORATOR covers any invited
+ * level, and the label half of a grant needs write anyway; `read`/`none` is NONE. Unknown or unread is
+ * '' — not a trusted class, so a grant from it refuses. Pure.
+ */
+function associationFrom(login, ownerLogin, permission) {
+  if (login && ownerLogin && String(login).toLowerCase() === String(ownerLogin).toLowerCase()) return 'OWNER';
+  const p = String(permission || '').toLowerCase();
+  if (p === 'owner') return 'OWNER';
+  if (p === 'admin' || p === 'write') return 'COLLABORATOR';
+  if (p === 'read' || p === 'none') return 'NONE';
+  return '';
+}
+
+/**
+ * #765: who ADDED `label` to an issue, oldest first, from Forgejo's issue timeline — the shape
+ * `git.ghIssueLabelActors` returns. A `label` timeline entry with body `1` is an add; anything else (a
+ * removal) is not an applier. Pure; null when the pages are not a list.
+ */
+function labelAddersFrom(entries, label) {
+  if (!Array.isArray(entries)) return null;
+  return entries
+    .filter((e) => e && String(e.type || '') === 'label' && e.label && e.label.name === label && String(e.body || '') === '1')
+    .map((e) => (e.user && e.user.login) || '')
+    .filter(Boolean);
 }
 
 /** The status rows for `sha` from a sequence of combined-status pages, or null when any page failed. Pure. */
@@ -309,6 +422,38 @@ function create(repoAbs, eng) {
       return { body: c.body == null ? '' : String(c.body), login: (c.user && c.user.login) || '', createdAt: c.created_at || '', htmlUrl: c.html_url || '' };
     },
 
+    /**
+     * #765, not contract: the GitHub-style `authorAssociation` of `login` on this repo, from the
+     * collaborator-permission read (associationFrom). '' when it could not be read — untrusted.
+     */
+    authorAssociation: (login) => {
+      if (!login) return '';
+      if (String(login).toLowerCase() === String(eng.owner || '').toLowerCase()) return 'OWNER';
+      const r = httpGet(`${base}/collaborators/${encodeURIComponent(login)}/permission`, eng.tokenEnv);
+      if (r.status === 404) return 'NONE'; // not a collaborator at all
+      if (r.status !== 200) return '';
+      try { return associationFrom(login, eng.owner, (JSON.parse(r.body) || {}).permission); } catch (_) { return ''; }
+    },
+
+    /**
+     * #765, not contract: who added `label` to issue `num` (labelAddersFrom over the issue timeline),
+     * or null when any page could not be read — never a partial list read as complete.
+     */
+    labelActors: (num, label) => {
+      const all = [];
+      for (let page = 1; ; page++) {
+        if (page > MAX_PAGES) return null;
+        const r = httpGet(`${base}/issues/${Number(num)}/timeline?page=${page}&limit=${PAGE_LIMIT}`, eng.tokenEnv);
+        if (r.status !== 200) return null;
+        let list;
+        try { list = JSON.parse(r.body); } catch (_) { return null; }
+        if (!Array.isArray(list)) return null;
+        all.push(...list);
+        if (list.length < PAGE_LIMIT) break;
+      }
+      return labelAddersFrom(all, label);
+    },
+
     /** #681, not contract: the issues blocking issue `num` — `[{ number, state, closedAt }]`, null when unread. */
     blockedBy: (num) => {
       const r = httpGet(`${base}/issues/${Number(num)}/dependencies?limit=${PAGE_LIMIT}`, eng.tokenEnv);
@@ -355,4 +500,5 @@ function notGreen(rows) {
     .map((x) => ({ name: x.workflowName || 'unnamed', status: x.status, conclusion: x.conclusion || null }));
 }
 
-module.exports = { create, withFetcher, statusRow, rowsFromPages, notGreen, issueShape, commentShape, PAGE_LIMIT };
+module.exports = { create, withFetcher, statusRow, rowsFromPages, notGreen, issueShape, commentShape, jobFromRow, runsFromRows,
+  associationFrom, labelAddersFrom, PAGE_LIMIT };
