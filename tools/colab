@@ -44,6 +44,7 @@ const decisionRecord = require('./lib/decision-record');
 const blockedBy = require('./lib/blocked-by');
 const ciGrant = require('./lib/ci-grant');
 const trustHumans = require('./lib/trust-humans');
+const dataExemption = require('./lib/data-exemption'); // #762
 const ownerPolicy = require('./lib/owner-policy');
 const grantPolicy = require('./lib/grant-policy');
 const ciCure = require('./lib/ci-cure');
@@ -9103,6 +9104,7 @@ const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify] [--axis a
                  [--writes <free|direct|isolated>] [--channels <c1,c2,...>]
                  [--production <url>|none] [--deploy <push-main|tag|manual|none>]
                  [--stack "<text>"] [--answered-by <name>] [--reason "<text>"]
+                 [--autonomy <manual|auto-trunk>] [--data <none|real>] [--land]
                  [--fork | --no-fork] [--autonomy <manual|auto-trunk>] [--land]
 
 Detects what a repo already states in .github/project.yml, ASKS a human only what could not be
@@ -9164,6 +9166,16 @@ THE AUTONOMY GRANT AND --land (#481) — so a new repo's first branch is not han
                           ahead (pull first). Run without new answers, it lands a descriptor an
                           earlier adopt left uncommitted. No origin remote: commits only.
 
+  --data none|real        records whether any database this repo's code runs against holds real
+                          data (project.yml data:, #762). none LOWERS a protection — \`colab ship\`
+                          lands migrations with no grant while no sign of production is present —
+                          so it carries the same bar as --autonomy auto-trunk (exit 3 otherwise),
+                          and it is refused beside production, a deploy mechanism or a live/
+                          released exposure (exit 5). real is never gated. A FIRST adoption (no
+                          descriptor before) at a terminal asks it, defaulting to none only when
+                          nothing deploys; without a terminal it says so and leaves it unanswered.
+                          Append-only, like every answer.
+
   The shape it exists for: \`colab ship\` judges a branch's autonomy by the descriptor trunk
   carries. Land it first, and the follow-up branch (CI workflow, guards, docs) ships through the
   normal lane under the grant — no human merge of the adoption branch.
@@ -9171,7 +9183,7 @@ THE AUTONOMY GRANT AND --land (#481) — so a new repo's first branch is not han
     COLAB_HUMAN=1 colab adopt --exposure self --stack node --autonomy auto-trunk \\
       --answered-by "<name>" --land
 
-Any answer flag (--room/--exposure/--writes/--channels/--production/--deploy/--stack/--autonomy) makes the
+Any answer flag (--room/--exposure/--writes/--channels/--production/--deploy/--stack/--autonomy/--data) makes the
 whole run NON-INTERACTIVE — it never half-prompts. With no answer flags and no TTY, and something
 is still missing, this refuses in under a second, naming exactly which flags would answer it —
 never hangs waiting on stdin nobody is at.
@@ -9871,7 +9883,7 @@ async function cmdAdopt(argv) {
       '--repo': 'repo', '--axis': 'axis', '--room': 'room', '--exposure': 'exposure',
       '--writes': 'writes', '--channels': 'channels', '--production': 'production',
       '--deploy': 'deploy', '--stack': 'stack', '--answered-by': 'answeredBy', '--reason': 'reason',
-      '--trunk': 'trunk', '--autonomy': 'autonomy',
+      '--trunk': 'trunk', '--autonomy': 'autonomy', '--data': 'data',
     },
     flags: { '--json': 'json', '--no-verify': 'noVerify', '--local': 'local', '--no-labels': 'noLabels', '--fork': 'fork', '--no-fork': 'noFork', '--land': 'land', '-h': 'help', '--help': 'help' },
   });
@@ -9884,6 +9896,9 @@ async function cmdAdopt(argv) {
   if (opts.land && opts.local) throw new UserError('--land cannot combine with --local — a local-only descriptor is never committed (CONVENTIONS.md §9)');
   if (opts.autonomy !== undefined && !adopt.VALID_AUTONOMY.has(opts.autonomy)) {
     throw new UserError(`--autonomy must be one of: ${[...adopt.VALID_AUTONOMY].join(', ')} (got ${JSON.stringify(opts.autonomy)})`);
+  }
+  if (opts.data !== undefined && !adopt.VALID_DATA.has(opts.data)) {
+    throw new UserError(`--data must be one of: ${[...adopt.VALID_DATA].join(', ')} (got ${JSON.stringify(opts.data)})`);
   }
 
   // --local (#393): the descriptor is machine state, not a committable source file — it lives in
@@ -9950,9 +9965,24 @@ async function cmdAdopt(argv) {
     autonomyWrite = av.write;
   }
 
+  // #762: --data — append-only is decided here (it needs no answers); the falsifier and human-bar
+  // half runs once this run's answers are known, below, before anything is written.
+  const hasData = Object.prototype.hasOwnProperty.call(cfg, 'data');
+  let dataPending = false;
+  let dataAnsweredInteractively = false;
+  if (opts.data !== undefined) {
+    if (hasData) {
+      const dv = adopt.dataGateVerdict({ data: opts.data, current: cfg.data, eff: cfg, isTTY, colabHuman, answeredBy: opts.answeredBy || null });
+      if (!dv.ok) { warn(dv.message); return dv.exitCode; }
+    } else dataPending = true;
+  }
+  // A first adoption (no descriptor before this run) records the fact, so a new repo carries it
+  // from its first commit (owner ruling on #762).
+  const firstAdoption = rawTextBefore === null || rawTextBefore === undefined;
+
   // Already complete (and nothing forced): report, write nothing, exit 0 — except the one key a
   // bare --local re-run still owes (#405): the `owner:` block, for a clone adopted before it existed.
-  if (axesToAsk.length === 0 && opts.stack === undefined && !autonomyWrite) {
+  if (axesToAsk.length === 0 && opts.stack === undefined && !autonomyWrite && !dataPending) {
     const backfill = localOwnerEntry(local, cfg, today());
     if (backfill) {
       fs.writeFileSync(descriptorFile, adopt.renderDescriptor(rawTextBefore, [backfill]));
@@ -9981,7 +10011,7 @@ async function cmdAdopt(argv) {
   }
 
   // --autonomy counts as an answer flag (#481): it makes the run non-interactive, never half-prompted.
-  const answerFlagKeys = ['room', 'exposure', 'writes', 'channels', 'production', 'deploy', 'stack', 'autonomy'];
+  const answerFlagKeys = ['room', 'exposure', 'writes', 'channels', 'production', 'deploy', 'stack', 'autonomy', 'data'];
   const anyAnswerFlagGiven = answerFlagKeys.some((k) => opts[k] !== undefined);
 
   // `stack` is REQUIRED by the audit but free-form, so it cannot always be detected — a
@@ -10025,6 +10055,17 @@ async function cmdAdopt(argv) {
         if (!v) throw new UserError('stack cannot be blank — the audit requires it as a literal key');
         opts.stack = v; // folds into the trunk/stack auto-fill block below
         stackAnsweredInteractively = true;
+      }
+      if (firstAdoption && opts.data === undefined && !hasData) {
+        const def = adopt.dataDefault({ ...cfg, ...(answers.tier ? answers.tier.values : {}) });
+        process.stdout.write('\nDoes any database this repo\'s code runs against hold real data (data anyone would miss)?\n'
+          + '  none — no: migrations land without a grant until a sign of production appears (#762)\n'
+          + '  real — yes, or not sure: every migration waits for a grant\n');
+        const v = (await rlAsk(rl, `  data [none/real] (default ${def}): `)).trim() || def;
+        if (!adopt.VALID_DATA.has(v)) throw new UserError(`data must be one of: ${[...adopt.VALID_DATA].join(', ')} (got ${JSON.stringify(v)})`);
+        opts.data = v;
+        dataAnsweredInteractively = true;
+        dataPending = true;
       }
     } finally {
       rl.close();
@@ -10109,6 +10150,16 @@ async function cmdAdopt(argv) {
     }
   }
 
+  // #762: data: none's own gate — the falsifiers read the descriptor as it will stand after this run.
+  let dataWrite = false;
+  if (dataPending) {
+    const eff = { ...cfg, ...(answers.tier ? answers.tier.values : {}), ...(answers.exposure ? { exposure: answers.exposure.values.exposure } : {}) };
+    const dv = adopt.dataGateVerdict({ data: opts.data, current: undefined, eff,
+      isTTY: dataAnsweredInteractively ? true : isTTY, colabHuman, answeredBy: opts.answeredBy || null });
+    if (!dv.ok) { warn(dv.message); return dv.exitCode; }
+    dataWrite = dv.write;
+  }
+
   // axis-authority.contradiction() — before writing, and unconditional: no flag lowers it. Only
   // relevant when THIS run is introducing/changing the exposure value; a pre-existing
   // tier/exposure disagreement that predates this run is the audit's own finding, not
@@ -10157,6 +10208,13 @@ async function cmdAdopt(argv) {
   if (autonomyWrite) {
     entries.push({ key: 'autonomy', value: opts.autonomy, comment: adopt.provenanceComment('autonomy',
       { mode: 'flag', flags: ['--autonomy'], date: nowDate, colabHuman, answeredBy: opts.answeredBy || null }) });
+  }
+  if (dataWrite) {
+    entries.push({ key: 'data', value: opts.data, comment: adopt.provenanceComment('data', dataAnsweredInteractively
+      ? { mode: 'interactive', host: provenanceHost, date: nowDate }
+      : { mode: 'flag', flags: ['--data'], date: nowDate, colabHuman, answeredBy: opts.answeredBy || null }) });
+  } else if (firstAdoption && !hasData && !opts.json) {
+    warn('data: unanswered — a first adoption records whether any database holds real data (#762); re-run with --data none|real');
   }
   // Fallback: exposure ends this run still unanswered (declined interactively, or simply not
   // among the axes that got an answer this run) and no `tier` already exists — derive one from
@@ -11366,6 +11424,16 @@ function migrationContentAt(repoAbs, paths, sha) {
 function shipMigrationGate(repoAbs, gh, target, branch, issues) {
   const migrations = newMigrations(repoAbs, target, branch);
   if (migrations.length === 0) return { migrations, ok: true, ...migDetail(migrations, null, target, branch, null) };
+  // #762: `data: none` on the TARGET, with no falsifier, exempts the gate before any grant is read.
+  // Evaluated only on a non-empty list, so an unreadable diff (#725) never reaches it; when the
+  // exemption does not apply the grants are read exactly as before (#726's half is untouched).
+  const dataEx = shipDataExemption(repoAbs, target);
+  if (dataEx && dataEx.exempt) {
+    return { migrations, ok: true, text: `${migrations.length} present, ${dataEx.reason} — ${migrations.join(', ')}`,
+      payload: { branch, files: [...migrations], policy: null, policySource: null, policyOwner: null, policyMachine: null,
+        headSha: null, contentId: null, trustHumans: null, roundtrip: null, granted: [], missing: [],
+        exempt: true, dataExemption: dataExemptionPayload(dataEx) } };
+  }
   let grants;
   let ctx = null;
   if (!gh) {
@@ -11377,7 +11445,71 @@ function shipMigrationGate(repoAbs, gh, target, branch, issues) {
     ctx = shipMigrationCtx(repoAbs, gh, target, branch, migrations);
     grants = migrationGrant.evaluateShipSet(issues, records, branch, labels.MIGRATION_GRANT_LABEL, ctx);
   }
-  return { migrations, ok: grants.ok, ...migDetail(migrations, grants, target, branch, ctx) };
+  const detail = migDetail(migrations, grants, target, branch, ctx);
+  if (dataEx) { // declared but falsified: the refusal names why the declaration did not apply
+    detail.payload.dataExemption = dataExemptionPayload(dataEx);
+    if (!grants.ok) detail.text = `${detail.text} — ${dataEx.reason}`;
+  }
+  return { migrations, ok: grants.ok, ...detail };
+}
+
+/**
+ * #762 — the no-real-data exemption as the TARGET declares it, or null when the target does not
+ * declare a valid `data: none` (the ordinary case: no extra read at all). The version-tag falsifier
+ * asks the push remote (what CI and every other clone see); a failed read fails closed.
+ */
+function shipDataExemption(repoAbs, target) {
+  const doc = projectDocAt(repoAbs, target);
+  if (!dataExemption.declaresNone(doc)) return null;
+  return dataExemption.exemptionVerdict(doc, versionTagsOn(repoAbs, target));
+}
+
+/**
+ * Version-shaped tags on the push remote that sit on `target` → { ok, tags, why }. A remote tag whose
+ * commit this clone does not have cannot be placed, so it counts (fail closed); one whose commit is
+ * here counts only when it is an ancestor of `target`.
+ */
+function versionTagsOn(repoAbs, target) {
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  const r = git.git(['ls-remote', '--tags', remote], repoAbs);
+  if (!r.ok) return { ok: false, tags: [], why: `git ls-remote --tags ${remote} failed` };
+  const sha = new Map(); // tag → the commit it points at (the peeled ^{} line wins over the tag object)
+  for (const line of r.stdout.split('\n')) {
+    const [id, ref] = line.split('\t');
+    if (!id || !ref || !ref.startsWith('refs/tags/')) continue;
+    const name = ref.slice('refs/tags/'.length);
+    if (name.endsWith('^{}')) sha.set(name.slice(0, -3), id.trim());
+    else if (!sha.has(name)) sha.set(name, id.trim());
+  }
+  const tags = [];
+  for (const [name, id] of sha) {
+    if (!dataExemption.isVersionTag(name)) continue;
+    const here = git.git(['cat-file', '-e', `${id}^{commit}`], repoAbs).ok;
+    if (!here || git.git(['merge-base', '--is-ancestor', id, target], repoAbs).ok) tags.push(name);
+  }
+  return { ok: true, tags };
+}
+
+/** The row name both ship paths print for #762's lowering check. */
+const SHIP_DATA_LOWERING_ROW = 'data: none declared by a person (#762)';
+
+/**
+ * #762 — the human bar for ADDING `data: none` outside `colab adopt`. ship reads the exemption from
+ * the target, so the branch that adds the declaration is the one moment it can be checked: such a
+ * branch lands only through the human door (#525), whatever `autonomy:` says. null when the branch
+ * does not introduce it (the ordinary case — no row). A batch member passes `door: null`, so it lands
+ * serially, through the door. → { ok, detail } | null.
+ */
+function shipDataLoweringCheck(repoAbs, target, branch, door) {
+  const v = dataExemption.loweringVerdict(projectDocAt(repoAbs, target), projectDocAt(repoAbs, shipRefFor(repoAbs, branch)));
+  if (!v.lowers) return null;
+  if (door && door.open) return { ok: true, detail: `${v.reason} — ${door.why}` };
+  return { ok: false, detail: `${v.reason}: ${door ? door.why : 'a batch has no human door'} — ${humanDoor.humanDoorCommands(`--branch ${branch}`).join(' · ')}` };
+}
+
+/** The `dataExemption` object --dry --json reports, from shipDataExemption's verdict. */
+function dataExemptionPayload(v) {
+  return { declared: v.declared, exempt: v.exempt, falsifiers: v.falsifiers.map((f) => ({ kind: f.kind, detail: f.detail })), reason: v.reason };
 }
 
 /** P, HEAD and the R thunk for shipMigrationGate. The thunk memoises its one verdict on the ctx
@@ -11821,6 +11953,14 @@ four of: P that policy at the target tip · M a live, trusted, passing review re
 record's head equals the branch's remote head · R the live "Migration round-trip" CI job passed on
 that HEAD. The refusal names which one failed; --dry, --dry --json and a real ship read it alike.
 
+NO REAL DATA (#762) is not a grant: it is the one case where the gate has nothing to protect. The
+TARGET's committed project.yml declares \`data: none\` (no database this repo's code runs against
+holds real data), and no falsifier is present — production non-null, tier A/C or exposure live/
+released, a deploy mechanism, a version tag on the target (an unreadable tag list counts). Then the
+row passes as "exempt — data: none (...)" with no grant read; any falsifier restores the gate and
+the refusal names it. A branch that ADDS \`data: none\` never exempts itself (the target is read),
+and its own landing needs the human door — row "data: none declared by a person (#762)".
+
 CI GRANTS (#105) are the ONE narrow, human-created exception to the trunk-CI-green precondition —
 for the case where trunk is GENUINELY red and the candidate branch IS the fix, so it cannot reach
 trunk without shipping while shipping requires the green it would produce. Create one with
@@ -12157,6 +12297,11 @@ Options:
                       (\`issues\`, not \`closeIssues\`: \`--refs\` must never shrink a safety gate), so a
                       group branch with one ungranted member reports \`ok:false\` here with that
                       member named in \`missing\`, even though the OTHERS are fully granted.
+                      #762: \`exempt: true\` + \`dataExemption: {declared, exempt, falsifiers:
+                      [{kind,detail}], reason}\` when the TARGET's \`data: none\` exempts the files (no
+                      grant read; \`granted\`/\`missing\` empty). \`dataExemption\` also appears, with
+                      \`exempt: false\` and the falsifiers, when the target declares it but a sign of
+                      production restores the gate. A batch still lands such a member serially.
 `;
 
 /**
@@ -14008,6 +14153,9 @@ function cmdShipDryJson(opts) {
   migrationGrantPayload = migGate.payload;
   checks.push({ name: 'no new migrations', ok: migOk, class: migOk ? null : HUMAN_GATED,
     detail: migGate.text });
+  const loweringJson = shipDataLoweringCheck(repoAbs, target, sess.branch,
+    opts._batchMember ? null : humanDoor.humanDoorFromProcess(process, opts.answeredBy));
+  if (loweringJson) checks.push({ name: SHIP_DATA_LOWERING_ROW, ok: loweringJson.ok, class: loweringJson.ok ? null : HUMAN_GATED, detail: loweringJson.detail });
 
   const headBranch = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs).stdout;
   const onTrunk = headBranch === trunk;
@@ -15291,6 +15439,9 @@ function cmdShip(argv) {
   const migGate = shipMigrationGate(repoAbs, gh, target, sess.branch, sess.issues);
   const migOk = migGate.ok;
   checks.push([migOk ? '✓' : '✗', 'no new migrations', migGate.text]);
+  const lowering = shipDataLoweringCheck(repoAbs, target, sess.branch, humanDoor.humanDoorFromProcess(process, opts.answeredBy));
+  const loweringOk = !lowering || lowering.ok;
+  if (lowering) checks.push([loweringOk ? '✓' : '✗', SHIP_DATA_LOWERING_ROW, lowering.detail]);
 
   // #263: the close gate's own row — folded into the precondition table, not just a warning. Only
   // the CHECKLIST gate's own findings count here (not --refs, not the tracking label, both
@@ -15391,7 +15542,7 @@ function cmdShip(argv) {
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && decisionOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && headCiOk && coreOk && recOk && heavyOk;
+  const preOk = ciOk && migOk && loweringOk && treeOk && corr.ok && gateOk && decisionOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && headCiOk && coreOk && recOk && heavyOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -19084,7 +19235,7 @@ Commands:
                                         tag — re-checked every run, tracking issue per version (#339)
   adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E]
         [--writes W] [--channels C] [--production U|none] [--deploy D] [--stack S]
-        [--answered-by N] [--reason "..."]      detect + ask + derive + WRITE §9's five rows
+        [--answered-by N] [--reason "..."] [--data none|real]   detect + ask + derive + WRITE §9's five rows
                                         (tier, room, exposure, writes, channels) in one act
                                         (#199) — append-only; lowering exposure (or a first
                                         none/self) needs a human. \`colab adopt --help\` for

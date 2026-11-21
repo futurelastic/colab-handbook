@@ -1789,6 +1789,11 @@ in — the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-th
 the two roles, who counts as a human and the reviewer conditions:
 [`tools/docs/grants.md`](tools/docs/grants.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402).
 
+A repo whose target declares `data: none` (no database holds real data) needs no grant while no
+falsifier — production, a live or released axis, a deploy mechanism, a version tag — is present;
+any one restores the gate, and adding the declaration is a person's act:
+[`project.schema.md`](project.schema.md#data--optional) (#762).
+
 #### A red trunk with no patch — never parked in silence (#390)
 
 A finished green branch is never left waiting behind a red trunk while nobody owns the red: an

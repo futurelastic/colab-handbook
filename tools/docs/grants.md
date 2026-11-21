@@ -52,7 +52,9 @@ The rule: [CONVENTIONS.md, *Migration exemption — a narrow door through no-new
 **[Hard — gate: colab ship refuses]** `colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
 touching `database/migrations/` or `prisma/migrations/` — or any prefix the repo declares in
 `project.yml` `migrations:` (#383, [`project.schema.md`](../../project.schema.md#migrations--optional)).
-A declaration only ever widens what the gate sees, never narrows it.
+A declaration only ever widens what the gate sees, never narrows it. The one case that needs no
+grant is not a lowering but nothing to protect: the target's `data: none` with no falsifier
+([below](#no-real-data--data-none-762)).
 
 **A migration grant is a narrow, per-issue, branch-bound, expiring exemption, and every
 grant names the role that decided it** — deliberately not a repo- or tier-level switch.
@@ -202,3 +204,33 @@ it can tell an issue's deliverable IS a schema migration. It authorises nothing 
 only a grant minted as above does that.
 
 Why, with the measurement: [ADR 539](../../docs/adr/539-migration-rationale.md).
+
+## No real data — `data: none` (#762)
+
+The field: [`project.schema.md`](../../project.schema.md#data--optional). A grant reviews a
+migration against the data it could harm; where no database holds real data there is nothing
+to review against, and the gate only parked a scaffold's first migrations on a person.
+
+- **Where ship reads it.** `shipMigrationGate` reads `data:` from `project.yml` at the tip of
+  the target — the same place it reads `trust-humans` and `migration-grant` — and only once the
+  branch adds a migration file. Exempt, the `no new migrations` row passes as
+  `N present, exempt — data: none (no production, no deploy, no release)` and no grant is read;
+  `--dry --json` reports `migrationGrant.exempt: true` and `migrationGrant.dataExemption`.
+- **The falsifiers**, any one of which keeps the gate: `production` non-null; `tier` A/C or
+  `exposure` live/released; `deploy` other than `none`; a version-shaped tag (`v1.2.3`,
+  `1.2.3-rc.1`) on the push remote whose commit is the target or behind it. A remote tag whose
+  commit this clone lacks counts, and so does a failed `ls-remote` — an unread release is not
+  proof of none. Declared but falsified, the refusal ends `— data: none does not apply: <why>`
+  and `dataExemption.exempt` is `false`.
+- **Adding it.** The branch that introduces `data: none` (target without it, branch with it)
+  gets the row `data: none declared by a person (#762)`: it passes only through the human door
+  (a person at a terminal, or `COLAB_HUMAN=1` with `--answered-by`), on `auto-trunk` too. A
+  batch has no door, so such a member lands serially. Removing the line raises protection and
+  adds no row. `colab adopt --data none|real` records it at adoption, under the
+  `--autonomy auto-trunk` bar; `none` is refused beside production, a deploy mechanism or a live
+  or released exposure.
+- **A batch** still lands a member with any migration file serially, exempt or not — the
+  batch rule reads the payload's presence, unchanged.
+- **Ordering with the rest of the gate.** The exemption runs only on a non-empty migration list
+  and before any grant is read: a diff ship cannot compute never reaches it, and when it does
+  not apply the grants are judged exactly as without it.

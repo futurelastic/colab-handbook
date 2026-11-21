@@ -47,7 +47,7 @@ const TUNING_KEYS = Object.freeze(Object.keys(TUNING));
  */
 const AUTHORITY_KEYS = Object.freeze([
   'autonomy', 'promotion', 'migration-grant', 'ci-grant', 'release-only-checks', 'trust-humans',
-  'exposure', 'tier', 'trunk', 'deploy', 'release', 'production',
+  'exposure', 'tier', 'trunk', 'deploy', 'release', 'production', 'data',
 ]);
 
 /** A value is a plain YAML scalar — every tuning value is one (`2`, `6m`, `1.5`, `2,4,8`). */

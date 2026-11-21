@@ -145,6 +145,8 @@ const trustHumansLib = require("../tools/lib/trust-humans.js");
 const factoriesLib = require("../tools/lib/factories.js");
 // #403: the `live-env:` key — read through the same module `colab gate-hermetic` uses.
 const hermeticLib = require("../tools/lib/hermetic.js");
+// #762: the `data:` fact — read through the same module `colab ship`'s migration gate uses.
+const dataExemptionLib = require("../tools/lib/data-exemption.js");
 // #493: the `tree-reuse:` opt-out — read through the same module `colab ship` reads citations with.
 const treeGreenLib = require("../tools/lib/tree-green.js");
 // #570: the `ci-docs-skip:` opt-in — read through the same module whose rule the CI guard mirrors.
@@ -1577,6 +1579,22 @@ function auditRepoInner(target, ctx) {
       const le = hermeticLib.parseLiveEnv(cfg);
       info.liveEnv = le.declared ? le.value : null;
       if (!le.valid) fail(le.reason);
+    }
+
+    // ---- data (#762) -----------------------------------------------------------
+    // `data: none` exempts `colab ship`'s no-new-migrations gate while no sign of production is
+    // present. tools/lib/data-exemption.js is the one reading. An invalid value fails: the gate then
+    // reads it as absent (the stricter direction), so the declaration silently does nothing. A
+    // `data: none` beside a falsifier in the same descriptor warns: the gate is back already, and
+    // the line now says something the repo no longer is.
+    {
+      const dp = dataExemptionLib.parseData(cfg);
+      info.data = dp.value;
+      if (!dp.valid) fail(dp.reason);
+      else if (dp.value === "none") {
+        const f = dataExemptionLib.falsifiers(cfg, null);
+        if (f.length) warn(`data: none no longer applies — ${f.map((x) => x.detail).join("; ")}; the migration gate runs again. Remove the line (or set data: real) so the descriptor says what the repo is`);
+      }
     }
 
     // ---- tree-reuse (#493) ----------------------------------------------------

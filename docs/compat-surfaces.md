@@ -229,6 +229,7 @@ migrations
 migration-grant
 ci-grant
 trust-humans
+data
 room
 branchPrefix
 holds
