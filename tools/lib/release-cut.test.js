@@ -1191,6 +1191,72 @@ test('#709 the grant clears only a MEASURED destructive finding, and only on dep
   assert.strictEqual(refusal(rc.decide(fastFacts({ schema: contradiction, migrations: granted })), 'schema-additive').ok, false);
   // No grant field (no migration grant read) — refused as before.
   assert.strictEqual(refusal(rc.decide(fastFacts({ schema: DESTRUCTIVE, migrations: { ok: true, paths: [], detail: 'none' } })), 'schema-additive').ok, false);
-  // A candidate route keeps refusing: a person cuts there by hand.
+  // A candidate route reads its grant from `schemaGrant` (#733), never the fast route's migration gate.
   assert.strictEqual(refusal(rc.decide(facts({ schema: DESTRUCTIVE, migrations: granted })), 'schema-additive').ok, false);
+});
+
+// ---- #733: a destructive schema change has a human path on every route -------------------------
+
+test('#733 candidate route: a destructive change with no grant refuses, and the row and the hand-off name the one command', () => {
+  const v = rc.decide(facts({ schema: DESTRUCTIVE }));
+  assert.strictEqual(v.ok, false);
+  const row = refusal(v, 'schema-additive');
+  assert.strictEqual(row.ok, false);
+  assert.ok(v.standing.includes('schema-additive'));
+  assert.match(row.detail, /a person lets it through with the migration grant on v1\.2\.1's tracking issue: COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch v1\.2\.1/);
+  assert.strictEqual(v.handoff, 'COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch v1.2.1');
+  // With the version's tracking issue known, the command names it.
+  const known = rc.decide(facts({ schema: DESTRUCTIVE, trackingIssue: 55 }));
+  assert.strictEqual(known.handoff, 'COLAB_HUMAN=1 colab migration-grant 55 --branch v1.2.1');
+  assert.match(refusal(known, 'schema-additive').detail, /migration-grant 55 --branch v1\.2\.1/);
+});
+
+test('#733 candidate route: the grant on the version\'s tracking issue clears it — a candidate is cut, the row and tag message name whose decision', () => {
+  const v = rc.decide(facts({ schema: DESTRUCTIVE, schemaGrant: { ok: true, issue: 55, version: 'v1.2.1' }, trackingIssue: 55 }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
+  assert.strictEqual(v.tag, 'v1.2.1-rc.1');
+  assert.strictEqual(v.handoff, null);
+  const row = refusal(v, 'schema-additive');
+  assert.strictEqual(row.ok, true);
+  assert.match(row.detail, /`DROP TABLE` — cleared by a person's decision: the migration grant on the tracking issue #55 for v1\.2\.1/);
+  assert.match(rc.tagMessage(v, { sha: 'abc', lastFinal: 'v1.2.0' }), /schema-additive: .*cleared by a person's decision/);
+});
+
+test('#733 a hand cut: the grant binds to the version --bump computes — another version is not cleared', () => {
+  const grant = { ok: true, issue: 55, version: 'v1.2.1' };
+  const hand = rc.decide(facts({ schema: DESTRUCTIVE, schemaGrant: grant, override: { bump: 'patch', reason: 'hand cut' } }));
+  assert.strictEqual(hand.ok, true, JSON.stringify(hand.refusals));
+  const minor = rc.decide(facts({ schema: DESTRUCTIVE, schemaGrant: grant, override: { bump: 'minor', reason: 'hand cut' } }));
+  assert.strictEqual(minor.ok, false);
+  assert.strictEqual(minor.version, 'v1.3.0');
+  assert.strictEqual(refusal(minor, 'schema-additive').ok, false);
+  assert.strictEqual(minor.handoff, 'COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch v1.3.0');
+});
+
+test('#733 off the fast route the grant clears only a MEASURED destructive finding, and an unproven grant clears nothing', () => {
+  const grant = { ok: true, issue: 55, version: 'v1.2.1' };
+  const unread = { ok: false, unread: true, destructive: true, detail: 'could not read' };
+  const r1 = rc.decide(facts({ schema: unread, schemaGrant: grant }));
+  assert.strictEqual(refusal(r1, 'schema-additive').ok, false);
+  assert.strictEqual(r1.handoff, null, 'a failed read is not something a grant answers');
+  const contradiction = { ok: false, detail: 'migrations: none contradicted' };
+  const r2 = rc.decide(facts({ schema: contradiction, schemaGrant: grant }));
+  assert.strictEqual(refusal(r2, 'schema-additive').ok, false);
+  assert.strictEqual(r2.handoff, null);
+  assert.strictEqual(refusal(rc.decide(facts({ schema: DESTRUCTIVE, schemaGrant: { ...grant, ok: false } })), 'schema-additive').ok, false);
+  // Part 1 of the ask was declined: an edited migration still counts as destructive, grant or none.
+  const edited = rc.schemaVerdict([{ status: 'M', path: 'database/migrations/2026_01_01_000000_x.php' }], 'v1.2.0');
+  assert.strictEqual(edited.destructive, true);
+  assert.strictEqual(refusal(rc.decide(facts({ schema: edited })), 'schema-additive').ok, false);
+  assert.strictEqual(refusal(rc.decide(facts({ schema: edited, schemaGrant: grant })), 'schema-additive').ok, true);
+});
+
+test('#733 library-fast: the same grant clears a destructive change on the final route a library tags by hand or --auto', () => {
+  const refused = rc.decide(libFacts({ schema: DESTRUCTIVE }));
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.handoff, 'COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch v1.2.1');
+  const v = rc.decide(libFacts({ schema: DESTRUCTIVE, schemaGrant: { ok: true, issue: 55, version: 'v1.2.1' } }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
+  assert.strictEqual(v.tag, 'v1.2.1');
+  assert.match(refusal(v, 'schema-additive').detail, /cleared by a person's decision: .*#55 for v1\.2\.1 \(route library-fast/);
 });

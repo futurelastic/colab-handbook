@@ -2110,6 +2110,20 @@ function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, au
   return { finalGrant, holds, migrations, spacing, tracking };
 }
 
+/**
+ * #733: off route deploy-tag-fast, the person's decision a measured destructive schema change needs is
+ * the same migration grant, on the same record — the version's tracking issue (the release marker
+ * release-finalize and the fast route both write). Read only once a first decide() refused
+ * schema-additive for `version`, so a run with nothing destructive reads nothing more than it did.
+ */
+function measureSchemaGrant(repoAbs, { remote, issues, version }) {
+  const open = (issues || []).filter((i) => String(i.state || '').toUpperCase() === 'OPEN' && releaseFinalize.parseReleaseMarker(i.body) === version);
+  if (!open.length) return { tracking: null, grant: { ok: false, version, reason: `no open tracking issue for ${version} yet to carry a grant` } };
+  const num = open[0].number;
+  const g = migrationGrant.evaluateIssue(git.ghIssueView(repoAbs, num, ['state', 'labels', 'comments']), version, num, labels.MIGRATION_GRANT_LABEL, { trust: trustAt(repoAbs, `${remote}/main`) });
+  return { tracking: { number: num }, grant: { ok: !!g.ok, issue: num, version, reason: g.ok ? null : g.reason } };
+}
+
 /** Post `text` on issue `num` once — idempotent by release-finalize's event marker. */
 function commentOnce(repoAbs, num, fields, text) {
   const view = git.ghIssueView(repoAbs, num, ['comments']);
@@ -2261,12 +2275,23 @@ function cmdReleaseCut(argv) {
     });
   }
 
-  const verdict = releaseCut.decide({
+  const cutFacts = {
     policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches, manifests, ancestry, auto, heavy, qualified,
     override: opts.bump ? { bump: opts.bump, reason: opts.reason } : null,
     finalGrant: fastFacts.finalGrant, holds: fastFacts.holds, migrations: fastFacts.migrations, migration: libraryMigration,
     trackingIssue: fastFacts.tracking ? fastFacts.tracking.number : null,
-  });
+  };
+  let verdict = releaseCut.decide(cutFacts);
+  // #733: a measured destructive schema change on any other route — read the grant on the tracking
+  // issue of the version this verdict computed (by hand: the one --bump names), then decide again.
+  // decide() is pure, so the second pass differs only by that grant. Never on a forge (no issue, #678).
+  let schemaTracking = null;
+  const schemaDestructive = !fast && !forge && !!(schema && !schema.ok && schema.destructive && !schema.unread);
+  if (schemaDestructive && verdict.version && issues !== null) {
+    const sg = measureSchemaGrant(repoAbs, { remote, issues, version: verdict.version });
+    schemaTracking = sg.tracking;
+    verdict = releaseCut.decide({ ...cutFacts, schemaGrant: sg.grant, trackingIssue: sg.tracking ? sg.tracking.number : null });
+  }
 
   let created = false;
   let published = null; // #443: { ok, detail } once a tag was created — null when nothing was cut
@@ -2323,6 +2348,33 @@ function cmdReleaseCut(argv) {
     }
   }
 
+  // #733: the same writes off the fast route. A refused destructive change: the hand-off is posted on the
+  // version's tracking issue, opened if there is none — the record release finalize keeps for that
+  // version (it finds it by marker; its test period starts no earlier than the candidate's tag). A
+  // library final it cleared: that record is closed, as the fast route closes its own.
+  if (schemaDestructive && !opts.dry && issues !== null && verdict.version) {
+    if (created && library && schemaTracking) {
+      commentOnce(repoAbs, schemaTracking.number, { state: 'finalized', tag: verdict.tag }, `**${verdict.tag}** tagged final on \`${shortSha(sha)}\` by route library-fast, the destructive schema change cleared by the migration grant on this issue.`);
+      const r = tracker.forRepo(repoAbs).issueClose(schemaTracking.number);
+      if (!r.ok) warn(`could not close #${schemaTracking.number}: ${String(r.stderr || '').split('\n')[0]}`);
+    } else if (!created && handoff) {
+      let num = schemaTracking ? schemaTracking.number : null;
+      if (!num) {
+        const body = library
+          ? releaseCut.schemaGrantTrackingBody(verdict.version)
+          : releaseFinalize.trackingBody({ version: verdict.version, row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays, openedBy: 'colab release cut' });
+        const c = tracker.forRepo(repoAbs).issueCreate({ title: releaseFinalize.trackingTitle(verdict.version), body });
+        if (c.number) num = c.number;
+        else warn(`could not open the tracking issue for ${verdict.version} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'}) — the hand-off is printed here only`);
+      }
+      if (num) {
+        handoff = releaseCut.migrationHandoff(num, verdict.version);
+        commentOnce(repoAbs, num, { state: 'schema-handoff', version: verdict.version },
+          `**${verdict.version} carries a destructive schema change** (\`schema-additive\` in \`colab release cut\`), so no ${library ? 'final' : 'candidate'} is cut for it until a person decides it may ride (CONVENTIONS.md §6, contract item 4). Read the migration first — the grant is the review. Then, run by a human:\n\n\`\`\`sh\n${handoff}\n\`\`\`\n\nThe grant is bound to ${verdict.version}: if the version moves (another bump), the cut refuses again and asks for a grant on that version.`);
+      }
+    }
+  }
+
   if (opts.json) {
     print(JSON.stringify({
       repo: shortRepo(repoAbs), sha, ...(sha !== head ? { head } : {}), ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
@@ -2357,7 +2409,9 @@ function cmdReleaseCut(argv) {
     print(`✗ refused — ${verdict.refusals.length} condition(s) failed; nothing cut.`);
     // #467: a refusal no further run clears by itself is a stall — say so, so nobody waits on it.
     if (verdict.standing && verdict.standing.length) print(`  release stalled — ${verdict.standing.join(', ')} will not clear by itself; a human act is owed (the next run refuses the same way).`);
-    if (handoff) print(`\nA migration rides this release. The one command, for a human to run:\n  ${handoff}`);
+    if (handoff) print(fast
+      ? `\nA migration rides this release. The one command, for a human to run:\n  ${handoff}`
+      : `\nA destructive schema change rides this release. Read it, then the one command, for a human to run:\n  ${handoff}`);
     return 1;
   }
   if (verdict.final && library) {

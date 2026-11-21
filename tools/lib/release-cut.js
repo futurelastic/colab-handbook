@@ -680,6 +680,23 @@ function handoffTrackingBody(version) {
   ].join('\n') + '\n';
 }
 
+/**
+ * #733: the tracking issue a library-fast cut opens when it refuses a destructive schema change — the
+ * route keeps no other record, so this one exists only to carry the migration grant, and the final that
+ * grant lets through closes it. Same marker, so `colab migration-grant` accepts it for this version.
+ */
+function schemaGrantTrackingBody(version) {
+  return [
+    `<!-- colab:release version=${version} -->`,
+    '',
+    `Release tracking record for **${version}** — opened by \`colab release cut\` on route \`library-fast\` (CONVENTIONS.md §6). A record, not a unit of work: never claimed, never started.`,
+    '',
+    `- ${version} carries a destructive schema change, and a release carrying one is a person's decision (CONVENTIONS.md §6, contract item 4).`,
+    `- **To let it ride:** a human reads the migration, then runs \`COLAB_HUMAN=1 colab migration-grant <this issue> --branch ${version}\`; the next cut tags ${version} and closes this record.`,
+    `- **Veto:** add the \`${HOLD_LABEL}\` label to any open issue. While it is present no final is tagged; only a human removes it.`,
+  ].join('\n') + '\n';
+}
+
 // ---- §6 condition 2: the full suite ------------------------------------------------------------
 
 /**
@@ -1118,7 +1135,8 @@ function schemaVerdictCore(changes, since, declared, layout, none, missing) {
   }
   if (findings.length) {
     // `destructive` (#709): a measured destructive finding — not a failed read, not a declaration
-    // contradiction — the one refusal a recorded human decision can clear on route deploy-tag-fast.
+    // contradiction — the one refusal a recorded human decision can clear: the migration grant on the
+    // version's tracking issue, on deploy-tag-fast (#709) and every other route (#733).
     return { ok: false, destructive: true, detail: `destructive schema change since ${since} — a release carrying one is a human's to cut (CONVENTIONS.md §6, Switched epics rule 5): ${findings.join('; ')}` };
   }
   const read = [
@@ -1308,6 +1326,11 @@ function promotionVerdict({ trunk, sha, parents, headOnTrunk, mergedFromTrunk, e
  *   ci, suite, schema, switches   { ok, detail } each, measured by the caller
  *   heavy         #610 — integration-profile.js releaseHeavyCondition(), read on the final routes only;
  *                 absent → no row
+ *   schemaGrant   #733, every route but deploy-tag-fast — { ok, issue, version } the migration grant on
+ *                 the version's tracking issue, read by the caller only after a first decide() measured a
+ *                 destructive schema-additive refusal for that version. Clears that refusal when
+ *                 `version` is the one computed here; absent → the refusal stands and `handoff` names
+ *                 the grant command (with `trackingIssue`, or a placeholder when none is open yet)
  *
  * Returns { ok, checks: [{ condition, ok, detail }], refusals, version, tag, bump, overridden }.
  * Every check is reported, not just the first failure: a caller fixing one refusal should not
@@ -1449,10 +1472,24 @@ function decide(facts) {
   // destructive finding (never a failed read, never a declaration contradiction) with that grant live
   // passes, and the row says whose decision cleared it. Without the grant it refuses exactly as before,
   // and migration-grant's hand-off below names the one command.
+  //
+  // #733: every other route had the same hole — "a human's to cut" named no act, and a hand cut
+  // (`--bump`) refused on the same row, so a candidate route stalled until someone tagged a final by
+  // hand only to move the baseline. The act is the same grant, read from the same place (the version's
+  // tracking issue, `f.schemaGrant` — the caller reads it only once this refusal is measured, for the
+  // version this verdict computes). It is bound to the version: a grant for any other one clears nothing.
   let schema = f.schema;
-  const granted = fast && f.migrations && f.migrations.ok && f.migrations.granted;
-  if (schema && !schema.ok && schema.destructive && !schema.unread && granted) {
-    schema = { ok: true, detail: `${schema.detail} — cleared by a person's decision: the migration grant on the tracking issue #${granted}${v.ok ? ` for ${v.version}` : ''} (route deploy-tag-fast, CONVENTIONS.md §6 contract item 4)` };
+  const measuredDestructive = !!(schema && !schema.ok && schema.destructive && !schema.unread);
+  const sg = f.schemaGrant;
+  const granted = fast
+    ? f.migrations && f.migrations.ok && f.migrations.granted
+    : (sg && sg.ok && v.ok && sg.version === v.version ? sg.issue : null);
+  const routeName = fast ? 'deploy-tag-fast' : library ? 'library-fast' : (p && p.effective && p.effective.route) || 'the candidate route';
+  if (measuredDestructive && granted) {
+    schema = { ok: true, detail: `${schema.detail} — cleared by a person's decision: the migration grant on the tracking issue #${granted}${v.ok ? ` for ${v.version}` : ''} (${fast || library ? `route ${routeName}` : routeName}, CONVENTIONS.md §6 contract item 4)` };
+  } else if (measuredDestructive && !fast && v.ok) {
+    // #733: the refusal prints the one command that lets it through.
+    schema = { ...schema, detail: `${schema.detail} — a person lets it through with the migration grant on ${v.version}'s tracking issue: ${migrationHandoff(f.trackingIssue, v.version)} (read the migration first — the grant is the review)${sg && !sg.ok && sg.issue && sg.reason ? `; the grant read: ${sg.reason}` : ''}` };
   }
   for (const [condition, verdict] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', schema], ['switch-dependencies', f.switches]]) {
     if (!verdict) add(condition, false, 'not measured', true);
@@ -1489,6 +1526,8 @@ function decide(facts) {
     const h = f.holds || { ok: false, detail: `${HOLD_LABEL} was not measured` };
     add('release-hold', h.ok, h.detail, !f.holds || isUnread(h));
   }
+  // #733: off the fast route the hand-off is the schema refusal's — set whenever it still refuses.
+  if (!fast && measuredDestructive && !granted && v.ok) handoff = migrationHandoff(f.trackingIssue, v.version);
 
   const refusals = checks.filter((c) => !c.ok);
   const ok = refusals.length === 0 && !!tag;
@@ -1558,5 +1597,5 @@ module.exports = {
   fullSuiteVerdict, withoutOwnWorkflow, withoutSkippedOnlyWorkflows, verifyingRunsForCut, verifyingNote, isMigrationPath, schemaVerdict, addedLinesFromDiff,
   parseSwitchMarkers, switchVerdict,
   promotionVerdict, decide, tagMessage, versionSourceOf,
-  DOWNSTREAM_EVENTS, headCandidateVerdict, prereleaseArgs, finalReleaseArgs, handoffTrackingBody,
+  DOWNSTREAM_EVENTS, headCandidateVerdict, prereleaseArgs, finalReleaseArgs, handoffTrackingBody, schemaGrantTrackingBody,
 };

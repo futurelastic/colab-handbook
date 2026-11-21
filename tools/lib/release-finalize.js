@@ -119,11 +119,13 @@ function hasEvent(comments, fields) {
 function trackingTitle(version) { return `release: ${version}`; }
 
 /** The body, written once at creation. The candidate is deliberately not in it — the tags record that. */
-function trackingBody({ version, row, final, testPeriodDays }) {
+function trackingBody({ version, row, final, testPeriodDays, openedBy = 'colab release finalize' }) {
+  // #733: `colab release cut` opens the same record when it refuses a destructive schema change, so the
+  // migration grant has an issue to sit on before the first candidate exists; finalize then reuses it.
   return [
     releaseMarker(version),
     '',
-    `Release tracking record for **${version}** — opened by \`colab release finalize\` (CONVENTIONS.md §6, *The release rung*). A record, not a unit of work: never claimed, never started.`,
+    `Release tracking record for **${version}** — opened by \`${openedBy}\` (CONVENTIONS.md §6, *The release rung*). A record, not a unit of work: never claimed, never started.`,
     '',
     `- Rung row: \`${row}\` — the final tag is **${final === 'auto' ? `automatic after a clean ${testPeriodDays}-day test period` : 'a human act'}**.`,
     `- **Veto:** add the \`${HOLD_LABEL}\` label. While it is present no final is tagged for this version; only a human removes it.`,
