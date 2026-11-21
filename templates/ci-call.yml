@@ -12,7 +12,10 @@
 #   - the triggers: every branch (#384 — a candidate gets a run of its own before the merge; '**'
 #     also covers `ship-batch/**`), no `pull_request` beside push (#512), and workflow_dispatch (the
 #     release workflow dispatches CI on a promotion its token cannot trigger, #440);
-#   - concurrency: one live run per branch, a trunk run never cancelled and in a group of its own (#512).
+#   - concurrency: one live run per branch, a trunk run never cancelled and in a group of its own (#512),
+#     keyed by the commit sha, never a run-identity field (#761: Forgejo 15.0.6 evaluated `github.run_id`
+#     as empty there, so every trunk run queued behind one stale run). Two runs on one sha may share
+#     the group; the newer tests the same sha, and readers judge the newest run per workflow at a sha.
 #     Its trunk refs and the `trunk-branches` input name the same branches — `colab template` writes both.
 name: CI
 
@@ -22,7 +25,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
+  group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.sha) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
 
 # The called jobs can only narrow these: the gate lists this workflow's runs and reads git objects.

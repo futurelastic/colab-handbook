@@ -102,6 +102,12 @@ check that reads one of these files is that tool's behaviour, documented with th
 
 ## What each template is for
 
+**On a Forgejo (or Gitea) remote, the CI rows below are not your file.** They are GitHub-dialect,
+and the Forgejo CI file comes from your own CI layer in `.forgejo/workflows/` (#608 item 2). Forgejo
+also runs `.github/workflows/` at any ref without `.forgejo/workflows/`, and a run-identity field in a
+concurrency group evaluated empty there. Read [`tools/docs/ci-gate.md`, *CI on a Forgejo remote*](../tools/docs/ci-gate.md#ci-on-a-forgejo-remote-761)
+before a move (#761).
+
 | File | Copy to | For | Notes |
 |---|---|---|---|
 | `ci-call.yml` | `.github/workflows/ci.yml` | The generic caller: a hybrid repo, or a stack with no `ci-<stack>.yml` of its own (#721) | **A caller, not a copy:** triggers, concurrency and one `uses:` of the handbook's reusable `.github/workflows/ci-light.yml` — the dedupe gate, the secret scan, a `quick` and a `full` job, job-class `runs-on`. `colab template ci-call` writes this repo's trunk refs and pins the call to the release it stamps. Your commands go in `with:` (`toolchain`, `install`, `quick`, `full`); your own jobs sit beside the call. A copied gate is reported as drift. |
@@ -163,8 +169,8 @@ notice back and print the run they relied on. Three things to keep in a copy:
 - **It needs `contents: read`** on top of `actions: read`, to read the descriptor and the
   commit objects.
 - **The trunk refs in its `if:` mirror `concurrency`'s list.** The list appears three times in a
-  copy: the `group:`, `cancel-in-progress:`, and this `if:` (#512 gave the trunk its own
-  per-run group, so a pending trunk run is never replaced). On a repo whose trunk has another
+  copy: the `group:`, `cancel-in-progress:`, and this `if:` (#512 gave each trunk commit its own
+  group, keyed by the sha since #761, so a pending trunk run is never replaced by a later merge's). On a repo whose trunk has another
   name, edit all three. Until you do, the guard simply never fires on trunk — nothing breaks;
   but a trunk left out of `group:` and `cancel-in-progress:` has its runs cancelled.
 - **Never put a trunk-only job behind it.** Publish, deploy and release jobs must run whatever

@@ -15,8 +15,11 @@
  *   - a superseded run on the same branch is cancelled, a TRUNK run never is: every trunk sha
  *     keeps a completed run of its own, which is what the merge gate reads (#92);
  *   - a same-repo PR commit gets ONE run, not a push run plus a pull_request run (#512): the
- *     templates carry no pull_request trigger, and every trunk run has a concurrency group of
- *     its own so GitHub cannot drop a pending trunk run in favour of a newer one.
+ *     templates carry no pull_request trigger, and every trunk commit has a concurrency group of
+ *     its own so GitHub cannot drop a pending trunk run in favour of a newer commit's;
+ *   - that group is keyed by the commit sha, never by a run-identity field (#761): Forgejo 15.0.6
+ *     evaluated `github.run_id` as empty in a group, so every trunk run shared one group and queued
+ *     behind a stale run forever. ci-call.yml carries the same block and is held to it below.
  */
 
 const test = require('node:test');
@@ -57,17 +60,18 @@ function evalCancel(expr, ref) {
   return { value: protectedRefs.every((r) => r !== ref), protectedRefs };
 }
 
-// Evaluate the group expression: `ci-${{ github.ref }}${{ (<ref terms joined by ||>) && format('-{0}', github.run_id) || '' }}`.
-// Throws on any other shape, for the same reason evalCancel does.
-function evalGroup(expr, ref, runId) {
-  const m = expr.match(/^ci-\$\{\{ github\.ref \}\}\$\{\{ \((.*)\) && format\('-\{0\}', github\.run_id\) \|\| '' \}\}$/);
+// Evaluate the group expression: `ci-${{ github.ref }}${{ (<ref terms joined by ||>) && format('-{0}', github.sha) || '' }}`.
+// Throws on any other shape, for the same reason evalCancel does — a group keyed by
+// `github.run_id` (the pre-#761 shape) is rejected here, not read as equivalent.
+function evalGroup(expr, ref, sha) {
+  const m = expr.match(/^ci-\$\{\{ github\.ref \}\}\$\{\{ \((.*)\) && format\('-\{0\}', github\.sha\) \|\| '' \}\}$/);
   if (!m) throw new Error(`unexpected group expression: ${expr}`);
   const trunkRefs = m[1].split(/\s*\|\|\s*/).map((t) => {
     const tm = t.match(/^github\.ref == '([^']+)'$/);
     if (!tm) throw new Error(`unexpected term in group: ${t}`);
     return tm[1];
   });
-  return { group: `ci-${ref}${trunkRefs.includes(ref) ? `-${runId}` : ''}`, trunkRefs };
+  return { group: `ci-${ref}${trunkRefs.includes(ref) ? `-${sha}` : ''}`, trunkRefs };
 }
 
 for (const file of TEMPLATES) {
@@ -100,15 +104,19 @@ for (const file of TEMPLATES) {
   test(`${file}: superseded branch runs are cancelled, trunk runs never are`, () => {
     const c = concurrencyOf(text);
     assert.ok(c, 'top-level concurrency block present');
-    const g = evalGroup(c.group, 'refs/heads/main', 1);
+    const g = evalGroup(c.group, 'refs/heads/main', 'a1');
     assert.deepStrictEqual(g.trunkRefs.sort(), ['refs/heads/dev', 'refs/heads/main'], 'group names the same trunk refs');
-    assert.strictEqual(evalGroup(c.group, 'refs/heads/feat/x-384', 1).group, evalGroup(c.group, 'refs/heads/feat/x-384', 2).group,
+    assert.strictEqual(evalGroup(c.group, 'refs/heads/feat/x-384', 'a1').group, evalGroup(c.group, 'refs/heads/feat/x-384', 'b2').group,
       'two pushes on one branch share a group, so the newer cancels the older');
-    assert.notStrictEqual(evalGroup(c.group, 'refs/heads/feat/x-384', 1).group, evalGroup(c.group, 'refs/heads/feat/y-385', 1).group,
+    assert.notStrictEqual(evalGroup(c.group, 'refs/heads/feat/x-384', 'a1').group, evalGroup(c.group, 'refs/heads/feat/y-385', 'a1').group,
       'two branches never supersede each other');
     for (const trunk of ['refs/heads/main', 'refs/heads/dev']) {
-      assert.notStrictEqual(evalGroup(c.group, trunk, 1).group, evalGroup(c.group, trunk, 2).group,
-        `${trunk}: each trunk run has a group of its own, so a pending run is never replaced`);
+      assert.notStrictEqual(evalGroup(c.group, trunk, 'a1').group, evalGroup(c.group, trunk, 'b2').group,
+        `${trunk}: each trunk commit has a group of its own, so a pending run is never replaced by a later merge's`);
+      // #761, the accepted cost: two runs on ONE trunk sha (push + dispatch, a re-dispatch) share a
+      // group. The newer tests the same sha and is the one readers judge, so the sha keeps its verdict.
+      assert.strictEqual(evalGroup(c.group, trunk, 'a1').group, evalGroup(c.group, trunk, 'a1').group,
+        `${trunk}: two runs on one sha share a group (the documented #761 tradeoff)`);
     }
     const { protectedRefs } = evalCancel(c.cancel, 'refs/heads/main');
     assert.deepStrictEqual(protectedRefs.sort(), ['refs/heads/dev', 'refs/heads/main']);
@@ -120,6 +128,21 @@ for (const file of TEMPLATES) {
     assert.strictEqual(evalCancel(c.cancel, 'refs/pull/7/merge').value, true, 'a PR merge ref is');
   });
 }
+
+// #761: no run-identity field in any light template's concurrency group — the caller (ci-call.yml)
+// included, which the per-stack loop above does not cover. Forgejo 15.0.6 evaluated `github.run_id`
+// as empty in a group; `run_number` and `run_attempt` are the same class of field.
+test('#761 no light template keys its concurrency group on a run-identity field', () => {
+  for (const file of [...TEMPLATES, 'ci-call.yml']) {
+    const c = concurrencyOf(read(file));
+    assert.ok(c && c.group, `${file}: top-level concurrency group present`);
+    assert.doesNotMatch(c.group, /github\.run_(id|number|attempt)/, `${file}: group carries a run-identity field`);
+    const g = evalGroup(c.group, 'refs/heads/main', 'a1');
+    assert.strictEqual(g.group, 'ci-refs/heads/main-a1', `${file}: a trunk run's group is per commit`);
+    assert.strictEqual(evalGroup(c.group, 'refs/heads/feat/x-761', 'a1').group, 'ci-refs/heads/feat/x-761',
+      `${file}: a branch run's group is per ref`);
+  }
+});
 
 test('the three templates carry one identical trigger + concurrency block', () => {
   const block = (t) => {
