@@ -18,7 +18,7 @@ for f in tools/lib/*.js tools/lib/codec/*.js audit/audit.mjs; do node --check "$
 for f in templates/*.mjs; do node --check "$f"; done
 sh -n install.sh
 for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit-dispatch templates/pre-commit-instruction-files \
-         .githooks/pre-commit .githooks/pre-commit.d/*; do sh -n "$f"; done
+         .githooks/pre-commit .githooks/pre-commit.d/* templates/dev-setup/*/*; do sh -n "$f"; done
 bash -n .github/actions/artifact-store/lib/artifact-store.sh
 bash .github/actions/artifact-store/test/roundtrip.sh     # hermetic, through the fake client (#601)
 bash -n .github/actions/artifact-store/test/garage.sh

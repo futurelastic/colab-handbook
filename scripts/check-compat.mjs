@@ -176,7 +176,11 @@ export function enumerate(root) {
   live.codec = codecStrings(root);
   live.export = null; // declared kind: resolved per listed path, never enumerated
   live.engine = new Map(filesIn(root, "engines", /\.conf$/).map((f) => [f.replace(/\.conf$/, ""), null]));
-  live.template = new Map(filesIn(root, "templates", /./).map((f) => [`templates/${f}`, null]));
+  // One level of stack folders counts too: templates/dev-setup/<stack>/<file> (#764).
+  const nested = (d) => (fs.existsSync(path.join(root, d)) ? fs.readdirSync(path.join(root, d)) : [])
+    .filter((s) => fs.statSync(path.join(root, d, s)).isDirectory()).sort()
+    .flatMap((s) => filesIn(root, `${d}/${s}`, /./).map((f) => `${d}/${s}/${f}`));
+  live.template = new Map([...filesIn(root, "templates", /./).map((f) => `templates/${f}`), ...nested("templates/dev-setup")].map((f) => [f, null]));
   return { live, notes };
 }
 

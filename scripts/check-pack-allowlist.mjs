@@ -36,6 +36,8 @@ export const ALLOWED = [
   /^tools\/lib\/codec\/[A-Za-z0-9._-]+\.(js|d\.ts)$/,
   /^tools\/lib\/codec\/samples\.json$/,
   /^templates\/[A-Za-z0-9._-]+$/,
+  // The dev-setup pairs (#764): one directory per stack, exactly two files each.
+  /^templates\/dev-setup\/[a-z0-9-]+\/(dev|dev-setup)$/,
   /^audit\/audit\.mjs$/,
 ];
 const TEST_FILE = /\.test\.js$/;

@@ -1,0 +1,16 @@
+#!/bin/sh
+# .colab/dev — start the trunk dev server: no arguments, foreground, exits when the server stops
+# (CONVENTIONS §3, *Boot recipe*). Copied from templates/dev-setup/python — you own this copy.
+# Never fetches: everything it runs was installed into .venv by .colab/dev-setup.
+#
+# An ASGI app under uvicorn (FastAPI, Starlette…). Set APP_MODULE to yours.
+# --proxy-headers + --forwarded-allow-ips: trust the local https proxy's X-Forwarded-*, so
+# absolute URLs the app builds carry the https name (DEV_URL), not http://127.0.0.1.
+# Django instead: exec .venv/bin/python manage.py runserver "127.0.0.1:$PORT", with
+# ALLOWED_HOSTS and CSRF_TRUSTED_ORIGINS reading DEV_HOST / DEV_URL from the environment.
+set -eu
+cd "$(dirname "$0")/.."
+: "${PORT:?PORT is required}"
+APP_MODULE="${APP_MODULE:-app.main:app}"
+exec .venv/bin/python -m uvicorn "$APP_MODULE" --reload --host 127.0.0.1 --port "$PORT" \
+  --proxy-headers --forwarded-allow-ips 127.0.0.1

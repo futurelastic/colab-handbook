@@ -331,6 +331,26 @@ one installer does not end up with a whole `scripts/` folder for a single
 `scripts/install-hooks.sh`; that scaffolded a bare one-file `scripts/`
 directory into ~45 repos and was wrong — fixed 2026-08-20.
 
+### dev-setup — a checkout made ready (#764)
+
+One pair per stack under `dev-setup/<stack>/`: `dev-setup` makes a fresh or stale checkout
+ready, `dev` starts the trunk dev server. Both copy to `<repo>/.colab/` (`cp`, keep the
+executable bit), take no stamp, and you own them like the hooks above. The contract they
+implement is [CONVENTIONS §3, *Boot recipe*](../CONVENTIONS.md#boot-recipe--an-entry-point-the-repo-owns-not-a-table-a-consumer-keeps);
+the pilot that shaped it is [ADR 764](../docs/adr/764-dev-setup-rationale.md). Each pair went
+from a fresh checkout to a page answering, re-ran under the live server, and stopped cleanly.
+
+| Stack | `dev-setup` does | `dev` runs | The https name (`DEV_HOST`) |
+|---|---|---|---|
+| `node-vite` | `npm ci` when the lockfile moved | `vite --port $PORT --strictPort` | `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`, an env Vite reads — no config edit |
+| `next` | `npm ci` when the lockfile moved | `next dev -p $PORT` (not your `dev` script, which may pin a port) | **edit once:** `next.config` reads `DEV_HOST` into `allowedDevOrigins`; without it the page loads but HMR is refused |
+| `laravel` | `.env` once, then `APP_URL` every run; SQLite file, or a MariaDB/MySQL container on `COLAB_PORTS` entry `DB_SLOT`, labelled `colab.dev-setup=<checkout>`; `composer install`, `npm ci`, migrate, seed **once per database** (marker written after success), build, `queue:restart` | server + a self-restarting queue worker under `concurrently` from your lockfile | `APP_URL=$DEV_URL` (or trust the local proxy) |
+| `python` | `.venv`, pip install as `ci-python.yml` does, when a dependency file moved | `uvicorn $APP_MODULE` with `--proxy-headers` (Django: see the file) | forwarded headers trusted from `127.0.0.1` |
+
+Removing a checkout? Remove its containers with it:
+`docker rm -f $(docker ps -aq --filter label=colab.dev-setup=<absolute checkout path>)` — a
+worktree's `.colab/hooks/pre-remove` is the natural place.
+
 ## How to adopt
 
 1. **Copy — use `colab template`.** It copies the template *and* stamps it with the

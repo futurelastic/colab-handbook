@@ -1,0 +1,15 @@
+#!/bin/sh
+# .colab/dev-setup — make this checkout ready to run .colab/dev (CONVENTIONS §3, *Boot recipe*).
+# Copied from the colab-handbook template templates/dev-setup/next — you own this copy.
+#
+# Contract: idempotent (run it after every trunk move), asks nothing, exits non-zero on failure,
+# needs no real credentials, writes only inside this checkout.
+# Env from the caller: PORT (= ports[0]), COLAB_PORTS (csv, first = PORT), DEV_URL, DEV_HOST.
+set -eu
+cd "$(dirname "$0")/.."
+
+# Dependencies: reinstall only when the lockfile moved since the last install.
+if ! cmp -s package-lock.json node_modules/.dev-setup.lock 2>/dev/null; then
+  npm ci --no-audit --no-fund
+  cp package-lock.json node_modules/.dev-setup.lock
+fi

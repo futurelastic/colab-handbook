@@ -419,6 +419,13 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C3.boot.01 | default | | If `<repo>/.colab/dev` exists and is executable it starts the trunk dev server: no arguments, foreground, exits when the server stops. | if `<repo>/.colab/dev` exists | CONVENTIONS.md | — |
 | C3.boot.02 | default | | Absent `.colab/dev`, a caller falls back to its own ecosystem default; the recipe lives beside the code, not in the schema. | Absent it, a caller falls back to its own ecosystem default | CONVENTIONS.md | — |
 | C3.boot.03 | default | | Verify a start by the declared port accepting a connection, never by the process manager's exit code. | A start is verified by the declared port accepting a connection | CONVENTIONS.md | — |
+| C3.boot.04 | default | | If `<repo>/.colab/dev-setup` exists and is executable it makes the checkout ready to run `.colab/dev`. | it makes the checkout ready to run `.colab/dev` | CONVENTIONS.md | #764 |
+| C3.boot.05 | default | | `dev-setup` is idempotent (runs after every trunk move), asks nothing, exits non-zero on any failure including a failed seed, and needs no real credentials. | exits non-zero on any failure (a failed seed included) | CONVENTIONS.md | #764 |
+| C3.boot.06 | default | | `dev-setup` writes only inside the checkout plus the service containers it labels with the checkout's path. | writes only inside the checkout plus the service containers it labels | CONVENTIONS.md | #764 |
+| C3.boot.07 | default | | Both files get `PORT` (`ports[0]`), `COLAB_PORTS` (csv, first = `PORT`), `DEV_URL` and `DEV_HOST` from their caller. | Both files get the same env from their caller | CONVENTIONS.md | #764 |
+| C3.boot.08 | default | | `.colab/dev` never fetches. | `.colab/dev` never fetches | CONVENTIONS.md | #764 |
+| C3.boot.09 | default | | An always-on dev server serves trunk or the newest `v*-rc.*` tag, never a session branch. | An always-on dev server serves trunk or the newest | CONVENTIONS.md | #764 |
+| C3.boot.10 | default | | An always-on dev server binds `127.0.0.1` and accepts its `DEV_URL` host. | accepts its `DEV_URL` host | CONVENTIONS.md | #764 |
 
 ### 10. Anti-patterns
 

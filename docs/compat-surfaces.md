@@ -348,6 +348,14 @@ templates/deploy-adapter-portainer.mjs
 templates/deploy-container-run.mjs
 templates/deploy-container.yml
 templates/deploy-xserver.yml
+templates/dev-setup/laravel/dev
+templates/dev-setup/laravel/dev-setup
+templates/dev-setup/next/dev
+templates/dev-setup/next/dev-setup
+templates/dev-setup/node-vite/dev
+templates/dev-setup/node-vite/dev-setup
+templates/dev-setup/python/dev
+templates/dev-setup/python/dev-setup
 templates/dist-refs.yml
 templates/docs-README.md
 templates/docs-lint.mjs

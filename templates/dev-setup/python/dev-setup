@@ -1,0 +1,27 @@
+#!/bin/sh
+# .colab/dev-setup — make this checkout ready to run .colab/dev (CONVENTIONS §3, *Boot recipe*).
+# Copied from the colab-handbook template templates/dev-setup/python — you own this copy.
+#
+# Contract: idempotent (run it after every trunk move), asks nothing, exits non-zero on failure,
+# needs no real credentials, writes only inside this checkout.
+# Env from the caller: PORT (= ports[0]), COLAB_PORTS (csv, first = PORT), DEV_URL, DEV_HOST.
+#
+# Installs the way templates/ci-python.yml does: pip into .venv, from pyproject.toml
+# (editable) or requirements.txt, then requirements-dev.txt.
+set -eu
+cd "$(dirname "$0")/.."
+PYTHON="${PYTHON:-python3}"
+
+[ -x .venv/bin/python ] || "$PYTHON" -m venv .venv
+# Reinstall only when a dependency file moved since the last install.
+DEPS="$(cat pyproject.toml requirements.txt requirements-dev.txt 2>/dev/null | cksum)"
+if [ "$(cat .venv/.dev-setup.stamp 2>/dev/null)" != "$DEPS" ]; then
+  .venv/bin/python -m pip install --quiet --upgrade pip
+  if [ -f pyproject.toml ]; then .venv/bin/python -m pip install --quiet -e .
+  elif [ -f requirements.txt ]; then .venv/bin/python -m pip install --quiet -r requirements.txt
+  fi
+  [ ! -f requirements-dev.txt ] || .venv/bin/python -m pip install --quiet -r requirements-dev.txt
+  printf '%s\n' "$DEPS" > .venv/.dev-setup.stamp
+fi
+
+# Django? Apply migrations here (idempotent): .venv/bin/python manage.py migrate --noinput

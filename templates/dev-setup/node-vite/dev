@@ -1,0 +1,14 @@
+#!/bin/sh
+# .colab/dev — start the trunk dev server: no arguments, foreground, exits when the server stops
+# (CONVENTIONS §3, *Boot recipe*). Copied from templates/dev-setup/node-vite — you own this copy.
+# Never fetches: everything it runs was installed by .colab/dev-setup.
+set -eu
+cd "$(dirname "$0")/.."
+: "${PORT:?PORT is required}"
+
+# Accept the https name the server is reached at without editing vite.config
+# (Vite reads this env since 6.0.9; a host outside server.allowedHosts is otherwise refused, 403).
+[ -z "${DEV_HOST:-}" ] || export __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS="$DEV_HOST"
+
+# --strictPort: fail loudly rather than drift to the next free port.
+exec node_modules/.bin/vite --host 127.0.0.1 --port "$PORT" --strictPort
