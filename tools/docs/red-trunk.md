@@ -120,11 +120,14 @@ ci-grant when any condition below is not met. Fires **iff**:
    flight) refuses. The candidate must still cure the remaining set under every other
    condition. The admission belongs to the cure rule only; a human `ci-grant` create
    keeps the plain guard.
-4. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** touch `.github/workflows/**` — a branch may not
+4. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** touch `.github/workflows/**`, `.forgejo/workflows/**`
+   or `.gitea/workflows/**` — a branch may not
    self-certify a change to the CI configuration that is grading it. This door
    stays behind a human ci-grant, **unless** the branch passes the carve-out
    below. The diff is read without rename detection, so moving a workflow file
-   out of the directory counts as touching it (#297).
+   out of the directory counts as touching it (#297). The two forge directories
+   count on every remote (#765): a Forgejo or Gitea remote runs its CI from them
+   first, and on GitHub they are inert, so counting them there only ever refuses.
 5. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** change the `scripts` block of any `package.json` (#297).
    Any `package.json` at any depth counts; key order does not,
    a changed command does; deleting or renaming a manifest counts. There is **no
@@ -334,3 +337,35 @@ What it never does: make trunk green. `colab trunk-ci` reads the red as before, 
 still refuses that commit (it never reads this key), and a batch (`ship-batch`) never passes this door
 any more than the other two — each member meets it on its own. A repo that declares nothing, or
 declares the key invalidly (the audit fails it), reads exactly as before.
+
+## On a Forgejo remote — the same three doors, evidence from commit statuses (#765)
+
+On a repo whose remote is a Forgejo (or Gitea) forge
+([ci-gate.md, *A Forgejo remote*](ci-gate.md#a-forgejo-remote--ci-from-commit-statuses-landing-only-678)),
+a finished red trunk goes through the release-only door, the cure rule and the ci-grant in the same
+order as on GitHub. Before #765 the forge verdict was final, so none of them was asked. The evidence
+comes from the forge's commit statuses. A Forgejo Actions context `<workflow> / <job> (<event>)` is one
+job. The contexts of one workflow at one sha make one run (tools/lib/ci-forgejo.js `runsFromRows`).
+
+Each door reads the following on a forge:
+
+- **The cure rule.** The branch's evidence is its remote head's whole commit status. Condition 2b
+  matches the red jobs to the branch's jobs by workflow and job name, as on GitHub. Anti-stacking reads
+  trunk's commits since the prior exemption and treats one as green only when its whole status is green.
+  What a status cannot give refuses, with the reason in `ciCure.reason`:
+  - the #321 workflow carve-out and the manifest admissions (#475/#476) refuse, because a status has
+    no steps and no durations;
+  - no dry-run or dispatch cure is asked for (#474/#510), because both are `gh workflow run` commands;
+  - a cancelled run is never "spent" for the reviewer red set (#730), because a status carries no
+    attempt count.
+- **The ci-grant.** It is read from the forge. The issue's comments are read and checked for the grant
+  comment, and its labels for `ci-granted`. A comment author's trust class comes from their collaborator
+  permission: the repo owner reads as `OWNER`, `write`/`admin` as `COLLABORATOR`, and `read` or no
+  access is untrusted. Under `trust-humans`, the label's adder is read from the issue timeline. Any
+  failed read refuses. **Minting stays gh-only:** writing a grant is a tracker write, and #678's
+  "landing only" ruling keeps the forge's tracker the adopter's. On a forge, a person posts the grant
+  comment (`ciGrant.grantCommentBody`'s format) and adds the label in the forge's own UI. `colab ship`
+  then reads it.
+- **The release-only door.** The heads are the per-workflow runs above, and a job-level declaration
+  matches their jobs.
+

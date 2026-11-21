@@ -297,3 +297,84 @@ test('#740 issueView: the GitHub shape; comments only when asked, every page rea
   assert.strictEqual(forgejo.withFetcher(() => ({ status: 404, body: '' }), () => forgejo.create('/r', ENG).issueView(91, ['state'])), null);
 });
 
+
+// #765 — the run/job model the red-trunk doors read on a forge, and the two grant reads.
+
+test('#765 jobFromRow: an Actions context splits into workflow, job and event; an external one is its own job', () => {
+  const row = (ctx, s = 'success') => forgejo.statusRow(SHA, st(1, ctx, s));
+  assert.deepStrictEqual(
+    (({ name, workflowName, event, status, conclusion, headSha, steps, startedAt }) => ({ name, workflowName, event, status, conclusion, headSha, steps, startedAt }))(forgejo.jobFromRow(row('CI / Build (push)', 'failure'))),
+    { name: 'Build', workflowName: 'CI', event: 'push', status: 'completed', conclusion: 'failure', headSha: SHA, steps: null, startedAt: null });
+  // the FIRST ` / ` splits, so a job name holding a slash survives
+  const nested = forgejo.jobFromRow(row('CI / test / unit (pull_request)'));
+  assert.deepStrictEqual([nested.workflowName, nested.name, nested.event], ['CI', 'test / unit', 'pull_request']);
+  // a status from an external CI (no ` / `) is its own workflow and job, with no event
+  const ext = forgejo.jobFromRow(row('ci/woodpecker/push/build'));
+  assert.deepStrictEqual([ext.workflowName, ext.name, ext.event], ['ci/woodpecker/push/build', 'ci/woodpecker/push/build', null]);
+  // pending stays not completed — a job in flight is never evidence
+  assert.strictEqual(forgejo.jobFromRow(row('CI / Build (push)', 'pending')).status, 'in_progress');
+});
+
+test('#765 runsFromRows: one run per workflow, jobs inline, green only when all of it is', () => {
+  const rows = [
+    st(1, 'CI / Build (push)', 'failure'), st(2, 'CI / Lint (push)', 'success'),
+    st(3, 'Docs / check (push)', 'success'), st(4, 'Nightly / x (push)', 'skipped'),
+    st(5, 'Slow / y (push)', 'pending'),
+  ].map((s) => forgejo.statusRow(SHA, s));
+  const runs = forgejo.runsFromRows(rows);
+  const by = Object.fromEntries(runs.map((r) => [r.workflowName, r]));
+  assert.deepStrictEqual(Object.keys(by).sort(), ['CI', 'Docs', 'Nightly', 'Slow']);
+  assert.deepStrictEqual([by.CI.status, by.CI.conclusion, by.CI.jobs.map((j) => j.name)], ['completed', 'failure', ['Build', 'Lint']]);
+  assert.deepStrictEqual([by.Docs.status, by.Docs.conclusion], ['completed', 'success']);
+  assert.deepStrictEqual([by.Nightly.status, by.Nightly.conclusion], ['completed', 'skipped']);
+  assert.deepStrictEqual([by.Slow.status, by.Slow.conclusion], ['in_progress', '']);
+  // the run id is a synthetic key, never a number gh could be handed
+  assert.strictEqual(by.CI.databaseId, 'status:CI');
+  assert.strictEqual(by.CI.event, 'push');
+  // push + pull_request contexts of one workflow are ONE run; the jobs keep their own event
+  const both = forgejo.runsFromRows([st(1, 'CI / Build (push)', 'success'), st(2, 'CI / Build (pull_request)', 'success')].map((s) => forgejo.statusRow(SHA, s)));
+  assert.strictEqual(both.length, 1);
+  assert.strictEqual(both[0].event, null);
+  assert.deepStrictEqual(both[0].jobs.map((j) => j.event), ['push', 'pull_request']);
+  // a skipped job beside a passing one concludes success, as GitHub concludes such a run
+  const mixed = forgejo.runsFromRows([st(1, 'CI / a (push)', 'success'), st(2, 'CI / b (push)', 'skipped')].map((s) => forgejo.statusRow(SHA, s)));
+  assert.strictEqual(mixed[0].conclusion, 'success');
+  // no rows is no runs; an unread read stays unread
+  assert.deepStrictEqual(forgejo.runsFromRows([]), []);
+  assert.strictEqual(forgejo.runsFromRows(null), null);
+});
+
+test('#765 associationFrom: owner and write are trusted classes; read, none and unread are not', () => {
+  assert.strictEqual(forgejo.associationFrom('Acme', 'acme', 'read'), 'OWNER');
+  assert.strictEqual(forgejo.associationFrom('ada', 'acme', 'owner'), 'OWNER');
+  assert.strictEqual(forgejo.associationFrom('ada', 'acme', 'admin'), 'COLLABORATOR');
+  assert.strictEqual(forgejo.associationFrom('ada', 'acme', 'write'), 'COLLABORATOR');
+  assert.strictEqual(forgejo.associationFrom('ada', 'acme', 'read'), 'NONE');
+  assert.strictEqual(forgejo.associationFrom('ada', 'acme', 'none'), 'NONE');
+  assert.strictEqual(forgejo.associationFrom('ada', 'acme', undefined), '');
+});
+
+test('#765 authorAssociation: the permission read, a 404 is NONE, a failed read is untrusted', () => {
+  const f = (status, body) => () => ({ status, body: JSON.stringify(body) });
+  const read = (fetch, login) => forgejo.withFetcher(fetch, () => forgejo.create('/r', ENG).authorAssociation(login));
+  let asked = null;
+  assert.strictEqual(forgejo.withFetcher((u) => { asked = u; return { status: 200, body: '{"permission":"write"}' }; },
+    () => forgejo.create('/r', ENG).authorAssociation('ada')), 'COLLABORATOR');
+  assert.strictEqual(asked, 'https://forge.example/api/v1/repos/acme/app/collaborators/ada/permission');
+  assert.strictEqual(read(f(404, {}), 'drive-by'), 'NONE');
+  assert.strictEqual(read(f(500, {}), 'ada'), '');
+  assert.strictEqual(read(() => { throw new Error('never asked'); }, 'acme'), 'OWNER'); // the repo owner needs no read
+});
+
+test('#765 labelActors: who ADDED the label, from the timeline; removals and other labels do not count; a failed page is null', () => {
+  const ev = (type, label, login, body) => ({ type, label: label && { name: label }, user: { login }, body });
+  const tl = [ev('label', 'ci-grant', 'ada', '1'), ev('label', 'ci-grant', 'bob', ''), ev('label', 'bug', 'eve', '1'), ev('comment', null, 'eve', 'hi')];
+  assert.deepStrictEqual(forgejo.labelAddersFrom(tl, 'ci-grant'), ['ada']);
+  assert.strictEqual(forgejo.labelAddersFrom(null, 'ci-grant'), null);
+  let asked = null;
+  const got = forgejo.withFetcher((u) => { asked = u; return { status: 200, body: JSON.stringify(tl) }; },
+    () => forgejo.create('/r', ENG).labelActors(7, 'ci-grant'));
+  assert.deepStrictEqual(got, ['ada']);
+  assert.match(asked, /\/repos\/acme\/app\/issues\/7\/timeline\?page=1&limit=50$/);
+  assert.strictEqual(forgejo.withFetcher(() => ({ status: 502, body: '' }), () => forgejo.create('/r', ENG).labelActors(7, 'ci-grant')), null);
+});
