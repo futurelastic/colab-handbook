@@ -276,9 +276,22 @@ test('decision --record over the pair with an unreadable label timeline refuses 
   assert.match(r.err, /--reopen/);
 });
 
+// #763: --answers must name something on the issue — here the re-posted options block it settles.
+const OPTIONS_COMMENT = {
+  body: '<!-- decision:options -->\nA: keep\nB: change',
+  createdAt: '2026-09-24T00:00:00Z',
+  url: 'https://github.com/acme/app/issues/1#issuecomment-2',
+  author: { login: 'maintainer' },
+  authorAssociation: 'OWNER',
+};
+const PAIR_VIEW_WITH_OPTIONS = {
+  code: 0,
+  stdout: JSON.stringify({ state: 'OPEN', labels: [{ name: 'needs-decision' }, { name: 'decision-recorded' }], comments: [RECORD_COMMENT, OPTIONS_COMMENT] }) + '\n',
+};
+
 test('decision --record over the pair WITH --answers proceeds — the record says which question it answers', () => {
   const fx = fixture({
-    'issue view': PAIR_VIEW,
+    'issue view': PAIR_VIEW_WITH_OPTIONS,
     'api --paginate': ASKED_AFTER,
     'label list': { code: 1, stderr: 'fixture: no labels\n' },
     'issue comment': { code: 0, stdout: '' },
@@ -383,6 +396,59 @@ test('decision --record, an ask already answered by an answer record: no open-as
   const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--repo', fx.work]);
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.doesNotMatch(r.err, /open ask/);
+});
+
+// --- #763: a malformed --answers ref is refused before any write ------------------------------
+
+test('#763 decision --record --answers --body-file f (the ref left out): exits non-zero, no gh call at all', () => {
+  const fx = fixture({
+    'issue view': viewWith([ASK_1]),
+    'label list': { code: 1, stderr: 'fixture: no labels\n' },
+    // no 'issue comment' / 'issue edit' — a write would hit "unscripted" and fail differently
+  });
+  const bodyFile = path.join(fx.root, 'ruling.md');
+  fs.writeFileSync(bodyFile, 'the ruling\n');
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--answers', '--body-file', bodyFile, '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /Option --answers needs a value/);
+  assert.match(r.err, /--answers=<value>/);
+  assert.doesNotMatch(r.err, /unscripted/);
+  assert.deepStrictEqual(fx.calls(), [], 'the usage error must stop the command before it reads or writes the tracker');
+});
+
+test('#763 decision --record --answers <id> not open on the issue: refuses before any write and lists the open ask ids', () => {
+  const fx = fixture({
+    'issue view': viewWith([ASK_1, ASK_2]),
+    'label list': { code: 1, stderr: 'fixture: no labels\n' },
+  });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--answers', 'ask-nine', '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /ask-nine is not an open ask id/);
+  assert.match(r.err, /nothing was written/);
+  assert.match(r.err, /ask-one/);
+  assert.match(r.err, /ask-two/);
+  assert.doesNotMatch(r.err, /unscripted/);
+  assert.ok(!fx.calls().some((a) => a[0] === 'issue' && (a[1] === 'comment' || a[1] === 'edit')), 'no write may be attempted');
+});
+
+test('#763 decision --record --answers <id> of an ask already answered: refuses and says so', () => {
+  const answered = { createdAt: '2026-01-01T00:02:00Z', body: '<!-- dash:answer ask=ask-one v=1 option=A by=coordinator at=2026-01-01T00:02:00Z -->', author: { login: 'bot' }, authorAssociation: 'NONE' };
+  const fx = fixture({ 'issue view': viewWith([ASK_1, answered]), 'label list': { code: 1, stderr: 'fixture: no labels\n' } });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--answers', 'ask-one', '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /ask ask-one is already answered/);
+  assert.match(r.err, /\(none\)/);
+});
+
+test('#763 decision --record --answers - still records: an explicit "answers no recorded question"', () => {
+  const fx = fixture({
+    'issue view': viewWith([]),
+    'label list': { code: 1, stderr: 'fixture: no labels\n' },
+    'issue comment': { code: 0, stdout: '' },
+    'issue edit': { code: 0, stdout: '' },
+  });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--answers', '-', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
 });
 
 test('HELP_DECISION documents --answers for an ask id, not only a decision:options comment', () => {

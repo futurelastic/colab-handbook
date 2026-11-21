@@ -18,6 +18,7 @@ const {
   PAIR_VERDICTS, pairVerdict,
   evaluateIssue,
 } = require('./decision-record.js');
+const { answersRefVerdict } = require('./decision-record.js');
 
 const HOST = 'build-box-01';
 const NOW = '2026-08-06T10:00:00Z';
@@ -402,3 +403,42 @@ test('#695 shipDecisionRow: refuses human-gated; unread is self-clearing; the do
   assert.equal(shipDecisionEvidence(refused), '');
   assert.equal(SHIP_DECISION_ROW, 'no open decision on carried issues (#695)');
 });
+
+// --- #763: answersRefVerdict — an --answers ref must resolve to something on the issue -------
+{
+  const ASK = { createdAt: '2026-01-01T00:00:00Z', body: '<!-- dash:ask id=ask-one v=1 -->\nWhich?' };
+  const OPT = { createdAt: '2026-01-01T00:01:00Z', id: 'IC_kwOPT', url: 'https://github.com/acme/app/issues/1#issuecomment-22', body: '<!-- decision:options -->\nA: this\nB: that' };
+  const ANSWER = { createdAt: '2026-01-01T00:02:00Z', body: '<!-- dash:answer ask=ask-one v=1 option=A by=x at=2026-01-01T00:02:00Z -->' };
+
+  test('#763 answersRefVerdict: `-`, an open ask id and every form of an options-comment ref are accepted', () => {
+    assert.deepStrictEqual(answersRefVerdict({ ref: '-', comments: [] }), { ok: true, kind: 'none' });
+    assert.deepStrictEqual(answersRefVerdict({ ref: 'ask-one', comments: [ASK] }), { ok: true, kind: 'ask' });
+    for (const ref of ['IC_kwOPT', OPT.url, 'issuecomment-22', '#issuecomment-22', '22']) {
+      assert.deepStrictEqual(answersRefVerdict({ ref, comments: [ASK, OPT] }), { ok: true, kind: 'options' }, ref);
+    }
+  });
+
+  test('#763 answersRefVerdict: the issue URL names a block that lives in the body, and only then', () => {
+    const issueUrl = 'https://github.com/acme/app/issues/1';
+    assert.strictEqual(answersRefVerdict({ ref: issueUrl, comments: [], body: '<!-- decision:options -->\nA', issueUrl }).ok, true);
+    assert.strictEqual(answersRefVerdict({ ref: issueUrl, comments: [], body: 'no block', issueUrl }).ok, false);
+  });
+
+  test('#763 answersRefVerdict: a swallowed flag, an unknown id, or a comment id that is not an options block refuses and lists what is open', () => {
+    const plain = { createdAt: '2026-01-01T00:03:00Z', url: 'https://github.com/acme/app/issues/1#issuecomment-23', body: 'just a comment' };
+    for (const ref of ['--body-file', 'ask-nine', '23', '']) {
+      const v = answersRefVerdict({ ref, comments: [ASK, OPT, plain] });
+      assert.strictEqual(v.ok, false, ref);
+      assert.deepStrictEqual(v.asks.map((a) => a.id), ['ask-one']);
+      assert.deepStrictEqual(v.optionRefs, [OPT.url]);
+      assert.match(v.why, /is not an open ask id/);
+    }
+  });
+
+  test('#763 answersRefVerdict: an ask that is already answered refuses and says so', () => {
+    const v = answersRefVerdict({ ref: 'ask-one', comments: [ASK, ANSWER] });
+    assert.strictEqual(v.ok, false);
+    assert.match(v.why, /already answered/);
+    assert.deepStrictEqual(v.asks, []);
+  });
+}

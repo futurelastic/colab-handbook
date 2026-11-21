@@ -59,6 +59,17 @@ is `pairVerdict` in `tools/lib/decision-record.js`. `colab decision --list` name
 issue carrying the pair, with its verdict and fix. `colab decision --record` **refuses**
 over the pair unless `--answers <ref>` says which question the new record answers.
 
+**[Hard C5b.dg.38 — refuse: a ruling that names a question the issue does not hold]** A record
+naming an ask that does not exist closes nothing, so the real ask stays open and every gate waiting
+on it keeps holding (#763). `colab decision --record --answers <ref>` therefore resolves the ref
+on the issue before any write: an open ask id, a `decision:options` comment (node id, URL,
+`issuecomment-<n>` or bare `<n>`), the issue's own URL when its body holds the block, or `-`.
+Anything else — including an ask already answered — is refused, with the open ask ids listed.
+`--answers` given no value (`--answers --body-file f`) is a usage error, never the value
+`--body-file`; that holds for every value flag, and a value that really starts with `--` goes
+inline (`--answers=<value>`). The reference reading is `answersRefVerdict` in
+`tools/lib/decision-record.js`.
+
 Why, with the measurement: [ADR 539](../../docs/adr/539-decision-gate-rationale.md).
 
 ## An open question stops the ship, not only the start (#695)

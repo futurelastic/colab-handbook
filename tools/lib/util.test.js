@@ -72,3 +72,33 @@ test('humanAge: clock skew (a "since" in the future) never renders a negative ag
     assert.deepStrictEqual([o.refs, o.branch], ['1,2', 'x']);
   });
 }
+
+// --- #763: a value flag never swallows the next option as its value -------------------------
+{
+  const { parseArgs: pa, UserError: UE } = require('./util');
+  const spec = { values: { '--answers': 'answers', '--body-file': 'bodyFile' }, lists: { '--refs': 'refs' }, flags: { '--json': 'json' } };
+
+  test('#763 parseArgs: a value flag followed by another option is a usage error naming both', () => {
+    assert.throws(() => pa(['--answers', '--body-file', 'f'], spec),
+      (e) => e instanceof UE && /Option --answers needs a value/.test(e.message) && /"--body-file"/.test(e.message) && /--answers=<value>/.test(e.message));
+    assert.throws(() => pa(['--answers', '--json'], spec), (e) => e instanceof UE && /--answers needs a value/.test(e.message));
+  });
+
+  test('#763 parseArgs: the same refusal applies to a `lists` flag', () => {
+    assert.throws(() => pa(['--refs', '--json'], spec), (e) => e instanceof UE && /--refs needs a value/.test(e.message));
+  });
+
+  test('#763 parseArgs: a value that starts with -- is still accepted inline', () => {
+    assert.strictEqual(pa(['--answers=--odd'], spec).answers, '--odd');
+    assert.strictEqual(pa(['--refs=--odd'], spec).refs, '--odd');
+  });
+
+  test('#763 parseArgs: a lone `-` and a single-dash value stay ordinary values', () => {
+    assert.strictEqual(pa(['--answers', '-'], spec).answers, '-');
+    assert.strictEqual(pa(['--answers', '-x', '--body-file', 'f'], spec).answers, '-x');
+  });
+
+  test('#763 parseArgs: a value flag at the end of argv keeps its old "needs a value" error', () => {
+    assert.throws(() => pa(['--answers'], spec), (e) => e instanceof UE && e.message === 'Option --answers needs a value');
+  });
+}

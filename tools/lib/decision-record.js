@@ -342,6 +342,55 @@ function openAsks(comments) {
 }
 
 /**
+ * #763: is `ref` something a `--answers` may name on THIS issue? Measured: `--answers --body-file f`
+ * (the ref left out) recorded four rulings as answering an ask named `--body-file`; that names no
+ * real ask, so every open ask stayed open and every gate waiting on it kept holding. parseArgs now
+ * refuses the swallowed flag; this refuses any other ref that resolves to nothing here.
+ *
+ * A ref is accepted when it is:
+ *   - `-`                       — explicitly answers no recorded question;
+ *   - an OPEN ask id            — openAsks() above, the same read the recorder is shown;
+ *   - a `decision:options` comment on the issue, by its node id, its URL, `issuecomment-<n>`
+ *     (with or without a leading `#` or any URL prefix), or the bare `<n>`;
+ *   - the issue's own URL, when the issue BODY carries the options block (where it lives by
+ *     default, tools/docs/decisions.md) — a body has no comment id to name.
+ * An ask id that exists but is already answered is refused too, and said so: a second ruling on
+ * it would settle nothing a reader is waiting on.
+ *
+ * Pure. Returns `{ ok: true, kind: 'none'|'ask'|'options' }` or
+ * `{ ok: false, why, asks, optionRefs }` — `asks` the open asks, `optionRefs` the option-block
+ * refs the caller can list.
+ */
+function answersRefVerdict({ ref, comments, body = '', issueUrl = null } = {}) {
+  const r = String(ref == null ? '' : ref).trim();
+  const list = Array.isArray(comments) ? comments : [];
+  const asks = openAsks(list);
+  const optionComments = list.filter((c) => c && OPTIONS_RE.test(String(c.body || '')));
+  const bodyHasOptions = OPTIONS_RE.test(typeof body === 'string' ? body : '');
+  const optionRefs = [
+    ...optionComments.map((c) => c.url || c.id).filter(Boolean),
+    ...(bodyHasOptions && issueUrl ? [issueUrl] : []),
+  ];
+  if (r === '-') return { ok: true, kind: 'none' };
+  if (asks.some((a) => a.id === r)) return { ok: true, kind: 'ask' };
+  const commentNum = (v) => {
+    const m = /^(?:.*#)?issuecomment-(\d+)$/.exec(String(v || '')) || /^(\d+)$/.exec(String(v || ''));
+    return m ? m[1] : null;
+  };
+  const n = commentNum(r);
+  const isOptionComment = optionComments.some((c) =>
+    (c.id && c.id === r) || (c.url && c.url === r) || (n !== null && commentNum(c.url) === n));
+  if (isOptionComment) return { ok: true, kind: 'options' };
+  if (bodyHasOptions && issueUrl && r === issueUrl) return { ok: true, kind: 'options' };
+
+  const askedBefore = list.some((c) => codec.askRecords(String((c && c.body) || '')).some((a) => a.id === r));
+  const why = askedBefore
+    ? `ask ${r} is already answered on this issue — a second ruling on it settles nothing anyone is waiting on`
+    : `${r} is not an open ask id, a decision:options comment, or \`-\` on this issue`;
+  return { ok: false, why, asks, optionRefs };
+}
+
+/**
  * #695: the ship door's read of one carried issue. Measured: on an `auto-trunk` repo a reviewer
  * escalated an issue to its owner, `colab decision --reopen` put `needs-decision` back, and 22
  * minutes later `colab ship` squashed the branch onto trunk and closed the issue — no precondition
@@ -415,5 +464,5 @@ module.exports = {
   OPTIONS_RE, PAIR_VERDICTS, pairVerdict,
   MOCKUP_RE, mockupUrls, ASK_SHAPES, askShape,
   evaluateIssue,
-  openAsks,
+  openAsks, answersRefVerdict,
 };
