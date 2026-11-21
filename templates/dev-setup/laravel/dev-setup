@@ -1,0 +1,101 @@
+#!/bin/sh
+# .colab/dev-setup — make this checkout ready to run .colab/dev (CONVENTIONS §3, *Boot recipe*).
+# Copied from the colab-handbook template templates/dev-setup/laravel — you own this copy.
+#
+# Contract: idempotent (run it after every trunk move), asks nothing, exits non-zero on failure
+# (a failed seed included), needs no real credentials, writes only inside this checkout plus the
+# one database container it labels with this checkout's path.
+# Env from the caller: PORT (= ports[0]), COLAB_PORTS (csv, first = PORT), DEV_URL, DEV_HOST.
+#
+# Database: whatever .env.example's DB_CONNECTION says. sqlite → a file in database/.
+# mariadb | mysql → a container on the COLAB_PORTS entry DB_SLOT names, so declare that many
+# ports in project.yml `ports:` (e.g. [app, vite, db] with DB_SLOT=3).
+set -eu
+cd "$(dirname "$0")/.."
+: "${PORT:?PORT is required}"
+DB_SLOT=3                 # which COLAB_PORTS entry the database container listens on
+DB_IMAGE=mariadb:11.4     # mysql:8.4 for MySQL; the client below is picked to match
+
+env_get() { { grep -E "^$1=" .env || true; } | tail -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//'; }
+env_set() {   # the caller-owned keys: rewritten every run; every other key is left alone
+  if grep -q "^$1=" .env; then sed -i.bak "s#^$1=.*#$1=$2#" .env && rm -f .env.bak; else echo "$1=$2" >> .env; fi
+}
+
+# 1. .env: created once from the example, then only the caller-owned keys move.
+[ -f .env ] || cp .env.example .env
+env_set APP_URL "${DEV_URL:-http://127.0.0.1:$PORT}"   # absolute URLs follow the https name
+
+# 2. The database.
+CONN="$(env_get DB_CONNECTION)"
+CONTAINER=""
+case "$CONN" in
+  sqlite|"")
+    DBFILE="$(env_get DB_DATABASE)"; DBFILE="${DBFILE:-database/database.sqlite}"
+    [ -f "$DBFILE" ] || touch "$DBFILE"
+    ;;
+  mariadb|mysql)
+    DB_PORT="$(printf '%s' "${COLAB_PORTS:-}" | cut -d, -f"$DB_SLOT")"
+    : "${DB_PORT:?COLAB_PORTS has no entry $DB_SLOT for the database — declare it in project.yml ports:}"
+    DB_NAME="$(env_get DB_DATABASE)"; DB_USER="$(env_get DB_USERNAME)"; DB_PASS="$(env_get DB_PASSWORD)"
+    # Dev defaults where the example leaves a key unset (the image refuses `root` as the app user).
+    if [ -z "$DB_NAME" ]; then DB_NAME=app; env_set DB_DATABASE "$DB_NAME"; fi
+    if [ -z "$DB_USER" ] || [ "$DB_USER" = root ]; then DB_USER=app; env_set DB_USERNAME "$DB_USER"; fi
+    if [ -z "$DB_PASS" ]; then DB_PASS=dev; env_set DB_PASSWORD "$DB_PASS"; fi
+    env_set DB_HOST 127.0.0.1
+    env_set DB_PORT "$DB_PORT"
+    CONTAINER="dev-$(basename "$PWD")-$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
+    case "$DB_IMAGE" in mysql*) E=MYSQL; CLIENT=mysql ;; *) E=MARIADB; CLIENT=mariadb ;; esac
+    if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
+      # The label is how whoever removes this checkout finds the container to remove with it.
+      docker run -d --name "$CONTAINER" --label "colab.dev-setup=$PWD" \
+        -p "127.0.0.1:$DB_PORT:3306" \
+        -e "${E}_ROOT_PASSWORD=dev" -e "${E}_DATABASE=$DB_NAME" \
+        -e "${E}_USER=$DB_USER" -e "${E}_PASSWORD=$DB_PASS" "$DB_IMAGE" >/dev/null
+    fi
+    [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" = true ] || docker start "$CONTAINER" >/dev/null
+    # Probe over TCP, never the socket: on first start the image runs a temporary server with
+    # networking off, which answers on the socket while the app's TCP connection is refused.
+    i=0
+    until docker exec "$CONTAINER" "$CLIENT" --protocol=tcp -h127.0.0.1 "-u$DB_USER" "-p$DB_PASS" \
+        -e 'select 1' "$DB_NAME" >/dev/null 2>&1; do
+      i=$((i + 1)); [ "$i" -lt 90 ] || { echo "dev-setup: the database container did not answer in 90 s" >&2; exit 1; }
+      sleep 1
+    done
+    ;;
+  *) echo "dev-setup: DB_CONNECTION=$CONN is not handled by this template — extend step 2" >&2; exit 1 ;;
+esac
+
+# 3. Dependencies, only when a lockfile moved.
+if ! cmp -s composer.lock vendor/.dev-setup.lock 2>/dev/null; then
+  composer install --no-interaction --no-progress
+  cp composer.lock vendor/.dev-setup.lock
+fi
+grep -q '^APP_KEY=base64:' .env || php artisan key:generate --force --no-interaction
+if [ -f package-lock.json ] && ! cmp -s package-lock.json node_modules/.dev-setup.lock 2>/dev/null; then
+  npm ci --no-audit --no-fund
+  cp package-lock.json node_modules/.dev-setup.lock
+fi
+
+# 4. Schema, then seed ONCE per database instance. The marker is written only after a seed that
+#    succeeded: a half-failed seed leaves rows behind, so "is the users table empty?" would skip
+#    seeding for good. A failed seed fails the setup.
+php artisan migrate --force --no-interaction
+DB_ID="${CONTAINER:+$(docker inspect -f '{{.Id}}' "$CONTAINER")}"
+DB_ID="${DB_ID:-sqlite:$(ls -i "${DBFILE:-/dev/null}" 2>/dev/null | cut -d' ' -f1)}"
+if [ "$(cat storage/.dev-setup.seeded 2>/dev/null)" != "$DB_ID" ]; then
+  php artisan db:seed --force --no-interaction
+  printf '%s\n' "$DB_ID" > storage/.dev-setup.seeded
+fi
+
+# 5. Assets: the always-on server serves the build, so rebuild when the commit or a lockfile moved.
+if [ -f package-lock.json ]; then
+  STAMP="$(git rev-parse HEAD)-$(cksum < package-lock.json)"
+  if [ "$(cat public/build/.dev-setup.stamp 2>/dev/null)" != "$STAMP" ]; then
+    npm run build
+    printf '%s\n' "$STAMP" > public/build/.dev-setup.stamp
+  fi
+fi
+
+# 6. Long-lived queue workers hold the old code in memory; this asks them to exit after their
+#    current job, and .colab/dev's worker loop starts them again on the new code.
+php artisan queue:restart --no-interaction >/dev/null

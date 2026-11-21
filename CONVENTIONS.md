@@ -981,6 +981,21 @@ Why, with the measurement: [ADR 539](docs/adr/539-channels-marker-rationale.md).
 manager's exit code** — a supervisor exits 0 the moment a session is created, not when
 the command inside it is still alive a second later.
 
+**Making a checkout ready is the same kind of entry point (#764):** if `<repo>/.colab/dev-setup`
+exists and is executable, it makes the checkout ready to run `.colab/dev` — dependencies, a dev
+`.env`, a migrated and seeded dev database, built assets. It is idempotent, so it runs after
+every trunk move; it asks nothing, exits non-zero on any failure (a failed seed included), needs
+no real credentials, and writes only inside the checkout plus the service containers it labels
+with the checkout's path. Both files get the same env from their caller: `PORT` (`ports[0]`,
+the one a Dev button opens), `COLAB_PORTS` (every port of the checkout, csv, first = `PORT`),
+`DEV_URL` (the https origin it is reached at) and `DEV_HOST`. `.colab/dev` never fetches.
+Templates: [`templates/dev-setup/`](templates/README.md#dev-setup--a-checkout-made-ready-764);
+why, with the four-shape pilot: [ADR 764](docs/adr/764-dev-setup-rationale.md).
+
+**An always-on dev server serves trunk or the newest `v*-rc.*` tag, never a session branch.**
+It binds `127.0.0.1` and accepts its `DEV_URL` host (Vite `server.allowedHosts`, Next
+`allowedDevOrigins`, the framework's trusted proxy).
+
 ---
 
 ## 4. Branches and commits

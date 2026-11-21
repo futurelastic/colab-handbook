@@ -379,6 +379,7 @@ set and will never allocate these to a worktree — even when the trunk server i
 currently down. One declaration here replaces any hand-maintained central list.
 
 Omit if the repo has no dev server (CLI tools, libraries).
+The order matters: `ports[0]` is `PORT` for `.colab/dev` and `.colab/dev-setup`, the list is `COLAB_PORTS` ([CONVENTIONS §3, *Boot recipe*](CONVENTIONS.md#boot-recipe--an-entry-point-the-repo-owns-not-a-table-a-consumer-keeps)).
 
 ### `worktreePorts` — optional
 

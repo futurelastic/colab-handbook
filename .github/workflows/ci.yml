@@ -369,7 +369,7 @@ jobs:
           # perfectly ordinary. Their BEHAVIOUR is covered by tools/lib/identity-hook.test.js;
           # this line is the cheap first gate, not the coverage.
           for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit-dispatch templates/pre-commit-instruction-files \
-                   .githooks/pre-commit .githooks/pre-commit.d/*; do sh -n "$f"; done
+                   .githooks/pre-commit .githooks/pre-commit.d/* templates/dev-setup/*/*; do sh -n "$f"; done
       # A syntax check reads bytes; it does not read like a human. Two raw NULs once made the CLI
       # read as "binary data" to file(1) and invisible to grep without -a, while node --check, the
       # tests, git diff and the audit all stayed green. Cheap byte scan, catches the whole class.

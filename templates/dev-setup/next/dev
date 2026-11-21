@@ -1,0 +1,18 @@
+#!/bin/sh
+# .colab/dev — start the trunk dev server: no arguments, foreground, exits when the server stops
+# (CONVENTIONS §3, *Boot recipe*). Copied from templates/dev-setup/next — you own this copy.
+# Never fetches: everything it runs was installed by .colab/dev-setup.
+#
+# The https name: Next has NO env override for allowedDevOrigins. From a name outside it the
+# page still loads but the HMR websocket is refused, so live reload dies silently. Make
+# next.config read the caller's DEV_HOST once:
+#
+#   allowedDevOrigins: ['127.0.0.1', ...(process.env.DEV_HOST ? [process.env.DEV_HOST] : [])],
+#
+# Your package.json `dev` script may pin a port; this file starts Next itself so PORT wins.
+# More than one process (a content watcher, say)? Run them under a supervisor that is in your
+# lockfile, e.g. node_modules/.bin/concurrently --kill-others "next dev …" "<watcher>".
+set -eu
+cd "$(dirname "$0")/.."
+: "${PORT:?PORT is required}"
+exec node_modules/.bin/next dev -H 127.0.0.1 -p "$PORT"

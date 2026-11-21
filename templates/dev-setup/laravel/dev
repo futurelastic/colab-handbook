@@ -1,0 +1,19 @@
+#!/bin/sh
+# .colab/dev — start the trunk dev server: no arguments, foreground, exits when the server stops
+# (CONVENTIONS §3, *Boot recipe*). Copied from templates/dev-setup/laravel — you own this copy.
+# Never fetches: `concurrently` must be in package.json devDependencies (the Laravel skeleton has
+# it), installed by .colab/dev-setup — never an `npx` of something outside the lockfile.
+#
+# Serves the BUILT assets (dev-setup ran `npm run build`), so no Vite process is needed for an
+# always-on server. Want HMR too? Add "node_modules/.bin/vite --host 127.0.0.1 --port $VITE_PORT
+# --strictPort" below, VITE_PORT being COLAB_PORTS' second entry.
+set -eu
+cd "$(dirname "$0")/.."
+: "${PORT:?PORT is required}"
+
+# The worker loop restarts a worker that exits — after `queue:restart` (dev-setup step 6) that
+# is how it picks up new code without restarting this script. --kill-others: the server dying
+# stops everything, so this script exits when the server stops.
+exec node_modules/.bin/concurrently --kill-others --names server,queue \
+  "php artisan serve --no-reload --host=127.0.0.1 --port=$PORT" \
+  "while :; do php artisan queue:work --tries=3; sleep 1; done"
