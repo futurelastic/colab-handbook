@@ -347,7 +347,8 @@ test('ship refuses to write the trunk checkout when COLAB_HOME sits under a sync
   const fx = fixture(PROJECT_YML_TIER_B);
   branchWithCommit(fx, 'feat/synced-home-here', 'g.txt', 'feat: something');
   fx.greenCi('main');
-  fs.mkdirSync(path.join(fx.home, '.sync'));
+  fs.mkdirSync(path.join(fx.home, '.sync')); // a Resilio shared-folder root, not daemon storage (#766)
+  fs.writeFileSync(path.join(fx.home, '.sync', 'ID'), 'x');
 
   const beforeSha = fx.g(fx.work, 'rev-parse', 'main').trim();
   const r = colab(fx, ['ship', '--branch', 'feat/synced-home-here', '--repo', fx.work]);
@@ -366,7 +367,8 @@ test('promote refuses to write the main checkout when COLAB_HOME sits under a sy
   fx.g(fx.work, 'push', '-q', 'origin', 'dev');
   fx.g(fx.work, 'checkout', '-q', 'main');
   fx.greenCi('dev');
-  fs.mkdirSync(path.join(fx.home, '.sync'));
+  fs.mkdirSync(path.join(fx.home, '.sync')); // a Resilio shared-folder root, not daemon storage (#766)
+  fs.writeFileSync(path.join(fx.home, '.sync', 'ID'), 'x');
 
   const beforeSha = fx.g(fx.work, 'rev-parse', 'main').trim();
   const r = colab(fx, ['promote', '--repo', fx.work], { COLAB_HUMAN: '1' });

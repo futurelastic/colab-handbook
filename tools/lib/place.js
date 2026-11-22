@@ -507,10 +507,29 @@ const SYNC_MARKERS = [
   '.dropbox', // Dropbox (legacy marker; newer clients vary)
 ];
 
+/**
+ * Resilio's `.sync` is two different things. A shared-folder ROOT's `.sync` is a directory holding
+ * `ID` / `IgnoreList` (plus `Archive`, `StreamsList`). The daemon's own STORAGE directory — the
+ * default `~/.sync` on Linux when `rslsync` runs with no `storage_path`, or a leftover of such a
+ * run — holds `settings.dat`, `sync.lng`, `sync.log` and is not a shared root (#766). Only the
+ * first is evidence that `dir` is synced; flagging the second blocked every `colab ship` on a
+ * machine whose home was never shared.
+ */
+const RESILIO_ROOT_MARKERS = ['ID', 'IgnoreList'];
+
+function isResilioRoot(syncPath) {
+  return RESILIO_ROOT_MARKERS.some((f) => {
+    try { return fs.existsSync(path.join(syncPath, f)); } catch (_) { return false; }
+  });
+}
+
 function hasSyncMarker(dir) {
   for (const m of SYNC_MARKERS) {
     try {
-      if (fs.existsSync(path.join(dir, m))) return m;
+      const p = path.join(dir, m);
+      if (!fs.existsSync(p)) continue;
+      if (m === '.sync' && !isResilioRoot(p)) continue; // daemon storage dir, not a shared root
+      return m;
     } catch (_) { /* unreadable — not evidence either way */ }
   }
   try {
