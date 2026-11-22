@@ -354,6 +354,8 @@ function pinHomeAbove(dir) {
 test('syncedStateProblem: a ".sync" marker beside the colab dir is flagged (Resilio)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'place-sync-test-'));
   fs.mkdirSync(path.join(dir, '.sync'));
+  fs.writeFileSync(path.join(dir, '.sync', 'ID'), 'x');
+  fs.writeFileSync(path.join(dir, '.sync', 'IgnoreList'), '');
   const restoreHome = pinHomeAbove(dir);
   try {
     const problem = place.syncedStateProblem(dir);
@@ -362,6 +364,48 @@ test('syncedStateProblem: a ".sync" marker beside the colab dir is flagged (Resi
   } finally {
     restoreHome();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('syncedStateProblem: Resilio\'s daemon storage dir ~/.sync (settings.dat, sync.lng) is NOT a synced root — #766', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'place-sync-test-'));
+  fs.mkdirSync(path.join(dir, '.sync'));
+  for (const f of ['settings.dat', 'sync.lng', 'sync.log', 'debug.txt']) {
+    fs.writeFileSync(path.join(dir, '.sync', f), 'x');
+  }
+  const restoreHome = pinHomeAbove(dir);
+  try {
+    assert.strictEqual(place.syncedStateProblem(dir), null);
+  } finally {
+    restoreHome();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('syncedStateProblem: an empty ".sync" directory is not a synced root either — #766', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'place-sync-test-'));
+  fs.mkdirSync(path.join(dir, '.sync'));
+  const restoreHome = pinHomeAbove(dir);
+  try {
+    assert.strictEqual(place.syncedStateProblem(dir), null);
+  } finally {
+    restoreHome();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('syncedStateProblem: a ".sync" with only an IgnoreList (or only an ID) still counts as a root — #766', () => {
+  for (const f of ['ID', 'IgnoreList']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'place-sync-test-'));
+    fs.mkdirSync(path.join(dir, '.sync'));
+    fs.writeFileSync(path.join(dir, '.sync', f), 'x');
+    const restoreHome = pinHomeAbove(dir);
+    try {
+      assert.ok(place.syncedStateProblem(dir), f);
+    } finally {
+      restoreHome();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
