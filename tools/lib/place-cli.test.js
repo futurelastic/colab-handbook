@@ -219,7 +219,8 @@ test('cmdClaim taking the trunk-checkout place-claim against an unreadable state
 
 test('cmdSolo refuses to open when COLAB_HOME sits under a synced marker, same as cmdPlace acquire', () => {
   const fx = fixture();
-  fs.mkdirSync(path.join(fx.home, '.sync'));
+  fs.mkdirSync(path.join(fx.home, '.sync')); // a Resilio shared-folder root, not daemon storage (#766)
+  fs.writeFileSync(path.join(fx.home, '.sync', 'ID'), 'x');
   const r = colab(fx, ['solo', '--repo', fx.work, '--session', 's'], { COLAB_HUMAN: '1' });
   assert.notStrictEqual(r.code, 0);
   assert.match(r.err, /file-synced/);
@@ -227,7 +228,8 @@ test('cmdSolo refuses to open when COLAB_HOME sits under a synced marker, same a
 
 test('cmdWorktreeNew refuses to create a worktree when COLAB_HOME sits under a synced marker, BEFORE creating anything on disk', () => {
   const fx = fixture();
-  fs.mkdirSync(path.join(fx.home, '.sync'));
+  fs.mkdirSync(path.join(fx.home, '.sync')); // a Resilio shared-folder root, not daemon storage (#766)
+  fs.writeFileSync(path.join(fx.home, '.sync', 'ID'), 'x');
   const before = fs.readdirSync(fx.work);
   const r = colab(fx, ['worktree', 'new', 'feat/thing-9', '--repo', fx.work]);
   assert.notStrictEqual(r.code, 0);
