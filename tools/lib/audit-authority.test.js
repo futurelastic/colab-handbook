@@ -38,6 +38,25 @@ const TMP = [];
 process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} } });
 
 /**
+ * Clone REPO_ROOT into a tmpdir and tag ITS HEAD with exactly one synthetic tag. The clone
+ * inherits every real tag, and `git describe --tags --abbrev=0` prefers an ANNOTATED tag
+ * over a lightweight one on the same commit — so on a push of the release branch (HEAD
+ * carries the real annotated vX.Y.Z) a synthetic lightweight tag silently loses and the
+ * test reads the real version (#767). Deleting the inherited tags first makes the
+ * synthetic tag the only one, whatever the checkout under test happens to carry.
+ */
+function cloneTagged(prefix, tagName) {
+  const clone = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TMP.push(clone);
+  const git = (...a) => execFileSync('git', ['-C', clone, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('git', ['clone', '-q', '--no-hardlinks', REPO_ROOT, clone], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const tags = git('tag', '--list').split('\n').filter(Boolean);
+  if (tags.length) git('tag', '-d', ...tags);
+  git('tag', tagName, 'HEAD');
+  return clone;
+}
+
+/**
  * A repo initialised on `main`, plus any extra branches, plus the given project.yml and
  * files. `checkout` leaves the working tree parked on that branch — needed for trunk-`dev`
  * fixtures, or the "main checkout is on trunk at rest" check fires on the fixture rather
@@ -318,30 +337,21 @@ test('`--json` reports axisOfRecord and gates as additive keys; `tier` stays the
 // --------------------------------------------------------------------------------
 
 test('version arming: dormant on a handbook tagged v1.x — no new advisory on a legacy-path repo', () => {
-  const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-authority-clone-v1-'));
-  TMP.push(clone);
-  execFileSync('git', ['clone', '-q', '--no-hardlinks', REPO_ROOT, clone], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  execFileSync('git', ['-C', clone, 'tag', 'v1.99.0', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const clone = cloneTagged('audit-authority-clone-v1-', 'v1.99.0');
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n`;
   const r = audit(fixture({ projectYml: yml }), clone);
   assert.ok(!hasText(r.warns, /now read as a LEGACY value/), r.warns.join(' | '));
 });
 
 test('version arming: active on a handbook tagged v2.x — exactly one new advisory on a legacy-path repo', () => {
-  const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-authority-clone-v2-'));
-  TMP.push(clone);
-  execFileSync('git', ['clone', '-q', '--no-hardlinks', REPO_ROOT, clone], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  execFileSync('git', ['-C', clone, 'tag', 'v2.0.0', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const clone = cloneTagged('audit-authority-clone-v2-', 'v2.0.0');
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n`;
   const r = audit(fixture({ projectYml: yml }), clone);
   assert.ok(hasText(r.warns, /now read as a LEGACY value \(tier B -> exposure: null\)/), r.warns.join(' | '));
 });
 
 test('version arming: a repo that HAS declared exposure gets no nudge at v2 either — nothing to be nudged about', () => {
-  const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-authority-clone-v2b-'));
-  TMP.push(clone);
-  execFileSync('git', ['clone', '-q', '--no-hardlinks', REPO_ROOT, clone], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  execFileSync('git', ['-C', clone, 'tag', 'v2.0.0', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const clone = cloneTagged('audit-authority-clone-v2b-', 'v2.0.0');
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nexposure: self\n`;
   const r = audit(fixture({ projectYml: yml }), clone);
   assert.ok(!hasText(r.warns, /now read as a LEGACY value/), r.warns.join(' | '));

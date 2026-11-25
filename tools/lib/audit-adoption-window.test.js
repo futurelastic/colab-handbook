@@ -81,6 +81,24 @@ const SYNTH_OLD_TAG = 'v1.0.0';
 const SYNTH_NEW_TAG = 'v2.0.0';
 
 /**
+ * Clone REPO_ROOT into a tmpdir and tag ITS HEAD with exactly one synthetic tag. The clone
+ * inherits every real tag, and `git describe --tags --abbrev=0` prefers an ANNOTATED tag
+ * over a lightweight one on the same commit, so a synthetic lightweight tag can silently
+ * lose to a real release tag on HEAD (#767). Deleting the inherited tags first makes the
+ * synthetic tag the only one.
+ */
+function cloneTagged(prefix, tagName) {
+  const clone = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TMP.push(clone);
+  const git = (...a) => execFileSync('git', ['-C', clone, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('git', ['clone', '-q', '--no-hardlinks', REPO_ROOT, clone], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const tags = git('tag', '--list').split('\n').filter(Boolean);
+  if (tags.length) git('tag', '-d', ...tags);
+  git('tag', tagName, 'HEAD');
+  return clone;
+}
+
+/**
  * A throwaway two-commit, two-tag git repo standing in for the handbook, entirely
  * decoupled from this repo's own history: `SYNTH_OLD_TAG`'s project.schema.md predates
  * the axis model, `SYNTH_NEW_TAG`'s carries it — and templates/repo-CLAUDE-block.md is
@@ -189,14 +207,11 @@ test('current stamp (a ref where all four axes already exist) + no axes declared
   // the same commit: templateChangedSince's range is always empty regardless of what the
   // real template has done since, so this stays immune to the #271 drift bug by
   // construction — no synthetic handbook needed here.
-  const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-adoption-window-clone-'));
-  TMP.push(clone);
-  execFileSync('git', ['clone', '-q', '--no-hardlinks', REPO_ROOT, clone], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const clone = cloneTagged('audit-adoption-window-clone-', 'v99.0.0');
   const schemaAtHead = execFileSync('git', ['-C', clone, 'show', 'HEAD:project.schema.md'], { encoding: 'utf8' });
   for (const axis of ['room', 'exposure', 'writes', 'channels']) {
     assert.ok(new RegExp('^###\\s+`' + axis + '`', 'm').test(schemaAtHead), `expected the clone's HEAD project.schema.md to already document ${axis}`);
   }
-  execFileSync('git', ['-C', clone, 'tag', 'v99.0.0', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const r2 = audit(fixture({ projectYml: NO_AXES_YML, claudeStamp: 'v99.0.0' }), clone);
   assert.ok(!hasText(r2.warns, /predates the axis model/), r2.warns.join(' | '));
   assert.deepStrictEqual(r2.predatesAxes, []);
