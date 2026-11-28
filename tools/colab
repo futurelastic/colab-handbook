@@ -12989,11 +12989,16 @@ function noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch, docsOnlyThunk = 
  * request. Lazy — called only when a `workflow_dispatch` run has no push sibling — and fail-closed:
  * a sha that is not local, or a tree that cannot be read, yields null and the run stays set aside.
  */
-function verifyingPolicy(repoAbs) {
-  return { ...verifyRuns.parsePolicy(projectDoc(repoAbs)), dispatchVerifies: (sha) => pushVerifiedWorkflowsAt(repoAbs, sha) };
+function verifyingPolicy(repoAbs, branch) {
+  const doc = projectDoc(repoAbs);
+  // #769: the branch the verdict is read for (trunk unless the caller names another line) — a workflow
+  // whose push filter excludes it never runs there on push, so a dispatch of it verifies nothing.
+  let at = branch || null;
+  if (!at) { try { at = resolveTrunk(repoAbs, doc) || null; } catch (_) { at = null; } }
+  return { ...verifyRuns.parsePolicy(doc), dispatchVerifies: (sha) => pushVerifiedWorkflowsAt(repoAbs, sha, at) };
 }
 
-function pushVerifiedWorkflowsAt(repoAbs, sha) {
+function pushVerifiedWorkflowsAt(repoAbs, sha, branch) {
   if (!sha) return null;
   if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) {
     // Not local yet (another machine landed it): one fetch of that commit, then fail closed.
@@ -13007,7 +13012,7 @@ function pushVerifiedWorkflowsAt(repoAbs, sha) {
     const rel = `.github/workflows/${f}`;
     const show = git.git(['show', `${sha}:${rel}`], repoAbs);
     if (!show.ok) continue;
-    const t = verifyRuns.workflowTriggers(show.stdout);
+    const t = verifyRuns.workflowTriggers(show.stdout, branch);
     // GitHub names a workflow with no `name:` by its file path.
     if (t && t.verifiesBranches) names.push(t.name || rel);
   }
@@ -13077,11 +13082,11 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
   if (!gh) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI` } };
   // #503: only runs that VERIFY the code count — a post-CI release/deploy run at the same sha is set
   // aside and named, never a red and never a reason to wait (tools/lib/verify-runs.js).
-  const readOpts = { verifying: verifyingPolicy(repoAbs) };
+  const readOpts = { verifying: verifyingPolicy(repoAbs, target) };
   let run = git.ghRunForSha(repoAbs, target, undefined, undefined, readOpts);
   let via = target;
   if (run && run.status === 'none' && target !== trunk) {
-    run = git.ghRunForSha(repoAbs, trunk, undefined, undefined, readOpts);
+    run = git.ghRunForSha(repoAbs, trunk, undefined, undefined, { verifying: verifyingPolicy(repoAbs, trunk) });
     via = `${trunk} (line "${target}" has no runs — ungated, advisory)`;
   }
   if (!run) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: 'gh run list failed' } };
@@ -13473,7 +13478,7 @@ function shipStaleBaseCheck(repoAbs, gh, base, branch) {
     run = git.summarizeRunsForCommit(rows, headSha);
     // #723: the workflows that should have fired at the head — one with no run there holds the head row.
     const exp = rows ? expectedWorkflowsAt(repoAbs, headSha, branch) : null;
-    verifiedRun = git.summarizeRunsForCommit(rows, headSha, { verifying: verifyingPolicy(repoAbs), finishedRed: true, expected: exp ? exp.expected : [] });
+    verifiedRun = git.summarizeRunsForCommit(rows, headSha, { verifying: verifyingPolicy(repoAbs, branch), finishedRed: true, expected: exp ? exp.expected : [] });
   }
   // #606: `run`/`headSha` are additive — the docs-only row reads whether that run finished red.
   // #682: on a forge, `headCi` is the branch head's own CI verdict (green / red / pending), its own

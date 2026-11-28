@@ -148,8 +148,10 @@ const BRANCH_TRIGGERS = Object.freeze(['push', 'pull_request', 'pull_request_tar
  * include a pull request, or a push that is not tags-only (`push: { tags: [...] }` with no
  * `branches`/`branches-ignore` is a release lane, never a code verifier). A deliberately small reader
  * of the three `on:` shapes (scalar, flow list, block map / block list) — not a YAML parser.
+ * #769: with `trunk` (the branch the verdict is read for), a `push` counts only when its `branches` /
+ * `branches-ignore` filter matches it; a pull request / merge-group trigger still counts regardless.
  */
-function workflowTriggers(text) {
+function workflowTriggers(text, trunk) {
   const parsed = onEvents(text);
   if (!parsed) return null;
   const { name, events } = parsed;
@@ -159,7 +161,16 @@ function workflowTriggers(text) {
     if (ev !== 'push') { verifies = true; break; }
     const keys = e.body.map((b) => (/^([A-Za-z_-]+)\s*:/.exec(b.text) || [])[1]).filter(Boolean);
     const tagsOnly = (keys.includes('tags') || keys.includes('tags-ignore')) && !keys.includes('branches') && !keys.includes('branches-ignore');
-    if (!tagsOnly) { verifies = true; break; }
+    if (tagsOnly) continue;
+    // #769: given the branch being read, a push whose branch filter excludes it never fires there — the
+    // workflow reaches that branch another way (a `workflow_run` lane), so a dispatch of it is no
+    // verification. An unreadable filter (null) keeps the old reading: counted.
+    if (trunk) {
+      const p = pushTrigger(text);
+      if (p && p.readable && branchFilterMatches(trunk, p) === false) continue;
+    }
+    verifies = true;
+    break;
   }
   return { name, verifiesBranches: verifies };
 }

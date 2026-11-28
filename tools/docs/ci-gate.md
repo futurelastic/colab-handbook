@@ -27,7 +27,10 @@ The rule: [CONVENTIONS.md §4](../../CONVENTIONS.md#4-branches-and-commits), and
   same way. Its failure belongs to the release lane, so it never turns trunk red for ship and
   ship never waits for it ([why](../../docs/adr/539-schema-checks-and-gates-rationale.md)) — except a
   dispatch of the push- or PR-triggered CI workflow with no push run at the sha (#567: a lost push
-  event). `ship-gate-workflows:` / `ship-ignore-workflows:` override the set by workflow name ([schema](../../project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
+  event). A push trigger counts only when its `branches` / `branches-ignore` filter matches the
+  branch being read (#769): a post-CI upload lane that keeps `push: branches: ['**', '!main']` only to
+  validate itself on feature branches never fires on trunk, so a dispatch of it stays set aside.
+  `ship-gate-workflows:` / `ship-ignore-workflows:` override the set by workflow name ([schema](../../project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
   `release-only-checks:` does **not** (#736): a red on a release-only check is red here, for
   `trunk-ci` and the release cut alike; only ship's per-branch release-only door reads that key
   ([red-trunk.md](red-trunk.md#release-only-checks--a-red-only-a-release-reads-736)).

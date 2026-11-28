@@ -122,6 +122,32 @@ test('#567 workflowTriggers: push/PR-triggered workflows verify; release lanes a
   assert.strictEqual(vr.workflowTriggers('name: no triggers\n'), null);
 });
 
+// ---- #769: a push trigger verifies only on a branch its filter matches ---------------------------
+
+const UPLOAD_YML = "name: Upload\non:\n  workflow_run:\n    workflows: [\"CI\"]\n    types: [completed]\n    branches: [main]\n  push:\n    branches: ['**', '!main']\n    paths: ['.github/workflows/upload.yml', 'scripts/upload.sh']\n  workflow_dispatch:\n";
+const UPLOAD_IGNORE_YML = 'name: Upload\non:\n  push:\n    branches-ignore: [main]\n  workflow_dispatch:\n';
+
+test('#769 workflowTriggers(text, trunk): a push whose branch filter excludes trunk does not verify there', () => {
+  assert.deepStrictEqual(vr.workflowTriggers(UPLOAD_YML, 'main'), { name: 'Upload', verifiesBranches: false });
+  assert.deepStrictEqual(vr.workflowTriggers(UPLOAD_IGNORE_YML, 'main'), { name: 'Upload', verifiesBranches: false });
+  // The same text read for a feature branch (or with no branch at all) still verifies.
+  assert.strictEqual(vr.workflowTriggers(UPLOAD_YML, 'feat/x-1').verifiesBranches, true);
+  assert.strictEqual(vr.workflowTriggers(UPLOAD_YML).verifiesBranches, true, 'no branch given → the #567 reading');
+  // The #567 cases keep counting: branches [main], a bare push, a pull_request, a merge_group.
+  assert.strictEqual(vr.workflowTriggers(CI_YML, 'main').verifiesBranches, true);
+  assert.strictEqual(vr.workflowTriggers('name: B\non: [push, workflow_dispatch]\n', 'main').verifiesBranches, true);
+  assert.strictEqual(vr.workflowTriggers('name: P\non: pull_request\n', 'main').verifiesBranches, true);
+  assert.strictEqual(vr.workflowTriggers('name: M\non:\n  merge_group:\n  push:\n    branches: [dev]\n', 'main').verifiesBranches, true);
+  // A push that excludes trunk beside a pull_request trigger still verifies through the PR.
+  assert.strictEqual(vr.workflowTriggers('name: P\non:\n  pull_request:\n  push:\n    branches-ignore: [main]\n', 'main').verifiesBranches, true);
+  // A filter it cannot read keeps the old reading (counted), never a silent exclusion.
+  assert.strictEqual(vr.workflowTriggers('name: U\non:\n  push:\n    branches: [\'a[\']\n', 'main').verifiesBranches, true);
+  assert.strictEqual(vr.workflowTriggers('name: F\non:\n  push: { branches: [dev] }\n', 'main').verifiesBranches, true);
+  // A trunk name that is not `main` is matched the same way.
+  assert.strictEqual(vr.workflowTriggers('name: D\non:\n  push:\n    branches: [dev]\n', 'dev').verifiesBranches, true);
+  assert.strictEqual(vr.workflowTriggers('name: D\non:\n  push:\n    branches: [dev]\n', 'main').verifiesBranches, false);
+});
+
 test('#567 a dispatch of the push-verifying workflow counts when that workflow has no push run at the sha', () => {
   const p = { ...vr.parsePolicy({}), dispatchVerifies: () => ['CI'] };
   const s = vr.splitVerifying([r('CI', 'workflow_dispatch', 'success', 1)], p);
@@ -274,6 +300,30 @@ test('#567 CLI: a dispatch of the release lane alone still reads NONE — the re
   const t = trunkCi(fx);
   assert.notStrictEqual(t.verdict, 'GREEN', JSON.stringify(t));
   assert.match(t.detail, /Release \(auto\) \(success, run 2; event: workflow_dispatch\)/);
+});
+
+test('#769 CLI: a red manual dispatch of a post-CI upload lane (push excludes trunk) is set aside — trunk-ci GREEN', () => {
+  const fx = fixture('', { '.github/workflows/ci.yml': CI_YML, '.github/workflows/upload.yml': UPLOAD_YML });
+  fx.setRows([row(fx.sha, 'CI', 'push', 'success', 1), row(fx.sha, 'Upload', 'workflow_dispatch', 'failure', 2)]);
+  const t = trunkCi(fx);
+  assert.strictEqual(t.verdict, 'GREEN', JSON.stringify(t));
+  assert.match(t.detail, /set aside 1 run that does not verify the code \(post-CI release\/deploy lane, #503\): Upload \(failure, run 2; event: workflow_dispatch\)/);
+  assert.ok(!t.dispatchCounted || t.dispatchCounted.length === 0, 'the dispatch was not rescued');
+  assert.strictEqual(shipRow(fx).ok, true);
+});
+
+test('#769 CLI: the same lane with branches-ignore: [main] is set aside too, and a lone red dispatch never reads RED', () => {
+  const fx = fixture('', { '.github/workflows/ci.yml': CI_YML, '.github/workflows/upload.yml': UPLOAD_IGNORE_YML });
+  fx.setRows([row(fx.sha, 'CI', 'push', 'success', 1), row(fx.sha, 'Upload', 'workflow_dispatch', 'failure', 2)]);
+  assert.strictEqual(trunkCi(fx).verdict, 'GREEN');
+  fx.setRows([row(fx.sha, 'Upload', 'workflow_dispatch', 'failure', 2)]);
+  assert.notStrictEqual(trunkCi(fx).verdict, 'RED');
+});
+
+test('#769 CLI: a red dispatch of a lane whose push DOES fire on trunk (branches: [main]) still counts RED', () => {
+  const fx = fixture('', { '.github/workflows/ci.yml': CI_YML });
+  fx.setRows([row(fx.sha, 'CI', 'workflow_dispatch', 'failure', 1)]);
+  assert.strictEqual(trunkCi(fx).verdict, 'RED');
 });
 
 // ---- #723: the expected set — a workflow that should have fired at a branch head ----------------
