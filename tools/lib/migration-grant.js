@@ -182,6 +182,23 @@ function evaluateIssue(record, branch, issueNum, labelName, opts) {
 }
 
 /**
+ * #726 — which carried issues must hold a migration grant. `handoffRefs` is the set the hand-off door
+ * itself classified as CLOSED before the hand-off (shipHandoff's `refIssues`, read from the tracker
+ * in tools/colab applyShipHandoff, #647): history, on which no grant can exist (it expires at close),
+ * so they are dropped from the grant set and reported. It is NEVER `--refs`: a caller-supplied flag
+ * must not narrow a safety gate. Every other issue stays in; when the exclusion would leave none the
+ * set is `exhausted` and the caller refuses — a gate never passes on an empty grant set.
+ * → { needGrant, dropped, exhausted }
+ */
+function narrowShipSet(issues, handoffRefs) {
+  const list = Array.isArray(issues) ? issues : [];
+  const out = new Set(handoffRefs || []);
+  const dropped = list.filter((n) => out.has(n));
+  const needGrant = list.filter((n) => !out.has(n));
+  return { needGrant, dropped, exhausted: dropped.length > 0 && needGrant.length === 0 };
+}
+
+/**
  * The ship set's verdict (#98 requirement 5) — every issue the branch carries, not just the
  * subset that would close (`closeIssues`). A migration cannot be mechanically attributed to one
  * member of a group branch, so if ANY claimed issue lacks a valid grant, the whole set fails —
@@ -748,7 +765,7 @@ module.exports = {
   GRANT_MARK, REVOKE_MARK, GRANT_RE, REVOKE_RE,
   grantCommentBody, revokeCommentBody,
   liveGrants, TRUSTED_ASSOCIATIONS,
-  evaluateIssue, evaluateShipSet,
+  evaluateIssue, evaluateShipSet, narrowShipSet,
   // #397 — role-tagged grants
   REVIEW_GRANT_MARK, REVIEW_GRANT_RE, REVIEWER_ROLE, GRANT_ROLES,
   REVIEW_RECORD_FENCE, REVIEW_RECORD_FIELDS,

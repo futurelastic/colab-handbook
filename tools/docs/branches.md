@@ -136,8 +136,10 @@ The rules: [CONVENTIONS.md §4, the landing contract](../../CONVENTIONS.md#4-bra
   branch and its current remote head and every issue carries the executor's live claim on it;
   nothing is claimed here, and the executor keeps its worktree until it confirms the land. An
   issue in the run that was already closed before the hand-off only names history: it needs no
-  claim and lands as `Refs #N`, with no ship comment (#647). Closed after the hand-off is no
-  exemption, and `--refs` never waives an open issue's claim. A
+  claim and lands as `Refs #N`, with no ship comment (#647); the migration gate reads it the same way
+  and asks no grant of it (#726) — the other carried issues still need theirs, and a set left with none
+  refuses. Closed after the hand-off is no
+  exemption, and `--refs` never waives an open issue's claim or a migration grant. A
   handed-off branch that fell behind its base is synced by the lander as usual, and the hand-off
   still holds (#579): commits after the handed-off sha are accepted only when each is a pure
   base-sync merge — second parent already on the base, tree equal to git's own clean merge. Any

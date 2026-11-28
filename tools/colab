@@ -4783,7 +4783,7 @@ function migrationGrantReviewRecord(repoAbs, opts) {
   }
 
   // #508: bind what was reviewed — the branch's migration files at the tip, by content. Same path
-  // rule the ship gate fires on (newMigrations), against origin's trunk. A branch with no migration
+  // rule the ship gate fires on (newMigrationsOrNull), against origin's trunk. A branch with no migration
   // to review gets no id and stays HEAD-bound.
   //
   // #563: and never silently fall back to HEAD binding. A grant posted without `migrations:` for a
@@ -11526,12 +11526,10 @@ function trustAt(repoAbs, ref) {
  * checkout (trunk at rest) and the branch, and unioned: a branch that adds its own declaration is
  * gated by it, and a branch that deletes trunk's declaration is still gated by trunk's.
  */
-function newMigrations(mainRoot, trunk, branch) {
-  return newMigrationsOrNull(mainRoot, trunk, branch) || [];
-}
-
-/** newMigrations, but null — not [] — when git cannot compute the diff (#563): the grant write path
- *  must tell "no migrations" from "could not look", and refuses on the second. */
+/** The list newMigrationsOrNull returns — null, never [], when git cannot compute the diff (#563,
+ *  #725): "no migrations" and "could not look" are different answers, and every caller (the ship
+ *  gate, the grant write path) refuses on the second. There is deliberately no variant that coerces
+ *  null to [] — that coercion is exactly how a remote-only branch used to read as "nothing to grant". */
 function newMigrationsOrNull(mainRoot, trunk, branch) {
   const r = git.git(['diff', '--name-only', `${trunk}...${branch}`], mainRoot);
   if (!r.ok) return null;
@@ -11541,7 +11539,7 @@ function newMigrationsOrNull(mainRoot, trunk, branch) {
 
 /**
  * #508 — the content id (migration-grant.js migrationContentId) of `paths` — the branch's migration
- * files, newMigrations' list — as they stand at `sha`: one `git ls-tree` for their blob ids, a path
+ * files, newMigrationsOrNull's list — as they stand at `sha`: one `git ls-tree` for their blob ids, a path
  * the commit no longer has counting as deleted. null when the tree cannot be read or there is
  * nothing to bind; null never matches a recorded id, so an unreadable tree fails the binding closed.
  */
@@ -11564,6 +11562,12 @@ function migrationContentAt(repoAbs, paths, sha) {
  * group branch carries several issues and a migration cannot be mechanically attributed to one of
  * them (#98 requirement 5), and `closeIssues` is *narrowed* by `--refs`, which would otherwise let
  * a caller-supplied flag shrink a safety gate — the one thing `ship` refuses everywhere else.
+ * The one narrowing (#726) is `opts.handoffRefs`: the issues the hand-off door itself found CLOSED
+ * before the hand-off — a fact the tracker computed (applyShipHandoff, #647), not something a caller
+ * supplies, and one no grant can exist on (it expires at close). Every other carried issue still
+ * needs its grant, and an exclusion that would leave none refuses.
+ *
+ * A diff that cannot be computed (#725) refuses: `ok: false`, payload `unreadable: true`.
  *
  * The reviewer half (#401) reads three more things, all through tools/lib/migration-grant.js's
  * evaluateShipSet ctx: the policy (P) from project.yml AT THE TARGET TIP — what the branch merges
@@ -11573,8 +11577,17 @@ function migrationContentAt(repoAbs, paths, sha) {
  * the reviewed HEAD — so the merge-of-trunk sync ship itself demands does not void the grant;
  * and R lazily — every job of every run at that HEAD, read only once some issue clears P+M+HEAD.
  */
-function shipMigrationGate(repoAbs, gh, target, branch, issues) {
-  const migrations = newMigrations(repoAbs, target, branch);
+function shipMigrationGate(repoAbs, gh, target, branch, issues, opts = {}) {
+  // #725: resolve the branch the way the rest of ship does (local sha, else the remote one) — a
+  // hand-off ship's branch is usually remote-only, and `git diff trunk...<branch>` on a name that is
+  // not a local ref fails. A diff that still cannot be computed REFUSES; it never reads as "none".
+  const migrations = newMigrationsOrNull(repoAbs, target, shipRefFor(repoAbs, branch));
+  if (migrations === null) {
+    const why = `could not compute \`git diff ${target}...${branch}\` — ${branch} resolves to no local or ${git.remoteInfo(repoAbs).name || 'origin'} ref, so what it adds under a migrations path is unknown`;
+    return { migrations: [], ok: false, text: `cannot tell whether ${branch} adds migrations: ${why} — fetch or push the branch (\`git fetch ${git.remoteInfo(repoAbs).name || 'origin'} ${branch}\`) and re-run`,
+      payload: { branch, files: [], policy: null, policySource: null, policyOwner: null, policyMachine: null, headSha: null,
+        contentId: null, trustHumans: null, roundtrip: null, granted: [], missing: [{ issue: null, failed: 'diff', reason: why }], unreadable: true } };
+  }
   if (migrations.length === 0) return { migrations, ok: true, ...migDetail(migrations, null, target, branch, null) };
   // #762: `data: none` on the TARGET, with no falsifier, exempts the gate before any grant is read.
   // Evaluated only on a non-empty list, so an unreadable diff (#725) never reaches it; when the
@@ -11586,18 +11599,31 @@ function shipMigrationGate(repoAbs, gh, target, branch, issues) {
         headSha: null, contentId: null, trustHumans: null, roundtrip: null, granted: [], missing: [],
         exempt: true, dataExemption: dataExemptionPayload(dataEx) } };
   }
+  // #726: the grant set is the carried issues minus those the hand-off door itself classified as
+  // closed before the hand-off (`opts.handoffRefs`, read from the tracker in applyShipHandoff, #647) —
+  // history, so a grant cannot exist on them. NEVER `--refs`: a caller-supplied flag must not narrow a
+  // safety gate. Every other carried issue still needs its grant, and when the exclusion would leave
+  // none the gate refuses outright rather than pass on nothing.
+  const { needGrant, dropped, exhausted } = migrationGrant.narrowShipSet(issues, opts.handoffRefs);
   let grants;
   let ctx = null;
-  if (!gh) {
+  if (exhausted) {
+    grants = { ok: false, granted: [],
+      missing: [{ issue: null, reason: `every carried issue (${dropped.map((n) => '#' + n).join(' ')}) was closed before the hand-off — none is left to carry a migration grant` }] };
+  } else if (!gh) {
     grants = { ok: false, granted: [],
       missing: [{ issue: null, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — a migration grant lives on the tracker and cannot be confirmed` }] };
   } else {
     const records = {};
-    for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
+    for (const n of needGrant) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
     ctx = shipMigrationCtx(repoAbs, gh, target, branch, migrations);
-    grants = migrationGrant.evaluateShipSet(issues, records, branch, labels.MIGRATION_GRANT_LABEL, ctx);
+    grants = migrationGrant.evaluateShipSet(needGrant, records, branch, labels.MIGRATION_GRANT_LABEL, ctx);
   }
   const detail = migDetail(migrations, grants, target, branch, ctx);
+  if (dropped.length > 0) {
+    detail.payload.refsOnly = [...dropped];
+    if (grants.ok) detail.text = `${detail.text} — ${dropped.map((n) => '#' + n).join(' ')} closed before the hand-off, Refs only, no grant required (#726)`;
+  }
   if (dataEx) { // declared but falsified: the refusal names why the declaration did not apply
     detail.payload.dataExemption = dataExemptionPayload(dataEx);
     if (!grants.ok) detail.text = `${detail.text} — ${dataEx.reason}`;
@@ -14340,7 +14366,7 @@ function cmdShipDryJson(opts) {
       ...(decisionJson.findings.length ? { questions: decisionJson.findings.map((f) => ({ issue: f.issue, url: f.url, verdict: f.verdict, clear: f.clear })) } : {}) });
   }
 
-  const migGate = shipMigrationGate(repoAbs, gh, target, sess.branch, sess.issues);
+  const migGate = shipMigrationGate(repoAbs, gh, target, sess.branch, sess.issues, { handoffRefs: sess.handoffRefs });
   const migOk = migGate.ok;
   migrationGrantPayload = migGate.payload;
   checks.push({ name: 'no new migrations', ok: migOk, class: migOk ? null : HUMAN_GATED,
@@ -15628,7 +15654,7 @@ function cmdShip(argv) {
   // issue the branch carries holds a live migration grant: a branch-bound human grant (#98), or a
   // reviewer grant under P+M+HEAD+R (#401). Grants are read from the tracker only when a migration
   // actually exists, so the ordinary ship pays nothing. Same function as --dry --json's row.
-  const migGate = shipMigrationGate(repoAbs, gh, target, sess.branch, sess.issues);
+  const migGate = shipMigrationGate(repoAbs, gh, target, sess.branch, sess.issues, { handoffRefs: sess.handoffRefs });
   const migOk = migGate.ok;
   checks.push([migOk ? '✓' : '✗', 'no new migrations', migGate.text]);
   const lowering = shipDataLoweringCheck(repoAbs, target, sess.branch, humanDoor.humanDoorFromProcess(process, opts.answeredBy));

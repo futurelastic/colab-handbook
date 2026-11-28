@@ -301,6 +301,43 @@ test('migration-grant --list never reports "no outstanding grants" on a failed r
 
 // --- `colab ship`'s two call sites: fail-closed on a migration with no confirmable grant -------
 
+// --- #725: a branch that is not a local ref must not read as "no migrations" -----------------
+
+/** Push <branch> (with a migration) to origin, then delete the LOCAL ref — leaving only origin/<branch>,
+ *  the hand-off ship's shape (the executor built it on another machine). */
+function remoteOnlyMigrationBranch(fx, branch) {
+  addMigrationBranch(fx, branch);
+  fx.g(fx.work, 'push', '-q', 'origin', branch);
+  fx.g(fx.work, 'fetch', '-q', 'origin');
+  fx.g(fx.work, 'branch', '-q', '-D', branch);
+  assert.throws(() => fx.g(fx.work, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`));
+}
+
+test('#725 ship --dry --json: a branch present only on the remote that adds a migration reports the check ok:false, with the migration named', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  remoteOnlyMigrationBranch(fx, 'feat/remote-only-725');
+  const r = colab(fx, ['ship', '--branch', 'feat/remote-only-725', '--repo', fx.work, '--dry', '--json']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  const body = JSON.parse(r.out);
+  const mig = body.checks.find((c) => c.name === 'no new migrations');
+  assert.strictEqual(mig.ok, false, 'a remote-only branch must not read as no migrations');
+  assert.strictEqual(mig.class, 'human-gated');
+  assert.doesNotMatch(mig.detail, /none vs/);
+  assert.deepStrictEqual(body.migrationGrant.files, ['database/migrations/2026_01_01_x.php']);
+});
+
+test('#725 ship --dry --json: a branch that resolves to no ref at all refuses — a diff failure is never "none"', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  const r = colab(fx, ['ship', '--branch', 'feat/ghost-725', '--repo', fx.work, '--dry', '--json']);
+  // The session resolver may refuse an unknown branch before the gate; either way it never passes.
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  if (r.out.trim().startsWith('{')) {
+    const mig = JSON.parse(r.out).checks.find((c) => c.name === 'no new migrations');
+    if (mig) { assert.strictEqual(mig.ok, false); assert.doesNotMatch(mig.detail, /none vs/); }
+  }
+});
+
+
 test('ship --dry --json: a branch with a migration and NO claimed issue refuses, "no new migrations" is human-gated, migrationGrant.missing explains why', () => {
   const fx = fixture(PROJECT_YML_AUTO_TRUNK);
   addMigrationBranch(fx, 'feat/x-1');

@@ -228,7 +228,7 @@ test('ROUNDTRIP_JOB_PREFIX matches the job name the Laravel template actually sh
 
 // ---- one rule for every path -----------------------------------------------------------------
 
-test('tools/colab: evaluateShipSet and newMigrations are called only inside shipMigrationGate, and every ship path calls it', () => {
+test('tools/colab: evaluateShipSet and newMigrationsOrNull are called only inside shipMigrationGate (and the mint), and every ship path calls it', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'colab'), 'utf8');
   const fnBody = (name) => {
     const start = src.indexOf(`\nfunction ${name}(`);
@@ -240,15 +240,16 @@ test('tools/colab: evaluateShipSet and newMigrations are called only inside ship
   const count = (s, re) => (s.match(re) || []).length;
   assert.equal(count(src, /migrationGrant\.evaluateShipSet\(/g), 1, 'one migration evaluateShipSet call in tools/colab');
   assert.equal(count(gate, /migrationGrant\.evaluateShipSet\(/g), 1);
-  const newMigCalls = count(src, /\bnewMigrations\(/g) - 1; // minus the definition
-  assert.equal(newMigCalls, count(gate, /\bnewMigrations\(/g), 'newMigrations is called from nowhere but shipMigrationGate');
+  // #725: there is no coercing variant any more — "could not look" must never become [].
+  assert.equal(count(src, /\bnewMigrations\(/g), 0, 'newMigrations (which coerced null to []) is gone');
   // #508: the reviewer-grant mint computes its content id over the SAME path rule, so it is the
-  // one other caller — the rule is still never recomputed, only called. #563: it calls the variant
-  // that answers null on an unreadable diff (so it can refuse), which newMigrations itself wraps.
+  // one other caller — the rule is still never recomputed, only called. #563/#725: both call the
+  // variant that answers null on an unreadable diff, and both refuse on it.
   const mint = fnBody('migrationGrantReviewRecord');
   assert.equal(count(mint, /\bnewMigrationsOrNull\(/g), 1, 'the mint reads the gate\'s own path rule');
-  assert.match(fnBody('newMigrations'), /return newMigrationsOrNull\(/);
-  assert.equal(count(src, /\bnewMigrationsOrNull\(/g) - 1, 2, 'newMigrationsOrNull is called from nowhere but newMigrations and the mint');
+  assert.equal(count(gate, /\bnewMigrationsOrNull\(/g), 1, 'the gate reads the null-aware variant');
+  assert.match(gate, /migrations === null/, 'the gate refuses on null');
+  assert.equal(count(src, /\bnewMigrationsOrNull\(/g) - 1, 2, 'newMigrationsOrNull is called from nowhere but the gate and the mint');
   // Both bind through the one content-id helper.
   assert.match(mint, /migrationContentAt\(/);
   assert.match(fnBody('shipMigrationCtx'), /migrationContentAt\(/);

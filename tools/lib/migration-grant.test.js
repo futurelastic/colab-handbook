@@ -15,7 +15,7 @@ const {
   GRANT_MARK, REVOKE_MARK, GRANT_RE, REVOKE_RE,
   grantCommentBody, revokeCommentBody,
   liveGrants, TRUSTED_ASSOCIATIONS,
-  evaluateIssue, evaluateShipSet,
+  evaluateIssue, evaluateShipSet, narrowShipSet,
 } = require('./migration-grant.js');
 
 const HOST = 'build-box-01';
@@ -506,4 +506,50 @@ test('#494 roundtripJobWorkflows: a live job name counts (quoted or not, with or
     mg.roundtripJobWorkflows({ readFile, workflows: ['a.yml', 'b.yml', 'c.yml', 'd.yml', 'missing.yml'] }),
     ['a.yml', 'b.yml']);
   assert.deepStrictEqual(mg.roundtripJobWorkflows({ readFile, workflows: [] }), []);
+});
+
+// --- #726: the grant set narrows only by the hand-off door's own closed-before set ------------
+
+const closedRecord = () => ({ state: 'CLOSED', labels: [{ name: LABEL }], comments: [] });
+
+test('#726 narrowShipSet: drops exactly the closed-before-hand-off issues, keeps the rest in order', () => {
+  const n = narrowShipSet([91, 301, 7], new Set([91]));
+  assert.deepStrictEqual(n, { needGrant: [301, 7], dropped: [91], exhausted: false });
+});
+
+test('#726 narrowShipSet: nothing handed in narrows nothing (--refs is not an input)', () => {
+  assert.deepStrictEqual(narrowShipSet([91, 301], undefined), { needGrant: [91, 301], dropped: [], exhausted: false });
+  assert.deepStrictEqual(narrowShipSet([91, 301], new Set()), { needGrant: [91, 301], dropped: [], exhausted: false });
+});
+
+test('#726 narrowShipSet: a set with only Refs-only issues is exhausted — the caller refuses', () => {
+  assert.deepStrictEqual(narrowShipSet([91], new Set([91])), { needGrant: [], dropped: [91], exhausted: true });
+});
+
+test('#726 the measured case: one granted closing issue + one closed Refs-only issue — passes; without the narrowing it refused', () => {
+  const branch = 'chore/slug-91-301';
+  const records = { 301: openRecord({ comments: [grantComment(branch)] }), 91: closedRecord() };
+  const full = evaluateShipSet([91, 301], records, branch, LABEL);
+  assert.equal(full.ok, false);
+  assert.deepStrictEqual(full.missing.map((m) => m.issue), [91]);
+  const { needGrant } = narrowShipSet([91, 301], new Set([91]));
+  const v = evaluateShipSet(needGrant, records, branch, LABEL);
+  assert.equal(v.ok, true, JSON.stringify(v.missing));
+  assert.deepStrictEqual(v.granted.map((g) => g.issue), [301]);
+});
+
+test('#726: remove the closing issue\'s grant and the narrowed set still refuses', () => {
+  const branch = 'chore/slug-91-301';
+  const records = { 301: openRecord({ comments: [] }), 91: closedRecord() };
+  const { needGrant } = narrowShipSet([91, 301], new Set([91]));
+  const v = evaluateShipSet(needGrant, records, branch, LABEL);
+  assert.equal(v.ok, false);
+  assert.deepStrictEqual(v.missing.map((m) => m.issue), [301]);
+});
+
+test('#726: a closed issue NOT in the hand-off door\'s set is still required to hold a grant', () => {
+  const branch = 'chore/slug-91-301';
+  const records = { 301: openRecord({ comments: [grantComment(branch)] }), 91: closedRecord() };
+  const { needGrant } = narrowShipSet([91, 301], new Set());
+  assert.equal(evaluateShipSet(needGrant, records, branch, LABEL).ok, false);
 });
